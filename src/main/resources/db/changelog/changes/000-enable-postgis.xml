@@ -5,9 +5,8 @@
         xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
 
-    <include file="changes/000-enable-postgis.xml" relativeToChangelogFile="true"/>
+    <changeSet id="000-enable-postgis" author="landvault">
+        <sql>CREATE EXTENSION IF NOT EXISTS postgis;</sql>
+    </changeSet>
 
-    <!-- Include each domain's changelog here as it's added, e.g.:
-    <include file="changes/001-create-users-table.xml" relativeToChangelogFile="true"/>
-    -->
 </databaseChangeLog>
