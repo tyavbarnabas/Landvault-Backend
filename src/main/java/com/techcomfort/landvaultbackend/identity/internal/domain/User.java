@@ -1,17 +1,17 @@
-package com.techcomfort.landvaultbackend.identity.entity;
+package com.techcomfort.landvaultbackend.identity.internal.domain;
 
 import com.techcomfort.landvaultbackend.common.AbstractEntity;
-import com.techcomfort.landvaultbackend.identity.constants.UserStatus;
+import com.techcomfort.landvaultbackend.common.Currency;
+import com.techcomfort.landvaultbackend.identity.internal.UserStatus;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 import lombok.experimental.SuperBuilder;
+import org.hibernate.annotations.SQLRestriction;
 
 import java.time.Instant;
-import java.util.Currency;
-
 
 @Getter
 @Setter
@@ -19,9 +19,16 @@ import java.util.Currency;
 @NoArgsConstructor
 @SuperBuilder
 @Entity
-@Table(name = "users")
+@Table(
+        name = "users",
+        indexes = {
+                @Index(name = "idx_users_tenant_id", columnList = "tenant_id"),
+                @Index(name = "idx_users_branch_id", columnList = "branch_id"),
+                @Index(name = "idx_users_status", columnList = "status")
+        }
+)
+@SQLRestriction("deleted = false")
 public class User extends AbstractEntity {
-
 
     @Column(name = "first_name", nullable = false)
     private String firstName;
@@ -29,19 +36,21 @@ public class User extends AbstractEntity {
     @Column(name = "last_name", nullable = false)
     private String lastName;
 
-    @Column(name = "email", nullable = false, unique = true)
+    @Column(name = "gender")
+    private String gender;
+
+    @Column(name = "email", nullable = false)
     private String email;
 
     @Column(name = "phone")
     private String phone;
 
-    @Column(name = "password", nullable = false)
+    @Column(name = "password_hash", nullable = false)
     private String password;
 
     @Column(name = "country", nullable = false, length = 2)
     private String country;
 
-    /** Display preference only. Never used to convert stored amounts. */
     @Enumerated(EnumType.STRING)
     @Column(name = "currency", nullable = false, length = 3)
     private Currency currency;

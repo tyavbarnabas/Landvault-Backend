@@ -65,3 +65,94 @@ These are decisions, not preferences — getting them wrong produces silently wr
 - Non-idempotent mutations (POST) that the frontend needs retried safely should accept an `Idempotency-Key` header — the frontend's `apiClient` already sends one when it wants that.
 
 See `API_CONTRACT.md` in this repo for the concrete endpoint-by-endpoint surface, derived from every exported function in `~/landvault/src/services/*.ts`.
+
+## Modulith package structure
+
+Spring Modulith treats a module's top-level package as its **public API**;
+only sub-packages named `internal` are hidden from other modules. Concretely:
+
+```
+identity/
+    IdentityApi.java        ← public — the module's only public surface
+    dto/UserDto.java         ← public — safe to share
+    internal/
+        domain/User.java     ← invisible outside identity
+```
+
+**Never expose an entity or a repository from a module.** Define a
+`<Module>Api` interface that returns DTOs instead. Entities carry `tenantId`
+and operate under row-level-security expectations; if another module can
+obtain a raw entity and a repository, it can query around the isolation
+guarantees RLS exists to provide. Keeping repositories/entities `internal`
+makes that structurally impossible rather than merely discouraged. **If you
+find yourself wanting to expose a repository or entity from a module, the
+boundary is in the wrong place.**
+
+A DTO must not itself expose an internal type through its own signature
+(e.g. an internal enum) — translate to a public shape (a String wire value,
+a public enum in `common`, etc.) at the DTO boundary instead.
+
+`common` is the one deliberately shared/open module (`ApplicationModule.Type.OPEN`)
+— every module depends on it, which is the point of a shared kernel, not a
+boundary violation. Keep it free of domain logic: base entities, enums used
+across modules, and cross-cutting configuration only.
+
+Only create a module's package (and its `package-info.java`) once its first
+real class exists — an empty module package is noise Modulith verification
+doesn't need. The verification test (`ApplicationModules.of(...).verify()`,
+a plain unit test, not `@SpringBootTest`) is what converts "we agreed not to
+reach into `internal`" into a build failure instead of an honor system.
+
+## Tenant nullability and why `@TenantId` was rejected
+
+`tenantId`/`branchId` on `AbstractEntity` are nullable on purpose. Four kinds
+of user share one `users` table and only one is genuinely tenant-scoped:
+
+| kind | tenantId | branchId |
+|---|---|---|
+| platform staff (Super Admin, moderator, compliance) | null | null |
+| buyer / investor | **null** | null |
+| tenant staff (Executive Director, finance, surveyor) | set | usually set |
+| independent agent | null | null |
+
+**A buyer must never be tenant-scoped.** On the national marketplace a buyer
+transacts with several companies under one account and one document vault —
+what links a buyer to a company is their *transaction*, not their user row.
+The same reasoning nulls it for `organizations` (it *is* the tenant),
+`branches` (can't reference itself), `roles`, `permissions`, and `audit_log`.
+
+Hibernate's `@TenantId` was deliberately **not** used, because it filters
+every query by the current tenant automatically — which would silently
+return an *empty result* (never an error) for three reads this platform
+genuinely needs across tenants: Super Admin's tenant directory, the public
+marketplace feed (aggregating published listings across companies), and
+spatial listing-conflict detection (inherently a cross-tenant polygon query
+looking for one company's boundaries overlapping another's). Isolation
+instead comes from Postgres row-level security plus explicit repository
+scoping — one mechanism, enforced at the database level.
+
+## Soft delete is an entity-level filter, not a repository convention
+
+Every soft-deletable entity gets `@SQLRestriction("deleted = false")`
+(Hibernate 6.3+; not the deprecated `@Where`) directly on the entity.
+Relying on each repository method to remember `WHERE deleted = false` is the
+same class of bug that row-level security exists to prevent for tenants —
+the filter belongs on the entity, once, not re-implemented (and eventually
+forgotten) per query.
+
+## JSON enum-mapping strategy
+
+Every JSON-facing enum carries an explicit `@JsonValue`-annotated `value`
+field plus a matching `@JsonCreator` static factory, mapping the Java
+constant (`UPPER_SNAKE_CASE`, always persisted via
+`@Enumerated(EnumType.STRING)` — never ordinal, since ordinal silently
+reinterprets every existing row if a constant is reordered or inserted) to
+the frontend's literal wire value. This is one mechanism, applied uniformly,
+rather than a global Jackson naming strategy plus per-enum exceptions —
+several of the frontend's unions (`CompanyType`, `GovIdType`, `GatewayName`)
+carry values with spaces, parentheses, a slash, or brand capitalization that
+no case-conversion strategy produces automatically, so every enum uses the
+explicit pair regardless of whether its own values would have fit a
+convention. Enum values must match the frontend's unions exactly — read them
+from the relevant `~/landvault/src/services/*.ts` file; never invent or
+rename a state.
