@@ -200,6 +200,61 @@ tenant) — each sets the inherited `tenantId` equal to its own
 three onto it rather than leaving them on plain `AbstractEntity` with a
 manually-populated `tenantId`.
 
+## `dev` profile and SQL logging
+
+`show-sql`/`format_sql` live in `application-dev.yml`, not the base
+`application.yml` — the base config stays quiet under every environment
+where no profile is explicitly activated, including tests and any deploy
+that forgets to set one. **`dev` is the local default**: local development
+is expected to run with `SPRING_PROFILES_ACTIVE=dev` set (already in
+`.env.example`/`.env`, loaded via `springboot4-dotenv`), not via a
+Spring-level `spring.profiles.default` fallback baked into `application.yml`
+— that was tried and reverted, because it makes `dev` (and SQL logging)
+active for *anything* that doesn't explicitly set a profile, which is the
+opposite of what "quiet by default" means once a real deploy exists. This
+matters beyond noise: bind parameters get logged too, and this module now
+stores NDPR-regulated personal data (`directors.id_number`/`bvn`) that must
+never land in a shared log.
+
+## `directors` is the most sensitive table in the system
+
+`directors.id_number` and `directors.bvn` are NDPR-regulated personal data,
+stored in plaintext today with none of the following yet implemented —
+each is a standing TODO carried in the table's own Postgres comment, not
+just here: encrypt at rest; restrict reads to compliance staff (never all
+platform staff, never another tenant's staff); log every read as an
+auditable event, not an ordinary query; define and enforce a retention
+policy. Whoever builds the repository/service layer for this table owns
+closing these, not deferring them further.
+
+**`is_beneficial_owner` is stored, never derived.** The threshold is 25%
+ownership (standard AML practice, protecting the platform from onboarding a
+front company), but the flag is a compliance assertion made at a point in
+time — recomputing it live from `ownership_pct` would silently rewrite who
+was flagged when as ownership changes. Never replace the stored column with
+a computed one.
+
+## The account-name mismatch is a reviewer signal, not a constraint
+
+`organization_financial.account_name` is allowed to differ from
+`organizations.registered_name` — trading names, abbreviations, and recently
+renamed companies are all legitimate. No DB constraint or trigger compares
+them; the frontend already treats a mismatch as a warning banner
+(`accountNameLooksMismatched`), never a validation failure, and the backend
+preserves that: the comparison belongs in a verification service, computed
+at review time, not enforced at write time.
+
+## No gateway credentials in the database
+
+`organization_gateways` records connection *status* only (`gateway_name`,
+`status`, `connected_at`) — never an API key or secret. Those belong in a
+secrets manager. Do not add an encrypted-credential column to this table
+later; "just one encrypted column" is how credentials end up in a database
+backup. Also: **Stripe is not a Nigerian local rail** — local collection
+runs through the enumerated `GatewayName` providers; diaspora payments use
+virtual accounts or international wire instead. Don't add Stripe to that
+enum.
+
 ## JSON enum-mapping strategy
 
 Every JSON-facing enum carries an explicit `@JsonValue`-annotated `value`

@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        tenancy.internal.domain.Director — company directors and beneficial
+        owners, captured during onboarding and cross-checked against the CAC
+        status report.
+
+        THE MOST SENSITIVE DATA IN THIS SYSTEM. id_number and bvn are
+        NDPR-regulated personal data — see the table comment below for the
+        standing TODOs. None of them are implemented yet; this changeset
+        only creates the columns and writes the warning into the schema
+        itself so it can't be missed later.
+
+        Column shapes were taken directly from Hibernate's own DDL export
+        for the current entity mapping (jakarta.persistence.schema-generation
+        with ddl-auto=none), so they match exactly what ddl-auto=validate
+        expects. Don't hand-tune a column without re-exporting and
+        re-checking against that mapping.
+    -->
+    <changeSet id="008-create-directors-table" author="landvault">
+        <sql>
+            CREATE TABLE directors (
+                id                     uuid NOT NULL,
+                tenant_id              uuid,
+                branch_id              uuid,
+                created_at             timestamp(6) with time zone NOT NULL,
+                updated_at             timestamp(6) with time zone,
+                created_by             varchar(255),
+                updated_by             varchar(255),
+                deleted                boolean NOT NULL,
+
+                organization_id        uuid NOT NULL,
+                -- A single field, deliberately: unlike users (first/last
+                -- name), a director's name is transcribed from the CAC
+                -- register as one registered string. Do not split it.
+                full_name              varchar(255) NOT NULL,
+                role                   varchar(255) NOT NULL,
+                nationality            varchar(255) NOT NULL,
+                id_type                varchar(32) NOT NULL CHECK (id_type IN ('NIN', 'INTERNATIONAL_PASSPORT')),
+                id_number              varchar(255) NOT NULL,
+                bvn                    varchar(255),
+                ownership_pct          numeric(5,2) NOT NULL,
+                is_beneficial_owner    boolean NOT NULL,
+
+                PRIMARY KEY (id)
+            );
+
+            COMMENT ON TABLE directors IS
+                'id_number and bvn are NDPR-regulated personal data. TODO (not yet implemented): (1) encrypt at rest — stored in plaintext today; (2) restrict reads to compliance staff, not all platform staff, and never tenant staff from another organization; (3) log every read against the director record — a Super Admin viewing a BVN is an auditable event, not an ordinary query; (4) define a retention policy — do not keep these longer than a documented compliance need requires.';
+            COMMENT ON COLUMN directors.id_number IS
+                'SENSITIVE — NDPR-regulated personal data. See the table comment.';
+            COMMENT ON COLUMN directors.bvn IS
+                'SENSITIVE — NDPR-regulated personal data. See the table comment.';
+            COMMENT ON COLUMN directors.is_beneficial_owner IS
+                'Stored, not computed. Threshold is 25% ownership (standard AML practice — protects the platform from onboarding a front company). This is a compliance assertion made at a point in time: if ownership_pct later changes, the historical record of who was flagged when must not silently rewrite itself.';
+            COMMENT ON COLUMN directors.full_name IS
+                'A single field, deliberately — unlike users (first/last name split), a director''s name is transcribed from the CAC register as one registered string. Do not split it for consistency with users.';
+        </sql>
+        <rollback>
+            DROP TABLE directors;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="008-create-directors-fk-index" author="landvault">
+        <addForeignKeyConstraint
+                baseTableName="directors" baseColumnNames="organization_id"
+                constraintName="fk_directors_organization_id"
+                referencedTableName="organizations" referencedColumnNames="id"/>
+        <createIndex indexName="idx_directors_organization_id" tableName="directors">
+            <column name="organization_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>
