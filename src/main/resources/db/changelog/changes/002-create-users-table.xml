@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        identity.internal.domain.User — the single table shared by every
+        kind of platform participant (platform staff, buyer, tenant staff,
+        independent agent); see that class's Javadoc and AGENTS.md for why
+        tenant_id/branch_id are nullable rather than @TenantId-scoped.
+
+        Column shapes were taken directly from Hibernate's own DDL export
+        for the current entity mapping (jakarta.persistence.schema-generation
+        with ddl-auto=none, against this project's actual dialect/naming
+        strategy), so they match exactly what ddl-auto=validate expects.
+        Don't hand-tune a column without re-exporting and re-checking
+        against that mapping.
+    -->
+    <changeSet id="002-create-users-table" author="landvault">
+        <sql>
+            CREATE TABLE users (
+                id                  uuid NOT NULL,
+                tenant_id           uuid,
+                branch_id           uuid,
+                created_at          timestamp(6) with time zone NOT NULL,
+                updated_at          timestamp(6) with time zone,
+                created_by          varchar(255),
+                updated_by          varchar(255),
+                deleted             boolean NOT NULL,
+                first_name          varchar(255) NOT NULL,
+                last_name           varchar(255) NOT NULL,
+                gender              varchar(255),
+                email               varchar(255) NOT NULL,
+                phone               varchar(255),
+                password_hash       varchar(255) NOT NULL,
+                country             varchar(2) NOT NULL,
+                currency            varchar(3) NOT NULL CHECK (currency IN ('NGN', 'USD', 'GBP', 'EUR')),
+                status              varchar(32) NOT NULL CHECK (status IN ('PENDING_VERIFICATION', 'ACTIVE', 'SUSPENDED', 'DEACTIVATED')),
+                email_verified_at   timestamp(6) with time zone,
+                phone_verified_at   timestamp(6) with time zone,
+                two_fa_enabled      boolean NOT NULL,
+                two_fa_secret       varchar(255),
+                last_login_at       timestamp(6) with time zone,
+                PRIMARY KEY (id)
+            );
+        </sql>
+        <rollback>
+            DROP TABLE users;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="002-create-users-fk-indexes" author="landvault">
+        <createIndex indexName="idx_users_tenant_id" tableName="users">
+            <column name="tenant_id"/>
+        </createIndex>
+        <createIndex indexName="idx_users_branch_id" tableName="users">
+            <column name="branch_id"/>
+        </createIndex>
+        <createIndex indexName="idx_users_status" tableName="users">
+            <column name="status"/>
+        </createIndex>
+    </changeSet>
+
+    <!--
+        Case-insensitive email uniqueness. Not a column-level `unique`
+        constraint on `email` — Emeka@x.com and emeka@x.com must collide —
+        and Postgres has no case-insensitive unique constraint short of a
+        functional index, so this is raw SQL rather than a Liquibase
+        <addUniqueConstraint>. User.prePersist() lowercases on write, but
+        that only protects writes made through the entity; this index is
+        the real, DB-level guarantee.
+    -->
+    <changeSet id="002-create-users-email-unique-index" author="landvault">
+        <sql>
+            CREATE UNIQUE INDEX idx_users_email_lower ON users (lower(email));
+        </sql>
+        <rollback>
+            DROP INDEX idx_users_email_lower;
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

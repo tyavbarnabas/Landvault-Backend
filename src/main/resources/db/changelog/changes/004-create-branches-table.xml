@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        tenancy.internal.domain.Branch — the organizational unit under an
+        Organization (Heritage, Double King, Premium under Estintin Group).
+        There is no separate "organizational unit" concept; a branch IS the
+        OU, and there's no third level.
+
+        organization_id is the real relationship, not the inherited
+        tenant_id/branch_id from AbstractEntity — both of those stay null
+        here too, same reasoning as Organization (see
+        003-create-organizations-table.xml and AGENTS.md).
+
+        Column shapes were taken directly from Hibernate's own DDL export
+        for the current entity mapping (jakarta.persistence.schema-generation
+        with ddl-auto=none), so they match exactly what ddl-auto=validate
+        expects. Don't hand-tune a column without re-exporting and
+        re-checking against that mapping.
+    -->
+    <changeSet id="004-create-branches-table" author="landvault">
+        <sql>
+            CREATE TABLE branches (
+                id                 uuid NOT NULL,
+                tenant_id          uuid,
+                branch_id          uuid,
+                created_at         timestamp(6) with time zone NOT NULL,
+                updated_at         timestamp(6) with time zone,
+                created_by         varchar(255),
+                updated_by         varchar(255),
+                deleted            boolean NOT NULL,
+
+                organization_id    uuid NOT NULL,
+                name               varchar(255) NOT NULL,
+                manager_user_id    uuid,
+                parent_branch_id   uuid,
+
+                PRIMARY KEY (id)
+            );
+        </sql>
+        <rollback>
+            DROP TABLE branches;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="004-create-branches-fk-indexes" author="landvault">
+        <createIndex indexName="idx_branches_organization_id" tableName="branches">
+            <column name="organization_id"/>
+        </createIndex>
+        <createIndex indexName="idx_branches_manager_user_id" tableName="branches">
+            <column name="manager_user_id"/>
+        </createIndex>
+        <createIndex indexName="idx_branches_parent_branch_id" tableName="branches">
+            <column name="parent_branch_id"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="004-create-branches-fk-constraints" author="landvault">
+        <addForeignKeyConstraint
+                baseTableName="branches" baseColumnNames="organization_id"
+                constraintName="fk_branches_organization_id"
+                referencedTableName="organizations" referencedColumnNames="id"/>
+        <addForeignKeyConstraint
+                baseTableName="branches" baseColumnNames="manager_user_id"
+                constraintName="fk_branches_manager_user_id"
+                referencedTableName="users" referencedColumnNames="id"/>
+        <addForeignKeyConstraint
+                baseTableName="branches" baseColumnNames="parent_branch_id"
+                constraintName="fk_branches_parent_branch_id"
+                referencedTableName="branches" referencedColumnNames="id"/>
+    </changeSet>
+
+    <!-- A branch name is unique within its own organization, not globally —
+         two different developers can each have a "Lekki" branch. -->
+    <changeSet id="004-create-branches-unique-name" author="landvault">
+        <addUniqueConstraint
+                tableName="branches" columnNames="organization_id, name"
+                constraintName="uq_branches_organization_id_name"/>
+    </changeSet>
+
+</databaseChangeLog>

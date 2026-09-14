@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        tenancy.internal.domain.Organization — the land-developer company
+        itself. "Tenant" is the architectural term; "organization" is the
+        domain term. Other modules point here via a column literally named
+        tenant_id (see common.AbstractEntity) even though this table is
+        called organizations — see AGENTS.md's naming-decision section.
+
+        tenant_id/branch_id (inherited from AbstractEntity) stay null on
+        every row here: an organization IS the tenant, so it has no parent
+        tenant, and it isn't scoped to one of its own branches.
+
+        Column shapes were taken directly from Hibernate's own DDL export
+        for the current entity mapping (jakarta.persistence.schema-generation
+        with ddl-auto=none), so they match exactly what ddl-auto=validate
+        expects. Don't hand-tune a column without re-exporting and
+        re-checking against that mapping.
+    -->
+    <changeSet id="003-create-organizations-table" author="landvault">
+        <sql>
+            CREATE TABLE organizations (
+                id                      uuid NOT NULL,
+                tenant_id               uuid,
+                branch_id               uuid,
+                created_at              timestamp(6) with time zone NOT NULL,
+                updated_at              timestamp(6) with time zone,
+                created_by              varchar(255),
+                updated_by              varchar(255),
+                deleted                 boolean NOT NULL,
+
+                -- Company identity (frontend CompanyIdentity)
+                registered_name         varchar(255) NOT NULL,
+                trading_name            varchar(255),
+                rc_number               varchar(255) NOT NULL,
+                company_type            varchar(64) NOT NULL CHECK (company_type IN ('LIMITED_LIABILITY', 'PLC', 'BUSINESS_NAME_ENTERPRISE', 'INCORPORATED_TRUSTEES')),
+                date_of_incorporation   date NOT NULL,
+
+                -- Registered address
+                registered_street       varchar(255) NOT NULL,
+                registered_city         varchar(255) NOT NULL,
+                registered_state        varchar(100) NOT NULL,
+
+                -- Operating address
+                operating_street        varchar(255) NOT NULL,
+                operating_city          varchar(255) NOT NULL,
+                operating_state         varchar(100) NOT NULL,
+
+                -- Presence (frontend CompanyPresence)
+                company_email           varchar(255) NOT NULL,
+                company_phone           varchar(255) NOT NULL,
+                website                 varchar(255),
+                social_instagram        varchar(255),
+                social_twitter          varchar(255),
+                social_facebook         varchar(255),
+                social_linkedin         varchar(255),
+
+                -- Plan and entitlements
+                plan                    varchar(32) NOT NULL CHECK (plan IN ('STARTER', 'GROWTH', 'ENTERPRISE')),
+                marketplace_publishing  boolean NOT NULL,
+                mlm_module              boolean NOT NULL,
+                fx_rails                boolean NOT NULL,
+
+                -- The two independent status axes — see column comments below
+                status                  varchar(32) NOT NULL CHECK (status IN ('ACTIVE', 'SUSPENDED', 'OFFBOARDED')),
+                verification_state     varchar(32) NOT NULL CHECK (verification_state IN ('CREATED', 'DOCUMENTS_SUBMITTED', 'UNDER_REVIEW', 'VERIFIED', 'REJECTED', 'SUSPENDED')),
+
+                PRIMARY KEY (id)
+            );
+
+            COMMENT ON COLUMN organizations.status IS
+                'Can this tenant''s staff use the portal at all? Independent of verification_state — e.g. a suspended-for-non-payment tenant can still be VERIFIED.';
+            COMMENT ON COLUMN organizations.verification_state IS
+                'Can this tenant publish to the marketplace or collect payments? Independent of status — e.g. an ACTIVE tenant can still be UNDER_REVIEW while it explores the portal and sets up estates.';
+        </sql>
+        <rollback>
+            DROP TABLE organizations;
+        </rollback>
+    </changeSet>
+
+    <!--
+        States of operation, one row per (organization, state) — a join
+        table rather than a text[] column so it's queryable/indexable (e.g.
+        "which organizations operate in Lagos"). No JPA entity maps this
+        yet; it's schema-only until something needs to query it.
+    -->
+    <changeSet id="003-create-organization-states-table" author="landvault">
+        <sql>
+            CREATE TABLE organization_states (
+                id               uuid NOT NULL,
+                organization_id  uuid NOT NULL,
+                state            varchar(100) NOT NULL,
+                created_at       timestamp(6) with time zone NOT NULL,
+                PRIMARY KEY (id)
+            );
+        </sql>
+        <rollback>
+            DROP TABLE organization_states;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="003-create-organization-states-fk" author="landvault">
+        <addForeignKeyConstraint
+                baseTableName="organization_states" baseColumnNames="organization_id"
+                constraintName="fk_organization_states_organization_id"
+                referencedTableName="organizations" referencedColumnNames="id"/>
+        <createIndex indexName="idx_organization_states_organization_id" tableName="organization_states">
+            <column name="organization_id"/>
+        </createIndex>
+        <addUniqueConstraint
+                tableName="organization_states" columnNames="organization_id, state"
+                constraintName="uq_organization_states_organization_id_state"/>
+    </changeSet>
+
+</databaseChangeLog>

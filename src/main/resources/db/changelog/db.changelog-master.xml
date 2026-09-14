@@ -6,8 +6,10 @@
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
 
     <include file="changes/000-enable-postgis.xml" relativeToChangelogFile="true"/>
+    <include file="changes/001-create-event-publication-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/002-create-users-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/003-create-organizations-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/004-create-branches-table.xml" relativeToChangelogFile="true"/>
 
-    <!-- Include each domain's changelog here as it's added, e.g.:
-    <include file="changes/001-create-users-table.xml" relativeToChangelogFile="true"/>
-    -->
+    <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

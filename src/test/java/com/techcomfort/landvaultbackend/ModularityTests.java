@@ -2,7 +2,6 @@ package com.techcomfort.landvaultbackend;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.modulith.core.ApplicationModules;
-import org.springframework.modulith.docs.Documenter;
 
 /**
  * Verifies the module structure declared via each module's
@@ -14,18 +13,17 @@ import org.springframework.modulith.docs.Documenter;
  * {@link ApplicationModules#verify()} works from the compiled package
  * structure alone, so this must run fast, without a Spring context and
  * without a database/Docker.
+ * <p>
+ * Note: a {@code Documenter}-based doc-generation test lived here too, but
+ * {@code spring-modulith-docs} isn't on the classpath since
+ * {@code spring-modulith-starter-test} was swapped for bare
+ * {@code spring-modulith-core} in pom.xml — add it back (as a test-scope
+ * dependency) if that's brought back.
  */
 class ModularityTests {
 
-    private final ApplicationModules modules = ApplicationModules.of(LandvaultApplication.class);
-
     @Test
     void verifiesModularStructure() {
-        modules.verify();
-    }
-
-    @Test
-    void writesModuleDocumentation() {
-        new Documenter(modules).writeDocumentation();
+        ApplicationModules.of(LandvaultApplication.class).verify();
     }
 }

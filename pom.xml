@@ -107,8 +107,7 @@
         </dependency>
         <dependency>
             <groupId>org.springframework.modulith</groupId>
-            <artifactId>spring-modulith-starter-test</artifactId>
-            <scope>test</scope>
+            <artifactId>spring-modulith-core</artifactId>
         </dependency>
     </dependencies>
     <dependencyManagement>

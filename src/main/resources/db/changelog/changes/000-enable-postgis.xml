@@ -7,6 +7,9 @@
 
     <changeSet id="000-enable-postgis" author="landvault">
         <sql>CREATE EXTENSION IF NOT EXISTS postgis;</sql>
+        <rollback>
+            DROP EXTENSION IF EXISTS postgis;
+        </rollback>
     </changeSet>
 
 </databaseChangeLog>

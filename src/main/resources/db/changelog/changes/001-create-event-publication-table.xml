@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Spring Modulith's own JPA event-publication registry
+        (spring-modulith-starter-jpa) — not a domain table. It backs
+        @ApplicationModuleListener's at-least-once delivery bookkeeping:
+        every published domain event gets a row per listener, marked
+        completed once that listener has handled it, so a restart can
+        redeliver anything left incomplete.
+
+        Column shapes were taken directly from Hibernate's own DDL export
+        for the installed spring-modulith-events-jpa:2.1.1 entity mapping
+        (jakarta.persistence.schema-generation with ddl-auto=none, against
+        this project's actual dialect/naming strategy), so they match
+        exactly what ddl-auto=validate expects. Don't hand-tune a column
+        here without re-exporting and re-checking against that mapping —
+        in particular, serialized_event is only varchar(255) because
+        that's the entity's own (unannotated, JPA-default) column length;
+        widening it means overriding Modulith's mapping, not just this
+        changeset.
+    -->
+    <changeSet id="001-create-event-publication-table" author="landvault">
+        <sql>
+            CREATE TABLE event_publication (
+                id                      uuid NOT NULL,
+                listener_id             varchar(255) NOT NULL,
+                event_type              varchar(255) NOT NULL,
+                serialized_event        varchar(255) NOT NULL,
+                publication_date        timestamp(6) with time zone NOT NULL,
+                completion_date         timestamp(6) with time zone,
+                last_resubmission_date  timestamp(6) with time zone,
+                completion_attempts     integer NOT NULL,
+                status                  varchar(255) CHECK (status IN ('PUBLISHED', 'PROCESSING', 'COMPLETED', 'FAILED', 'RESUBMITTED')),
+                PRIMARY KEY (id)
+            );
+        </sql>
+        <rollback>
+            DROP TABLE event_publication;
+        </rollback>
+    </changeSet>
+
+    <!-- Not required for schema validation, but every republish-on-restart
+         and archiving query Modulith runs filters/sorts on this column. -->
+    <changeSet id="001-create-event-publication-completion-date-index" author="landvault">
+        <createIndex indexName="idx_event_publication_completion_date" tableName="event_publication">
+            <column name="completion_date"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

@@ -140,6 +140,41 @@ same class of bug that row-level security exists to prevent for tenants —
 the filter belongs on the entity, once, not re-implemented (and eventually
 forgotten) per query.
 
+## `organizations` vs. `tenant_id` — the naming split
+
+The table is **`organizations`**, the entity is **`Organization`**, but the
+foreign key *other* modules use to point at it is **`tenant_id`**
+(`AbstractEntity.tenantId`). This isn't an inconsistency — it's deliberate:
+"tenant" is the architectural term (an isolated customer of the platform);
+"organization" is the domain term (Estintin Group, a real company with a CAC
+number). The FK name reflects what the column is *for* — isolation — while
+the table reflects what the row *is*. Don't rename either half to match the
+other, and don't invent a second `Organization`/`Tenant` entity — there is
+exactly one row type here; "tenant" and "organization" are two names for it,
+not two things.
+
+Within the `tenancy` module itself, `Organization` and `Branch` don't reuse
+the generic inherited `tenantId`/`branchId` columns for their own
+relationships — both stay `null` on every row of both entities (an
+organization *is* the tenant, so it has no parent tenant; a branch cannot
+reference itself as its own branch). `Branch`'s real link to its
+`Organization` is the explicit, purpose-named `organization_id` FK instead.
+
+## The two status axes on `Organization` — do not collapse them
+
+- **`status`** (`TenantStatus`) — can this tenant's staff use the portal at
+  all?
+- **`verificationState`** (`VerificationState`) — can this tenant publish to
+  the marketplace or collect payments?
+
+These are independent. A tenant can legitimately be `ACTIVE` +
+`UNDER_REVIEW` (exploring the portal, setting up estates, while compliance
+review is pending) or `VERIFIED` + `SUSPENDED` (compliant but suspended for
+non-payment — see Northbridge Estates in the frontend's seed data).
+Collapsing them into one column would make both of those real states
+unrepresentable. Each column carries a Postgres column comment recording
+this at the schema level, not just here.
+
 ## JSON enum-mapping strategy
 
 Every JSON-facing enum carries an explicit `@JsonValue`-annotated `value`
