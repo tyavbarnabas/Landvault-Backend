@@ -20,18 +20,8 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * A payment gateway an {@link Organization} has connected for settlement —
- * a child table, not a JSON blob, because "which tenants have Paystack
- * connected" and gateway-coverage reporting both need to query this.
- * <p>
- * <b>No credentials live here.</b> API keys and secrets belong in a secrets
- * manager, never in the application database — "just one encrypted column"
- * is exactly how credentials end up in a database backup. This table only
- * ever records connection status.
- * <p>
- * <b>Stripe is not a Nigerian local rail.</b> Local collection runs through
- * {@link GatewayName}'s enumerated providers; diaspora payments use virtual
- * accounts or international wire instead. Do not add Stripe to that enum.
+ * A payment gateway an {@link Organization} has connected. No credentials
+ * live here, and Stripe is not a Nigerian local rail — see AGENTS.md.
  */
 @Getter
 @Setter

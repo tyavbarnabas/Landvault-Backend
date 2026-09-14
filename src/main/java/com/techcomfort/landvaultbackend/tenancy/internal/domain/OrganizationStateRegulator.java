@@ -16,18 +16,8 @@ import java.util.UUID;
 
 /**
  * One state-level real estate regulator an {@link Organization} is
- * registered with — several Nigerian states have introduced their own.
- * <p>
- * <b>LASRERA is not structurally special.</b> It is simply a row with
- * {@code state = "Lagos"} and {@code regulatorName = "LASRERA"}. There is
- * deliberately no dedicated LASRERA column or table — the onboarding wizard
- * merely pre-fills one of these rows when Lagos is among the organization's
- * states of operation.
- * <p>
- * Unlike {@link Organization} (which <i>is</i> the tenant), this record
- * belongs to a specific tenant, so {@link AbstractEntity#getTenantId()} is
- * populated — set equal to {@link #getOrganizationId()} — rather than left
- * null.
+ * registered with. LASRERA is not structurally special — just a row with
+ * state="Lagos", regulatorName="LASRERA". See AGENTS.md.
  */
 @Getter
 @Setter

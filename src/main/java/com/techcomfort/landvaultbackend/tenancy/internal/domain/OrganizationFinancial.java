@@ -18,22 +18,8 @@ import org.hibernate.annotations.SQLRestriction;
 import java.util.UUID;
 
 /**
- * Where an {@link Organization}'s settlement money goes — a 1:1 record
- * (enforced by a unique constraint on {@code organization_id}).
- * <p>
- * {@code accountNumber} is a NUBAN: exactly 10 digits, stored as
- * {@code varchar(10)} rather than a numeric type. Leading zeros are
- * significant and an account number is an identifier, never a quantity.
- * <p>
- * <b>The account-name mismatch rule is a comment, not a constraint.</b> When
- * {@code accountName} doesn't closely match the organization's
- * {@code registeredName}, that's a compliance red flag worth a reviewer's
- * attention — but not a blocker. The frontend models it the same way
- * ({@code accountNameLooksMismatched} produces a warning banner, never a
- * validation failure): legitimate mismatches exist — trading names,
- * abbreviations, recently renamed companies. No constraint or trigger
- * enforces this here; the comparison is a reviewer signal, computed in the
- * verification service in a later slice.
+ * Where an {@link Organization}'s settlement money goes (1:1). accountName
+ * mismatch vs. registeredName is a reviewer signal only — see AGENTS.md.
  */
 @Getter
 @Setter

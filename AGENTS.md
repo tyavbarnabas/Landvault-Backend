@@ -270,4 +270,50 @@ no case-conversion strategy produces automatically, so every enum uses the
 explicit pair regardless of whether its own values would have fit a
 convention. Enum values must match the frontend's unions exactly — read them
 from the relevant `~/landvault/src/services/*.ts` file; never invent or
-rename a state.
+rename a state. `EnumJsonMappingTests` round-trips a couple of representative
+enums (`VerificationState`, `VerificationDecisionType`) through Jackson as a
+cheap regression guard — extend it if a new enum's mapping is non-obvious.
+
+## Append-only tables: `AbstractAppendOnlyEntity`
+
+`verification_decisions` and `support_access_grants` are where the
+append-only invariant first becomes structural rather than a convention.
+Both extend `common.AbstractAppendOnlyEntity`, **not** `AbstractEntity` —
+it's a separate `@MappedSuperclass` that redeclares `id`/`createdAt` rather
+than inheriting them, specifically so it cannot pick up `AbstractEntity`'s
+mutable columns: no `updatedAt`/`updatedBy` (implies a mutability that must
+not exist), no `deleted` (a soft-delete flag on an audit trail directly
+contradicts "append-only" — a decision that can be hidden is not a record),
+no `tenantId`/`branchId` (these entities carry their own explicit
+`organization_id` FK instead, same as every other tenancy entity). A
+correction is a **new row**, never an edit to the old one. Neither entity
+gets `@SQLRestriction` — there's no `deleted` column to filter on.
+
+This currently rests on application discipline alone (no repository writes
+an UPDATE/DELETE to these tables) — the class carries a TODO to enforce it
+at the database level too (revoke UPDATE/DELETE grants, or a trigger) so it
+survives more than just correct application code. Not implemented yet.
+
+Don't retrofit slices 1–3's entities onto `AbstractAppendOnlyEntity` — they
+genuinely need `updatedAt`/soft-delete, this base class is for the two
+tables where mutability must be structurally impossible, not a general
+replacement for `AbstractEntity`.
+
+## `REQUEST_MORE_INFO` doesn't transition verification state
+
+Recording a `VerificationDecision` with `decision = REQUEST_MORE_INFO` does
+**not** change the organization's `verification_state` — it stays
+`UNDER_REVIEW` while the reviewer waits for a clearer scan. Only `APPROVED`
+and `REJECTED` transition state. The transition logic itself lands in a
+later slice (the service layer); this rule is recorded now so it isn't
+reinvented differently when that slice is built.
+
+## Support access is visibility, not authority
+
+`support_access_grants` is time-boxed, reason-required, and fully logged —
+and it must **never** be usable to move money or sign documents on a
+tenant's behalf. It exists for troubleshooting a real issue, not as a
+side-channel around the platform's normal authorization rules. The
+enforcement of that boundary belongs in the authorization layer, built in a
+later slice; until then, treat it as a hard constraint on that future
+design, not a detail to reconsider once it's convenient not to.

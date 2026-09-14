@@ -20,20 +20,9 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * A corporate document an {@link Organization} submitted for verification —
- * CAC certificate, CAC status report / Memart, TIN, proof of address, SCUML
- * certificate, a state regulator permit, REDAN certificate.
- * <p>
- * <b>Land title documents (C of O, R of O, Governor's Consent, Gazette,
- * survey plan) are deliberately NOT stored here.</b> Title evidence is
- * per-estate, not per-company — a company can hold clean title on one
- * estate and none on another. Title lives on the estate record and is
- * captured at estate creation, not here.
- * <p>
- * Unlike {@link Organization} (which <i>is</i> the tenant) and {@link Branch}
- * (whose parent is the organization), this record belongs to a specific
- * tenant, so {@link AbstractEntity#getTenantId()} is populated — set equal
- * to {@link #getOrganizationId()} — rather than left null.
+ * A corporate verification document for an {@link Organization} (CAC
+ * certificate, TIN, SCUML certificate, etc.) — NOT land title documents,
+ * which are per-estate. See AGENTS.md.
  */
 @Getter
 @Setter

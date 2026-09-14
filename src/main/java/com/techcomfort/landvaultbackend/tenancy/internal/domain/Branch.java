@@ -16,16 +16,8 @@ import java.util.UUID;
 
 /**
  * An organizational unit under an {@link Organization} — Heritage, Double
- * King, Premium under Estintin Group. There is no separate "organizational
- * unit" concept; a branch <i>is</i> the OU.
- * <p>
- * {@code organizationId} is the real relationship, not
- * {@link AbstractEntity#getTenantId()} — a branch doesn't reuse the
- * generic inherited tenant column, it names its own FK, same as
- * {@link Organization} does. {@link AbstractEntity#getBranchId()} stays
- * {@code null} too: a branch cannot reference itself as its own branch.
- * {@code parentBranchId} reserves the shape for a future region containing
- * several branches, but no hierarchy logic is built on it yet.
+ * King, Premium under Estintin Group; there's no separate "unit" concept.
+ * organizationId is the real relationship (tenantId/branchId stay null).
  */
 @Getter
 @Setter

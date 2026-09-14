@@ -19,28 +19,8 @@ import java.math.BigDecimal;
 import java.util.UUID;
 
 /**
- * A director or beneficial owner of an {@link Organization}, captured
- * during onboarding and cross-checked against the CAC status report.
- * <p>
- * <b>This is the most sensitive data in the system.</b> {@code idNumber}
- * and {@code bvn} are NDPR-regulated personal data — see the table comment
- * carried into the schema by this entity's changelog for the standing
- * TODOs (encrypt at rest, restrict reads to compliance staff, log every
- * read, define a retention policy). None of those are implemented yet;
- * this entity only carries the columns and the warning.
- * <p>
- * {@code fullName} is a single field, deliberately, unlike {@code User}
- * which splits first/last name — a director's name is transcribed from the
- * CAC register as one registered string, and splitting it would invent a
- * split the source document doesn't make. Do not "fix" this for consistency
- * with {@code User}.
- * <p>
- * <b>{@code isBeneficialOwner} is stored, not computed.</b> The threshold is
- * 25% ownership (standard AML practice — it protects the platform from
- * onboarding a front company), but the flag is a compliance assertion made
- * at a point in time. If {@code ownershipPct} later changes, the historical
- * record of who was flagged when must not silently rewrite itself by
- * re-deriving the flag live.
+ * A director/beneficial owner of an {@link Organization}. Most sensitive
+ * table in the system (NDPR-regulated idNumber/bvn) — see AGENTS.md.
  */
 @Getter
 @Setter

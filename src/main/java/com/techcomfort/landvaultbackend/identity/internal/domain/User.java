@@ -13,6 +13,11 @@ import org.hibernate.annotations.SQLRestriction;
 
 import java.time.Instant;
 
+/**
+ * An account, shared by every kind of platform participant (buyer, tenant
+ * staff, platform staff, independent agent) — see AGENTS.md for the
+ * tenant/branch nullability rules that distinguish them.
+ */
 @Getter
 @Setter
 @AllArgsConstructor

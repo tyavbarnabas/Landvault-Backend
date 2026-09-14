@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Which organization_documents a rejection names as failed — a child
+        table rather than an array column on verification_decisions, so
+        "which documents have ever been rejected, and why" stays a real
+        query. No JPA entity maps this yet; it's schema-only until
+        something needs to query it, same convention as
+        organization_states (slice 1).
+    -->
+    <changeSet id="012-create-verification-decision-documents-table" author="landvault">
+        <sql>
+            CREATE TABLE verification_decision_documents (
+                id             uuid NOT NULL,
+                decision_id    uuid NOT NULL,
+                document_id    uuid NOT NULL,
+                PRIMARY KEY (id)
+            );
+        </sql>
+        <rollback>
+            DROP TABLE verification_decision_documents;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="012-create-verification-decision-documents-fk-indexes" author="landvault">
+        <addForeignKeyConstraint
+                baseTableName="verification_decision_documents" baseColumnNames="decision_id"
+                constraintName="fk_verification_decision_documents_decision_id"
+                referencedTableName="verification_decisions" referencedColumnNames="id"/>
+        <addForeignKeyConstraint
+                baseTableName="verification_decision_documents" baseColumnNames="document_id"
+                constraintName="fk_verification_decision_documents_document_id"
+                referencedTableName="organization_documents" referencedColumnNames="id"/>
+        <createIndex indexName="idx_verification_decision_documents_decision_id" tableName="verification_decision_documents">
+            <column name="decision_id"/>
+        </createIndex>
+        <createIndex indexName="idx_verification_decision_documents_document_id" tableName="verification_decision_documents">
+            <column name="document_id"/>
+        </createIndex>
+        <addUniqueConstraint
+                tableName="verification_decision_documents" columnNames="decision_id, document_id"
+                constraintName="uq_verification_decision_documents_decision_document"/>
+    </changeSet>
+
+</databaseChangeLog>

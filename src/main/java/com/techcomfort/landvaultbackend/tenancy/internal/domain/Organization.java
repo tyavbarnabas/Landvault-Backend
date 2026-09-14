@@ -20,32 +20,9 @@ import org.hibernate.annotations.SQLRestriction;
 import java.time.LocalDate;
 
 /**
- * A land-developer company — "tenant" is the architectural term (an
- * isolated customer of the platform), "organization" is the domain term
- * (Estintin Group, a real company with a CAC number). This entity is what
- * the rest of the schema means by "the tenant": other modules point at it
- * via a column literally named {@code tenant_id} (see {@link AbstractEntity}),
- * even though the table it points to is called {@code organizations}.
- * <p>
- * This row <b>is</b> the tenant, so {@link AbstractEntity#getTenantId()} and
- * {@link AbstractEntity#getBranchId()} stay {@code null} on every
- * {@code Organization} — it doesn't belong to another tenant, and it isn't
- * scoped to one of its own branches. Its relationship to {@link Branch} is
- * instead the explicit, purpose-named {@code organization_id} FK on
- * {@code Branch}.
- * <p>
- * <b>Two independent status axes — do not collapse them:</b>
- * <ul>
- *   <li>{@link #status} ({@link TenantStatus}) — can this tenant's staff use
- *   the portal at all?</li>
- *   <li>{@link #verificationState} ({@link VerificationState}) — can this
- *   tenant publish to the marketplace or collect payments?</li>
- * </ul>
- * A tenant can legitimately be {@code ACTIVE} + {@code UNDER_REVIEW}
- * (exploring the portal, setting up estates, while compliance review is
- * pending) or {@code VERIFIED} + {@code SUSPENDED} (compliant but suspended
- * for non-payment, e.g. Northbridge Estates in the frontend's seed data).
- * Collapsing these into one column would make both states unrepresentable.
+ * A land-developer company — the tenant itself, so tenantId/branchId stay
+ * null. See AGENTS.md for the organizations/tenant_id naming split and the
+ * two independent status axes (status vs. verificationState).
  */
 @Getter
 @Setter

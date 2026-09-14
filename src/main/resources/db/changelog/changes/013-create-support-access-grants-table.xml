@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        tenancy.internal.domain.SupportAccessGrant — Super Admin's guarded,
+        time-boxed access into an organization's view, for troubleshooting.
+        Append-only, same as verification_decisions: no
+        updated_at/updated_by/deleted columns — see
+        common.AbstractAppendOnlyEntity.
+
+        Column shapes were taken directly from Hibernate's own DDL export
+        for the current entity mapping (jakarta.persistence.schema-generation
+        with ddl-auto=none), so they match exactly what ddl-auto=validate
+        expects. Don't hand-tune a column without re-exporting and
+        re-checking against that mapping.
+    -->
+    <changeSet id="013-create-support-access-grants-table" author="landvault">
+        <sql>
+            CREATE TABLE support_access_grants (
+                id                     uuid NOT NULL,
+                created_at             timestamp(6) with time zone NOT NULL,
+                created_by             varchar(255),
+
+                organization_id        uuid NOT NULL,
+                granted_to_user_id     uuid NOT NULL,
+                reason                 varchar(255) NOT NULL,
+                requested_at           timestamp(6) with time zone NOT NULL,
+                expires_at             timestamp(6) with time zone NOT NULL,
+
+                PRIMARY KEY (id)
+            );
+
+            COMMENT ON TABLE support_access_grants IS
+                'Support access is time-boxed, reason-required and fully logged. It must NEVER be usable to move money or sign documents on a tenant''s behalf. It grants visibility for troubleshooting, not authority. Enforcement of that boundary lives in the authorization layer in a later slice — this comment is what stops the boundary being widened by someone who doesn''t know it was deliberate.';
+        </sql>
+        <rollback>
+            DROP TABLE support_access_grants;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="013-create-support-access-grants-fk-indexes" author="landvault">
+        <addForeignKeyConstraint
+                baseTableName="support_access_grants" baseColumnNames="organization_id"
+                constraintName="fk_support_access_grants_organization_id"
+                referencedTableName="organizations" referencedColumnNames="id"/>
+        <addForeignKeyConstraint
+                baseTableName="support_access_grants" baseColumnNames="granted_to_user_id"
+                constraintName="fk_support_access_grants_granted_to_user_id"
+                referencedTableName="users" referencedColumnNames="id"/>
+        <createIndex indexName="idx_support_access_grants_organization_id" tableName="support_access_grants">
+            <column name="organization_id"/>
+        </createIndex>
+        <createIndex indexName="idx_support_access_grants_granted_to_user_id" tableName="support_access_grants">
+            <column name="granted_to_user_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

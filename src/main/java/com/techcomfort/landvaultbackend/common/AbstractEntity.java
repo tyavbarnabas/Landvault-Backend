@@ -18,6 +18,11 @@ import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 import java.time.Instant;
 import java.util.UUID;
 
+/**
+ * Common columns for every entity: id, audit trail, soft delete, and
+ * nullable tenant/branch scoping. See AGENTS.md for why tenantId/branchId
+ * are nullable and why `@TenantId` was rejected in favor of this.
+ */
 @Getter
 @Setter
 @AllArgsConstructor

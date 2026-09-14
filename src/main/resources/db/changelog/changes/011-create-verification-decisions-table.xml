@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        tenancy.internal.domain.VerificationDecision — every reviewer
+        decision on an organization's verification, appended, never edited.
+        No updated_at/updated_by/deleted columns exist on this table at
+        all — see common.AbstractAppendOnlyEntity for why. A rejection
+        later overturned is a new APPROVED row, not an edit to the old one.
+
+        REQUEST_MORE_INFO records the decision but does not change
+        organizations.verification_state — the organization stays
+        UNDER_REVIEW while the reviewer waits for a clearer scan. Only
+        APPROVED and REJECTED transition state; that logic lands in a
+        later slice.
+
+        Column shapes were taken directly from Hibernate's own DDL export
+        for the current entity mapping (jakarta.persistence.schema-generation
+        with ddl-auto=none), so they match exactly what ddl-auto=validate
+        expects. Don't hand-tune a column without re-exporting and
+        re-checking against that mapping.
+    -->
+    <changeSet id="011-create-verification-decisions-table" author="landvault">
+        <sql>
+            CREATE TABLE verification_decisions (
+                id                 uuid NOT NULL,
+                created_at         timestamp(6) with time zone NOT NULL,
+                created_by         varchar(255),
+
+                organization_id    uuid NOT NULL,
+                reviewer_user_id   uuid NOT NULL,
+                decision           varchar(32) NOT NULL CHECK (decision IN ('APPROVED', 'REJECTED', 'REQUEST_MORE_INFO')),
+                -- Nullable for approvals; required in practice for
+                -- REJECTED/REQUEST_MORE_INFO — enforced in the service
+                -- layer, not here, since the rule is behavioural.
+                reason             varchar(255),
+                decided_at         timestamp(6) with time zone NOT NULL,
+
+                PRIMARY KEY (id)
+            );
+        </sql>
+        <rollback>
+            DROP TABLE verification_decisions;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="011-create-verification-decisions-fk-indexes" author="landvault">
+        <addForeignKeyConstraint
+                baseTableName="verification_decisions" baseColumnNames="organization_id"
+                constraintName="fk_verification_decisions_organization_id"
+                referencedTableName="organizations" referencedColumnNames="id"/>
+        <addForeignKeyConstraint
+                baseTableName="verification_decisions" baseColumnNames="reviewer_user_id"
+                constraintName="fk_verification_decisions_reviewer_user_id"
+                referencedTableName="users" referencedColumnNames="id"/>
+        <createIndex indexName="idx_verification_decisions_organization_id" tableName="verification_decisions">
+            <column name="organization_id"/>
+        </createIndex>
+        <createIndex indexName="idx_verification_decisions_reviewer_user_id" tableName="verification_decisions">
+            <column name="reviewer_user_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

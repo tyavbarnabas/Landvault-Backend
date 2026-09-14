@@ -15,21 +15,8 @@ import org.hibernate.annotations.SQLRestriction;
 import java.util.UUID;
 
 /**
- * The company-level regulatory registrations for one {@link Organization} —
- * a 1:1 record (enforced by a unique constraint on {@code organization_id}).
- * <p>
- * {@code scumlNumber} matters because real estate firms are Designated
- * Non-Financial Businesses under Nigeria's AML regime and are generally
- * required to register with SCUML under the EFCC — the platform facilitates
- * large property payments, so this isn't paperwork for its own sake.
- * <p>
- * {@code redanNumber} is a <b>credibility signal, not a licence</b> — REDAN
- * membership must never be treated as a verification requirement.
- * <p>
- * Unlike {@link Organization} (which <i>is</i> the tenant), this record
- * belongs to a specific tenant, so {@link AbstractEntity#getTenantId()} is
- * populated — set equal to {@link #getOrganizationId()} — rather than left
- * null.
+ * An {@link Organization}'s company-level regulatory registrations (1:1).
+ * redanNumber is a credibility signal, not a licence — see AGENTS.md.
  */
 @Getter
 @Setter
