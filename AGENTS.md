@@ -175,6 +175,31 @@ Collapsing them into one column would make both of those real states
 unrepresentable. Each column carries a Postgres column comment recording
 this at the schema level, not just here.
 
+## Title documents are per-estate, not per-company
+
+`organization_documents` holds corporate verification documents (CAC
+certificate, CAC status report / Memart, TIN, proof of address, SCUML
+certificate, state regulator permits, REDAN certificate). It deliberately
+does **not** hold land title documents (C of O, R of O, Governor's Consent,
+Gazette, survey plan) — title evidence is per-estate, not per-company, since
+a company can hold clean title on one estate and none on another. Title
+lives on the estate record and is captured at estate creation, whenever that
+lands; don't add title-document columns/types to `organization_documents`.
+
+**LASRERA is not structurally special.** `organization_state_regulators` is
+a plain repeatable list — LASRERA is just a row with `state = 'Lagos'` and
+`regulator_name = 'LASRERA'`. The onboarding wizard pre-fills one of these
+rows when Lagos is among the organization's states of operation; there is no
+dedicated LASRERA column, table, or code path, and none should be added.
+
+`organization_documents`/`organization_regulatory`/`organization_state_regulators`
+belong to a specific tenant (unlike `Organization` itself, which *is* the
+tenant) — each sets the inherited `tenantId` equal to its own
+`organizationId` in `prePersist`, rather than leaving it null.
+`AbstractTenantEntity` doesn't exist yet; when it's introduced, migrate these
+three onto it rather than leaving them on plain `AbstractEntity` with a
+manually-populated `tenantId`.
+
 ## JSON enum-mapping strategy
 
 Every JSON-facing enum carries an explicit `@JsonValue`-annotated `value`

@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        tenancy.internal.domain.OrganizationRegulatory — one row per
+        organization (1:1, enforced by the unique constraint below) holding
+        its company-level regulatory registrations.
+
+        Column shapes were taken directly from Hibernate's own DDL export
+        for the current entity mapping (jakarta.persistence.schema-generation
+        with ddl-auto=none), so they match exactly what ddl-auto=validate
+        expects. Don't hand-tune a column without re-exporting and
+        re-checking against that mapping.
+    -->
+    <changeSet id="006-create-organization-regulatory-table" author="landvault">
+        <sql>
+            CREATE TABLE organization_regulatory (
+                id                   uuid NOT NULL,
+                tenant_id            uuid,
+                branch_id            uuid,
+                created_at           timestamp(6) with time zone NOT NULL,
+                updated_at           timestamp(6) with time zone,
+                created_by           varchar(255),
+                updated_by           varchar(255),
+                deleted              boolean NOT NULL,
+
+                organization_id      uuid NOT NULL,
+                scuml_number         varchar(255) NOT NULL,
+                scuml_document_id    uuid,
+                redan_number         varchar(255),
+
+                PRIMARY KEY (id)
+            );
+
+            COMMENT ON COLUMN organization_regulatory.scuml_number IS
+                'Real estate firms are Designated Non-Financial Businesses under Nigeria''s AML regime and are generally required to register with SCUML under the EFCC. This matters because the platform facilitates large property payments.';
+            COMMENT ON COLUMN organization_regulatory.redan_number IS
+                'REDAN membership is a credibility signal, not a licence — do not treat it as a verification requirement.';
+        </sql>
+        <rollback>
+            DROP TABLE organization_regulatory;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="006-create-organization-regulatory-fk-unique" author="landvault">
+        <addForeignKeyConstraint
+                baseTableName="organization_regulatory" baseColumnNames="organization_id"
+                constraintName="fk_organization_regulatory_organization_id"
+                referencedTableName="organizations" referencedColumnNames="id"/>
+        <addForeignKeyConstraint
+                baseTableName="organization_regulatory" baseColumnNames="scuml_document_id"
+                constraintName="fk_organization_regulatory_scuml_document_id"
+                referencedTableName="organization_documents" referencedColumnNames="id"/>
+        <createIndex indexName="idx_organization_regulatory_organization_id" tableName="organization_regulatory">
+            <column name="organization_id"/>
+        </createIndex>
+        <!-- Enforces the 1:1 with organizations. -->
+        <addUniqueConstraint
+                tableName="organization_regulatory" columnNames="organization_id"
+                constraintName="uq_organization_regulatory_organization_id"/>
+    </changeSet>
+
+</databaseChangeLog>

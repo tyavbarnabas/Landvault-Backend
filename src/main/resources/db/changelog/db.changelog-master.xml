@@ -10,6 +10,9 @@
     <include file="changes/002-create-users-table.xml" relativeToChangelogFile="true"/>
     <include file="changes/003-create-organizations-table.xml" relativeToChangelogFile="true"/>
     <include file="changes/004-create-branches-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/005-create-organization-documents-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/006-create-organization-regulatory-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/007-create-organization-state-regulators-table.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

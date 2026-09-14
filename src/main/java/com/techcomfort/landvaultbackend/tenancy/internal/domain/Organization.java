@@ -135,7 +135,7 @@ public class Organization extends AbstractEntity {
     @Column(name = "fx_rails", nullable = false)
     private Boolean fxRails;
 
-    // --- The two independent status axes (see class Javadoc) ---
+    // --- The two independent status  ---
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 32)

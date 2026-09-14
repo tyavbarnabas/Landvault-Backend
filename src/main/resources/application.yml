@@ -9,6 +9,10 @@ spring:
     hibernate:
       ddl-auto: validate
     open-in-view: false
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
     # Hibernate 6 auto-detects PostGIS spatial support from hibernate-spatial +
     # postgis-jdbc on the classpath — no dialect is set here on purpose. If
     # geometry mapping ever misbehaves, an explicit `hibernate.dialect` is the
