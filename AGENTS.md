@@ -316,6 +316,25 @@ rename a state. `EnumJsonMappingTests` round-trips a couple of representative
 enums (`VerificationState`, `VerificationDecisionType`) through Jackson as a
 cheap regression guard — extend it if a new enum's mapping is non-obvious.
 
+**Unverified risk, found while wiring identity's controllers (2026-09-14):**
+Spring Boot 4.1's auto-configured `ObjectMapper` is the new `tools.jackson`
+(Jackson 3) stack, not the classic `com.fasterxml.jackson` one —
+`spring-boot-starter-jackson` pulls `tools.jackson.core:jackson-databind`,
+a different Maven coordinate and Java package entirely. `EnumJsonMappingTests`
+only proves `@JsonValue`/`@JsonCreator` work against a hand-built
+`com.fasterxml.jackson.databind.ObjectMapper` — it does **not** prove Spring
+MVC's actual runtime message conversion (the `tools.jackson`-based one)
+honors those same `com.fasterxml.jackson.annotation` annotations. `jackson-annotations`
+staying at its classic coordinates in the dependency tree (unlike
+`jackson-core`/`jackson-databind`) is a strong signal it does, but this
+hasn't been proven by an actual HTTP round trip of a non-trivial enum yet —
+none of identity's slice-2 endpoints happen to serialize one (`Currency`
+round-trips fine either way since Jackson's default `name()`-based
+enum serialization needs no annotation and already matches the frontend's
+uppercase values). **Verify this for real before the first tenancy-module
+controller ships a `TenantStatus`/`VerificationState`/etc. over HTTP** — a
+quick MockMvc or WebTestClient round trip of one such enum is enough.
+
 ## Append-only tables: `AbstractAppendOnlyEntity`
 
 `verification_decisions` and `support_access_grants` are where the
@@ -359,3 +378,75 @@ side-channel around the platform's normal authorization rules. The
 enforcement of that boundary belongs in the authorization layer, built in a
 later slice; until then, treat it as a hard constraint on that future
 design, not a detail to reconsider once it's convenient not to.
+
+## JWT carries every role assignment, not one effective scope
+
+A user may hold several role assignments with different branch scopes at
+once — an organization-wide finance role *and* a branch-scoped sales role.
+The access token's `roles` claim carries **all of them**, not a single
+resolved role/scope pair. This is what lets an Executive Director switch
+branches without re-authenticating, and it avoids a DB round-trip on every
+request.
+
+**The trade-off this creates, stated plainly: a revoked role stays valid
+until the access token expires**, because the token is never checked
+against the database. This is why the access token is short-lived (15
+minutes) — it bounds the window, it doesn't close it. Immediate revocation
+would require either a denylist (checked on every request, which defeats
+much of the point of a stateless token) or shortening expiry further.
+Neither is built; the 15-minute window is the accepted exposure for now.
+Don't "fix" this by silently adding a per-request DB check — that's a real
+design trade-off to make deliberately, not a bug to patch quietly.
+
+## Token lifetimes and refresh rotation
+
+- **Access token: 15 minutes.** Stateless — signed, never looked up in the
+  database. `tenant_id` in its claims comes from the database at login,
+  **never from client input** — a client-supplied tenant would be a
+  cross-tenant data breach, full stop.
+- **Refresh token: 30 days.** Stored as `token_hash` only (never the raw
+  value), revocable, rotated on every use.
+
+**Rotation**: each `/api/auth/refresh` call issues a new refresh token,
+marks the presented one `revoked_at`, and sets its `replaced_by` to the new
+row's id — a chain, not an overwrite.
+
+**Theft detection is why refresh tokens are stored at all**: if an
+already-`revoked_at` token is ever presented again, that's a signal the
+token was stolen and used after the legitimate client already rotated past
+it. The correct response is to revoke the *entire token family* for that
+user (walk the `replaced_by` chain, or simply revoke every non-expired
+token for that `user_id`) and force re-login — not to quietly reject the
+one request and let the rest of the family keep working.
+
+**Concurrent refresh of the same token is resolved with a DB-level atomic
+compare-and-swap** (`UPDATE ... WHERE revoked_at IS NULL`, checking the
+affected-row count), not an in-Java check-then-write — the frontend's
+apiClient already single-flights refresh calls, but the backend can't
+assume every caller does. Only one concurrent request can ever win the
+rotation; the loser deletes its own orphaned token and triggers the same
+family-revocation path as reuse of a revoked token, rather than forking a
+divergent branch.
+
+**Gotcha worth knowing before touching `AuthService.refresh()`**: its
+`@Transactional` is `noRollbackFor = AuthException.InvalidRefreshToken.class`,
+and that's load-bearing, not incidental. The theft-detection and lost-race
+branches deliberately write (revoke the family / delete an orphaned token)
+and *then* throw to fail the request — Spring's default rollback-on-any-
+unchecked-exception behavior would otherwise silently undo exactly the
+revocation those branches exist to make stick. This was a real bug caught
+by the Testcontainers integration test, not the mocked unit tests (mocks
+don't roll back anything, so they couldn't have caught it) — a reminder
+that the integration test isn't redundant with the unit tests here.
+
+## Permission slugs are authorities; `tenant_id` is never client-supplied
+
+The `permissions` claim (flattened, deduplicated union of the user's roles'
+permissions — see the earlier "Permissions are assembled at login" note) is
+what `JwtAuthenticationFilter` loads into the `SecurityContext` as Spring
+Security authorities, which is what makes
+`@PreAuthorize("hasAuthority('admin.tenants.view')")` work. `tenant_id` gets
+the same treatment as the permissions: read from the authenticated user's
+own row at login/refresh time, placed in the token, never accepted as a
+request parameter or body field for any endpoint that would use it to scope
+a query.

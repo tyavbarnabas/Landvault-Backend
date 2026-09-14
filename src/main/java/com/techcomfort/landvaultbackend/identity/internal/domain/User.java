@@ -51,8 +51,10 @@ public class User extends AbstractEntity {
     @Column(name = "phone")
     private String phone;
 
+    // Stores a BCrypt hash, never plaintext — named passwordHash (not
+    // password) so a plaintext value written here reads as an obvious bug.
     @Column(name = "password_hash", nullable = false)
-    private String password;
+    private String passwordHash;
 
     @Column(name = "country", nullable = false, length = 2)
     private String country;
