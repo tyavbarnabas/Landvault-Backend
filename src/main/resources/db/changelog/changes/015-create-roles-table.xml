@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        identity.internal.domain.Role — named sets of permissions.
+        system_role rows are seeded and must not be deletable through a UI.
+
+        Column shapes were taken directly from Hibernate's own DDL export
+        for the current entity mapping (jakarta.persistence.schema-generation
+        with ddl-auto=none), so they match exactly what ddl-auto=validate
+        expects. Don't hand-tune a column without re-exporting and
+        re-checking against that mapping.
+    -->
+    <changeSet id="015-create-roles-table" author="landvault">
+        <sql>
+            CREATE TABLE roles (
+                id             uuid NOT NULL,
+                tenant_id      uuid,
+                branch_id      uuid,
+                created_at     timestamp(6) with time zone NOT NULL,
+                updated_at     timestamp(6) with time zone,
+                created_by     varchar(255),
+                updated_by     varchar(255),
+                deleted        boolean NOT NULL,
+
+                code           varchar(255) NOT NULL UNIQUE,
+                name           varchar(255) NOT NULL,
+                description    varchar(255),
+                system_role    boolean NOT NULL,
+
+                PRIMARY KEY (id)
+            );
+        </sql>
+        <rollback>
+            DROP TABLE roles;
+        </rollback>
+    </changeSet>
+
+    <!-- The roles that exist today. Only Super Admin and buyer get
+         permission assignments (016) — the rest have screens that aren't
+         built yet, so no permission slugs exist for them to hold; see
+         AGENTS.md's "no fabricated data" rule and this slice's task notes. -->
+    <changeSet id="015-seed-roles" author="landvault">
+        <sql>
+            INSERT INTO roles (id, created_at, created_by, deleted, code, name, description, system_role) VALUES
+                (gen_random_uuid(), now(), 'system', false, 'super_admin', 'Super Admin', 'Platform operator with full administrative access.', true),
+                (gen_random_uuid(), now(), 'system', false, 'platform_moderator', 'Platform Moderator', 'Platform staff role for moderation duties. No screens built yet — TODO: permissions land as they are.', true),
+                (gen_random_uuid(), now(), 'system', false, 'compliance_officer', 'Compliance Officer', 'Platform staff role for compliance review duties. No screens built yet — TODO: permissions land as they are.', true),
+                (gen_random_uuid(), now(), 'system', false, 'buyer', 'Buyer', 'A marketplace buyer/investor.', true),
+                (gen_random_uuid(), now(), 'system', false, 'executive_director', 'Executive Director', 'Tenant staff role with full oversight and branch management, organization-wide by default. No screens built yet — TODO: permissions land as they are.', true),
+                (gen_random_uuid(), now(), 'system', false, 'branch_manager', 'Branch Manager', 'Tenant staff role scoped to a single branch (a hard wall, not a switchable lens). No screens built yet — TODO: permissions land as they are.', true),
+                (gen_random_uuid(), now(), 'system', false, 'finance_officer', 'Finance Officer', 'Tenant staff role for payment reconciliation and payouts. No screens built yet — TODO: permissions land as they are.', true),
+                (gen_random_uuid(), now(), 'system', false, 'surveyor_project_manager', 'Surveyor / Project Manager', 'Tenant staff role for spatial inventory and construction tracking. No screens built yet — TODO: permissions land as they are.', true),
+                (gen_random_uuid(), now(), 'system', false, 'sales_manager', 'Sales Manager', 'Tenant staff role for the sales pipeline and lead assignment. No screens built yet — TODO: permissions land as they are.', true),
+                (gen_random_uuid(), now(), 'system', false, 'legal_officer', 'Legal Officer', 'Tenant staff role for legal document generation and e-signing. No screens built yet — TODO: permissions land as they are.', true),
+                (gen_random_uuid(), now(), 'system', false, 'broker', 'Broker', 'Independent agent role for referrals and commissions. No screens built yet — TODO: permissions land as they are.', true);
+        </sql>
+        <rollback>
+            DELETE FROM roles WHERE code IN (
+                'super_admin', 'platform_moderator', 'compliance_officer', 'buyer', 'executive_director',
+                'branch_manager', 'finance_officer', 'surveyor_project_manager', 'sales_manager',
+                'legal_officer', 'broker'
+            );
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

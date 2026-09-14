@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        identity.internal.domain.Permission — the atomic units of
+        authorization. codes are the frontend's existing slugs
+        (~/landvault/src/services/authService.ts), used verbatim: the
+        frontend's navigation renders directly off these strings, so a
+        renamed slug silently removes a menu item.
+
+        Column shapes were taken directly from Hibernate's own DDL export
+        for the current entity mapping (jakarta.persistence.schema-generation
+        with ddl-auto=none), so they match exactly what ddl-auto=validate
+        expects. Don't hand-tune a column without re-exporting and
+        re-checking against that mapping.
+    -->
+    <changeSet id="014-create-permissions-table" author="landvault">
+        <sql>
+            CREATE TABLE permissions (
+                id             uuid NOT NULL,
+                tenant_id      uuid,
+                branch_id      uuid,
+                created_at     timestamp(6) with time zone NOT NULL,
+                updated_at     timestamp(6) with time zone,
+                created_by     varchar(255),
+                updated_by     varchar(255),
+                deleted        boolean NOT NULL,
+
+                code           varchar(255) NOT NULL UNIQUE,
+                description    varchar(255) NOT NULL,
+
+                PRIMARY KEY (id)
+            );
+        </sql>
+        <rollback>
+            DROP TABLE permissions;
+        </rollback>
+    </changeSet>
+
+    <!-- Structural, not business data — every slug the frontend's
+         navigation already renders off. Do not rename any code here
+         without renaming it in authService.ts first. -->
+    <changeSet id="014-seed-permissions" author="landvault">
+        <sql>
+            INSERT INTO permissions (id, created_at, created_by, deleted, code, description) VALUES
+                (gen_random_uuid(), now(), 'system', false, 'admin.dashboard.view', 'View the Super Admin platform dashboard.'),
+                (gen_random_uuid(), now(), 'system', false, 'admin.tenants.view', 'View the tenant directory and tenant detail records.'),
+                (gen_random_uuid(), now(), 'system', false, 'admin.tenants.manage', 'Manage tenant verification, status and support access.'),
+                (gen_random_uuid(), now(), 'system', false, 'admin.marketplace.conflicts', 'Review and resolve marketplace listing conflicts (SA-3.4).'),
+                (gen_random_uuid(), now(), 'system', false, 'client.dashboard.view', 'View the buyer dashboard.'),
+                (gen_random_uuid(), now(), 'system', false, 'client.marketplace.view', 'Browse the public marketplace.'),
+                (gen_random_uuid(), now(), 'system', false, 'client.estates.view', 'View estate and plot details.'),
+                (gen_random_uuid(), now(), 'system', false, 'client.resale.view', 'View resale listings and requests.'),
+                (gen_random_uuid(), now(), 'system', false, 'client.portfolio.view', 'View owned plots and portfolio.'),
+                (gen_random_uuid(), now(), 'system', false, 'client.documents.view', 'View the buyer''s document vault.'),
+                (gen_random_uuid(), now(), 'system', false, 'client.inspections.view', 'View and manage inspection bookings.'),
+                (gen_random_uuid(), now(), 'system', false, 'client.enquiries.view', 'View and manage enquiries.'),
+                (gen_random_uuid(), now(), 'system', false, 'client.syndicates.view', 'View syndicate investments.'),
+                (gen_random_uuid(), now(), 'system', false, 'client.support.view', 'View support tickets.'),
+                (gen_random_uuid(), now(), 'system', false, 'client.settings.view', 'View and manage account settings.');
+        </sql>
+        <rollback>
+            DELETE FROM permissions WHERE code IN (
+                'admin.dashboard.view', 'admin.tenants.view', 'admin.tenants.manage', 'admin.marketplace.conflicts',
+                'client.dashboard.view', 'client.marketplace.view', 'client.estates.view', 'client.resale.view',
+                'client.portfolio.view', 'client.documents.view', 'client.inspections.view', 'client.enquiries.view',
+                'client.syndicates.view', 'client.support.view', 'client.settings.view'
+            );
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

@@ -12,6 +12,7 @@ import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.SQLRestriction;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * An account, shared by every kind of platform participant (buyer, tenant
@@ -78,6 +79,13 @@ public class User extends AbstractEntity {
 
     @Column(name = "last_login_at")
     private Instant lastLoginAt;
+
+    // Lazy: roles are needed at login, not on every read. Note: this user's
+    // *permissions* are never stored anywhere on User — they're assembled
+    // at login by flattening roles -> role_permissions -> permissions. See
+    // AGENTS.md.
+    @OneToMany(mappedBy = "user", fetch = FetchType.LAZY)
+    private List<UserRole> roles;
 
     @Override
     public void prePersist() {

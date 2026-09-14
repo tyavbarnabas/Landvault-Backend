@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        identity.internal.domain.RolePermission — join row: one permission
+        granted to one role.
+
+        Column shapes were taken directly from Hibernate's own DDL export
+        for the current entity mapping (jakarta.persistence.schema-generation
+        with ddl-auto=none), so they match exactly what ddl-auto=validate
+        expects. Don't hand-tune a column without re-exporting and
+        re-checking against that mapping.
+    -->
+    <changeSet id="016-create-role-permissions-table" author="landvault">
+        <sql>
+            CREATE TABLE role_permissions (
+                id                uuid NOT NULL,
+                tenant_id         uuid,
+                branch_id         uuid,
+                created_at        timestamp(6) with time zone NOT NULL,
+                updated_at        timestamp(6) with time zone,
+                created_by        varchar(255),
+                updated_by        varchar(255),
+                deleted           boolean NOT NULL,
+
+                role_id           uuid NOT NULL,
+                permission_id     uuid NOT NULL,
+
+                PRIMARY KEY (id)
+            );
+        </sql>
+        <rollback>
+            DROP TABLE role_permissions;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="016-create-role-permissions-fk-unique" author="landvault">
+        <addForeignKeyConstraint
+                baseTableName="role_permissions" baseColumnNames="role_id"
+                constraintName="fk_role_permissions_role_id"
+                referencedTableName="roles" referencedColumnNames="id"/>
+        <addForeignKeyConstraint
+                baseTableName="role_permissions" baseColumnNames="permission_id"
+                constraintName="fk_role_permissions_permission_id"
+                referencedTableName="permissions" referencedColumnNames="id"/>
+        <createIndex indexName="idx_role_permissions_role_id" tableName="role_permissions">
+            <column name="role_id"/>
+        </createIndex>
+        <createIndex indexName="idx_role_permissions_permission_id" tableName="role_permissions">
+            <column name="permission_id"/>
+        </createIndex>
+        <addUniqueConstraint
+                tableName="role_permissions" columnNames="role_id, permission_id"
+                constraintName="uq_role_permissions_role_id_permission_id"/>
+    </changeSet>
+
+    <!-- Only roles whose screens actually exist get permission assignments
+         — Super Admin and buyer. Everything else stays unassigned; see
+         015-create-roles-table.xml and AGENTS.md's no-fabricated-data rule. -->
+    <changeSet id="016-seed-role-permissions" author="landvault">
+        <sql>
+            INSERT INTO role_permissions (id, created_at, created_by, deleted, role_id, permission_id)
+            SELECT gen_random_uuid(), now(), 'system', false, r.id, p.id
+            FROM roles r, permissions p
+            WHERE r.code = 'super_admin'
+              AND p.code IN ('admin.dashboard.view', 'admin.tenants.view', 'admin.tenants.manage', 'admin.marketplace.conflicts');
+
+            INSERT INTO role_permissions (id, created_at, created_by, deleted, role_id, permission_id)
+            SELECT gen_random_uuid(), now(), 'system', false, r.id, p.id
+            FROM roles r, permissions p
+            WHERE r.code = 'buyer'
+              AND p.code IN ('client.dashboard.view', 'client.marketplace.view', 'client.estates.view',
+                              'client.resale.view', 'client.portfolio.view', 'client.documents.view',
+                              'client.inspections.view', 'client.enquiries.view', 'client.syndicates.view',
+                              'client.support.view', 'client.settings.view');
+        </sql>
+        <rollback>
+            DELETE FROM role_permissions WHERE role_id IN (
+                SELECT id FROM roles WHERE code IN ('super_admin', 'buyer')
+            );
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

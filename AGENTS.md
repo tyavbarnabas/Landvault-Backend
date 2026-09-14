@@ -121,6 +121,48 @@ what links a buyer to a company is their *transaction*, not their user row.
 The same reasoning nulls it for `organizations` (it *is* the tenant),
 `branches` (can't reference itself), `roles`, `permissions`, and `audit_log`.
 
+## Two levels of scoping — tenant and branch, and they behave differently
+
+Beyond tenant scope (Estintin never sees Crestview's data — absolute), there
+is a second, narrower level: **branch scope** (within Estintin, a Double
+King manager sees only Double King's estates, plots and clients; Heritage's
+are invisible to them).
+
+The two levels of scoping behave differently by role, and that difference is
+deliberate:
+
+- For a **branch manager**, branch scope is a **hard wall**. They cannot
+  widen it, and no UI control should offer to.
+- For an **Executive Director**, branch scope is a **switchable lens**. They
+  default to organization-wide and may narrow to view one branch — a branch
+  *switcher*, not a restriction.
+
+Same mechanism (a `scoped_branch_id`), different permission to change it.
+This is why the distinction is carried by the **user's role assignment**
+(`user_roles.scoped_branch_id`), not by a single `branch_id` on `users`
+itself: the same person can legitimately hold an organization-wide finance
+role and a branch-scoped sales role at once, and a user's branch scope isn't
+one fixed fact about them — it's a property of *which role* they're acting
+under.
+
+**Consequence for the service layer (not built yet):** when an Executive
+Director selects a branch to view, the backend must verify that branch
+belongs to their organization *and* that their role assignment actually
+permits the switch, before honouring it — otherwise it's just a
+client-supplied parameter an attacker can tamper with to view another
+branch (or, worse, the switch logic gets applied to a hard-wall role like
+branch manager, defeating the wall entirely).
+
+## Permissions are assembled at login, never stored on `users`
+
+The frontend's `AuthUser.permissions` string array is assembled at login by
+flattening a user's roles' permissions — it is not a column on `users`.
+Storing it there would mean rewriting every affected row whenever a role's
+permission set changes, and would drift out of sync the moment it did.
+`user_roles` → `role_permissions` → `permissions` is the only source of
+truth; a future service computes the flattened array per login, it never
+gets persisted as its own field.
+
 Hibernate's `@TenantId` was deliberately **not** used, because it filters
 every query by the current tenant automatically — which would silently
 return an *empty result* (never an error) for three reads this platform

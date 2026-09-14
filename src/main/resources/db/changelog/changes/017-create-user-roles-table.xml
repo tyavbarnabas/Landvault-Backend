@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        identity.internal.domain.UserRole — a role held by a user. Not a
+        plain join table: scoped_branch_id is where the branch-scoping rule
+        lives (see AGENTS.md). Null means organization-/platform-wide; set
+        means confined to that branch — a hard wall for some roles (branch
+        manager), a switchable lens for others (Executive Director). The
+        same person can hold an organization-wide role and a branch-scoped
+        one at once, which is why this scope lives on the role assignment,
+        not as a single branch_id on users.
+
+        Column shapes were taken directly from Hibernate's own DDL export
+        for the current entity mapping (jakarta.persistence.schema-generation
+        with ddl-auto=none), so they match exactly what ddl-auto=validate
+        expects. Don't hand-tune a column without re-exporting and
+        re-checking against that mapping.
+    -->
+    <changeSet id="017-create-user-roles-table" author="landvault">
+        <sql>
+            CREATE TABLE user_roles (
+                id                    uuid NOT NULL,
+                tenant_id             uuid,
+                branch_id             uuid,
+                created_at            timestamp(6) with time zone NOT NULL,
+                updated_at            timestamp(6) with time zone,
+                created_by            varchar(255),
+                updated_by            varchar(255),
+                deleted               boolean NOT NULL,
+
+                user_id               uuid NOT NULL,
+                role_id               uuid NOT NULL,
+                scoped_branch_id      uuid,
+                granted_by_user_id    uuid,
+
+                PRIMARY KEY (id)
+            );
+
+            COMMENT ON COLUMN user_roles.scoped_branch_id IS
+                'Null = organization-/platform-wide. Set = confined to that branch. For a branch manager this is a hard wall (cannot widen it); for an Executive Director it is a switchable lens (defaults org-wide, may narrow to view one branch). Same mechanism, different permission to change it — see AGENTS.md.';
+        </sql>
+        <rollback>
+            DROP TABLE user_roles;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="017-create-user-roles-fk-indexes" author="landvault">
+        <addForeignKeyConstraint
+                baseTableName="user_roles" baseColumnNames="user_id"
+                constraintName="fk_user_roles_user_id"
+                referencedTableName="users" referencedColumnNames="id"/>
+        <addForeignKeyConstraint
+                baseTableName="user_roles" baseColumnNames="role_id"
+                constraintName="fk_user_roles_role_id"
+                referencedTableName="roles" referencedColumnNames="id"/>
+        <addForeignKeyConstraint
+                baseTableName="user_roles" baseColumnNames="scoped_branch_id"
+                constraintName="fk_user_roles_scoped_branch_id"
+                referencedTableName="branches" referencedColumnNames="id"/>
+        <addForeignKeyConstraint
+                baseTableName="user_roles" baseColumnNames="granted_by_user_id"
+                constraintName="fk_user_roles_granted_by_user_id"
+                referencedTableName="users" referencedColumnNames="id"/>
+        <createIndex indexName="idx_user_roles_user_id" tableName="user_roles">
+            <column name="user_id"/>
+        </createIndex>
+        <createIndex indexName="idx_user_roles_role_id" tableName="user_roles">
+            <column name="role_id"/>
+        </createIndex>
+        <createIndex indexName="idx_user_roles_scoped_branch_id" tableName="user_roles">
+            <column name="scoped_branch_id"/>
+        </createIndex>
+        <createIndex indexName="idx_user_roles_granted_by_user_id" tableName="user_roles">
+            <column name="granted_by_user_id"/>
+        </createIndex>
+    </changeSet>
+
+    <!-- The same role may be held twice with different branch scopes (e.g.
+         a Double King role and a Heritage role for the same person). Note:
+         Postgres treats NULL as distinct in a unique constraint, so this
+         does not by itself stop the same org-wide (NULL) grant being
+         inserted twice — that guard, if wanted, is a service-layer concern. -->
+    <changeSet id="017-create-user-roles-unique" author="landvault">
+        <addUniqueConstraint
+                tableName="user_roles" columnNames="user_id, role_id, scoped_branch_id"
+                constraintName="uq_user_roles_user_role_branch"/>
+    </changeSet>
+
+</databaseChangeLog>

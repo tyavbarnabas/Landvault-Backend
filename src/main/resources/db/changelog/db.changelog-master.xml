@@ -19,6 +19,11 @@
     <include file="changes/011-create-verification-decisions-table.xml" relativeToChangelogFile="true"/>
     <include file="changes/012-create-verification-decision-documents-table.xml" relativeToChangelogFile="true"/>
     <include file="changes/013-create-support-access-grants-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/014-create-permissions-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/015-create-roles-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/016-create-role-permissions-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/017-create-user-roles-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/018-create-refresh-tokens-table.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>
