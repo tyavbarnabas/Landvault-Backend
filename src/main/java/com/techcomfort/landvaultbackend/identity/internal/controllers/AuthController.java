@@ -1,4 +1,4 @@
-package com.techcomfort.landvaultbackend.identity.internal.web;
+package com.techcomfort.landvaultbackend.identity.internal.controllers;
 
 import com.techcomfort.landvaultbackend.identity.dto.AuthResponse;
 import com.techcomfort.landvaultbackend.identity.dto.LoginRequest;

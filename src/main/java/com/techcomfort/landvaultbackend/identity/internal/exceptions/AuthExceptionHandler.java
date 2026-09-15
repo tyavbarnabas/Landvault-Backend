@@ -1,8 +1,8 @@
-package com.techcomfort.landvaultbackend.identity.internal.web;
+package com.techcomfort.landvaultbackend.identity.internal.exceptions;
 
 import com.techcomfort.landvaultbackend.common.ErrorResponse;
 import com.techcomfort.landvaultbackend.identity.internal.UserStatus;
-import com.techcomfort.landvaultbackend.identity.internal.exceptions.AuthException;
+import com.techcomfort.landvaultbackend.identity.internal.controllers.AuthController;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
