@@ -1,5 +1,6 @@
 package com.techcomfort.landvaultbackend.identity.internal.security;
 
+import com.techcomfort.landvaultbackend.tenancy.TenancyApi;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -30,6 +31,9 @@ import java.util.List;
  * every profile, everything else requires authentication.
  * {@code @EnableMethodSecurity} makes
  * {@code @PreAuthorize("hasAuthority('...')")} usable from day one.
+ * {@link TenantContextFilter} runs immediately after {@code JwtAuthenticationFilter}
+ * — there must be an authenticated principal before tenant/branch scope can
+ * be resolved from it — and before the controller. See AGENTS.md.
  * <p>
  * API documentation (Swagger UI / the raw OpenAPI JSON) is a development
  * affordance, not a production endpoint — see AGENTS.md. It's public only
@@ -97,7 +101,8 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain securityFilterChain(
-            HttpSecurity http, JwtService jwtService, CorsConfigurationSource corsConfigurationSource, Environment environment)
+            HttpSecurity http, JwtService jwtService, CorsConfigurationSource corsConfigurationSource,
+            Environment environment, TenancyApi tenancyApi)
             throws Exception {
         List<String> publicPaths = new ArrayList<>(List.of(ALWAYS_PUBLIC_PATHS));
         if (environment.matchesProfiles("dev")) {
@@ -116,10 +121,8 @@ public class SecurityConfig {
                                 "Authentication required.", "UNAUTHENTICATED"))
                         .accessDeniedHandler((request, response, ex) -> writeError(response, 403,
                                 "You do not have permission to perform this action.", "FORBIDDEN")))
-                .addFilterBefore(new JwtAuthenticationFilter(jwtService), UsernamePasswordAuthenticationFilter.class);
-        // TODO (next slice): the tenant-context filter sits here — after
-        // authentication (it reads tenant_id off the Authentication this
-        // filter chain establishes), before the controller.
+                .addFilterBefore(new JwtAuthenticationFilter(jwtService), UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(new TenantContextFilter(tenancyApi), JwtAuthenticationFilter.class);
 
         return http.build();
     }

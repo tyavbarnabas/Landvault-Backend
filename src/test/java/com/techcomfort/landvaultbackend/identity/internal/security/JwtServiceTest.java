@@ -40,6 +40,24 @@ class JwtServiceTest {
         assertThat(claims.permissions()).containsExactlyInAnyOrderElementsOf(permissions);
     }
 
+    // The roles claim is written by issueAccessToken but was never read
+    // back by parse() until this slice — branch scope travelled in the
+    // token and was silently discarded. Two assignments at different
+    // branch scopes, one of them null, so both survive the round trip.
+    @Test
+    void rolesClaimRoundTripsIncludingANullBranch() {
+        JwtService service = newService("a-fourth-sufficiently-long-test-secret-of-32-plus-bytes");
+        UUID branchId = UUID.randomUUID();
+        List<RoleClaim> roles = List.of(new RoleClaim("branch_manager", branchId), new RoleClaim("finance_officer", null));
+
+        AccessTokenIssue issued = service.issueAccessToken(UUID.randomUUID(), "staff@example.com", UUID.randomUUID(), false, roles, List.of());
+        List<RoleClaim> parsed = service.parse(issued.token()).roles();
+
+        assertThat(parsed).containsExactlyInAnyOrder(
+                new RoleClaim("branch_manager", branchId),
+                new RoleClaim("finance_officer", null));
+    }
+
     @Test
     void tenantIdIsNullableInClaims() {
         JwtService service = newService("another-sufficiently-long-test-secret-of-32-plus-bytes");

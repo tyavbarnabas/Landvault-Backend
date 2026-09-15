@@ -474,3 +474,122 @@ same chain evaluates. Without `/error` in the public path list, that
 forward gets rejected as unauthenticated, and the real 404/405 is masked by
 a misleading 401. `/error` is in `ALWAYS_PUBLIC_PATHS` for exactly this
 reason — don't remove it as looking redundant.
+
+## The tenant-context filter: how a request becomes a scoped database session
+
+`TenantContextFilter` (`identity.internal.security`) runs immediately after
+`JwtAuthenticationFilter` and before the controller. It resolves a
+`common.TenantScope` from the authenticated principal and stores it in
+`common.TenantContext` (a `ThreadLocal`) for the life of the request. No RLS
+policies exist yet — they come next, and are meaningless until something
+sets the session variables they'd read. This slice is that something.
+
+**The tenant/branch scope comes from the signed token, never from a
+request header.** `X-Tenant-ID` naming a tenant directly is the common
+tutorial pattern and looks reasonable, but a header is trivially
+client-supplied while the JWT is signed — honouring a client-supplied
+tenant id would be a cross-tenant breach on the first request that tried
+it. The one header this filter does read, `X-Branch-Id`, only ever
+*narrows* a scope the token already establishes and authorizes — it can
+never name a tenant, and it's checked against the caller's own
+already-resolved tenant before being honoured at all.
+
+### Branch resolution (from the token's `roles` claim)
+
+- **No role assignment carries a branch** (all null, including holding no
+  role assignments at all) → organization-/platform-wide. Executive
+  Directors, group finance officers.
+- **Every assignment names the same one branch** → that branch, and it's a
+  **hard wall**: nothing this filter does can widen it. A branch manager.
+- **Assignments name different branches, or an organization-wide
+  assignment is mixed with a branch-scoped one** (an org-wide finance role
+  plus a branch-scoped sales role, say) → organization-wide. The user has
+  legitimate reach beyond one branch either way; narrowing would hide data
+  they're entitled to. The switcher (below) lets them narrow on request
+  instead of the filter guessing which branch they meant.
+- **Platform staff** → tenant and branch both null, unconditionally,
+  regardless of whatever role claims happen to be present.
+
+### The branch switcher (`X-Branch-Id`)
+
+Honoured only when **all** of: (1) the base scope is organization-wide
+(branch-scoped users are a hard wall — this can narrow, never re-target or
+widen); (2) the requested branch belongs to the caller's own tenant
+(`TenancyApi.branchBelongsToTenant` — the one method this slice added to
+that interface, and the only thing it does); (3) the caller isn't platform
+staff, who have no tenant of their own to narrow within. Failing any check,
+or a malformed header, the header is silently ignored (logged at debug),
+never a 403 — a 403 here would confirm to a prober whether a guessed branch
+id exists.
+
+### Why `SET LOCAL`, never plain `SET`
+
+`SET LOCAL` scopes a Postgres session variable to the current transaction
+only; it's gone the moment that transaction ends, regardless of what
+happens to the physical connection afterward. Plain `SET` persists on the
+connection itself — the next tenant whose request happens to borrow that
+same pooled connection would inherit the previous tenant's session
+variables. Same class of bug as a missing `TenantContext.clear()`, one
+layer lower in the stack and much harder to notice, because it depends on
+which physical connection the pool happens to hand out next.
+
+### Which transaction hook, and two wrong ones tried first
+
+`common.TenantScopedDataSource` wraps the app's `DataSource` bean (via a
+`BeanPostProcessor`, `TenantScopedDataSourceConfig`, so it applies
+identically to the auto-configured Hikari pool and to a Testcontainers
+`@ServiceConnection` datasource in tests) and issues the three `SET LOCAL`
+statements the instant a connection's `setAutoCommit(false)` call is
+observed — via a `java.lang.reflect.Proxy` around the JDBC `Connection`,
+not just around `DataSource.getConnection()`. Getting there took two wrong
+attempts worth recording so they aren't retried:
+
+1. **Gating on `TransactionSynchronizationManager.isActualTransactionActive()`
+   inside `getConnection()`.** That flag only flips `true` in Spring's
+   `prepareSynchronization()`, which runs *after*
+   `JpaTransactionManager.doBegin()` returns — but the physical connection
+   is acquired *inside* `doBegin()`. The check was always false at exactly
+   the point this code could act, confirmed with a temporary debug log
+   showing `isActualTransactionActive()=false` on the very connection a
+   `TenantScope` was already correctly resolved for.
+2. **Dropping that check and running `SET LOCAL` unconditionally in
+   `getConnection()`, trusting Postgres to no-op it outside a real
+   transaction.** `getConnection()` fires before the caller has done
+   *anything* to the connection, including flipping `setAutoCommit(false)`
+   — so `SET LOCAL` always ran while the connection was still in the
+   pool's default autocommit=true state. Postgres doesn't quietly ignore
+   this: it emits `WARNING: SET LOCAL can only be used in transaction
+   blocks` *and*, worse, registers the custom GUC as an empty-string
+   placeholder from then on — every later `current_setting(..., true)`
+   read on that connection then returns `''`, indistinguishable from this
+   design's own deliberate "authenticated, no tenant" empty-string
+   convention. This was caught by `TenantContextIT`, not guessed —
+   `dbPlatformScope` came back `""` instead of `"off"`, which is what
+   led to testing the exact failure directly against Postgres
+   (`SET LOCAL x = 'y'; SELECT current_setting('x', true);` over two
+   separate statements, no enclosing `BEGIN`) and seeing the same warning
+   and the same empty-string result.
+
+The fix: stop inferring "a transaction is probably starting" from
+`DataSource`-level timing, and react to the one call that unambiguously
+means a real transaction has begun — `Connection.setAutoCommit(false)`.
+
+Two more, smaller things worth knowing if this is touched again:
+
+- The verification endpoint behind this (`GET /api/me/tenant-scope`,
+  `MeController`) reads the Postgres session variables back via the same
+  `EntityManager` every repository in this codebase already uses, not a
+  separately-acquired `JdbcTemplate` connection. `JdbcTemplate`'s own
+  `getConnection()` isn't bound to the JPA-managed transaction/connection
+  by default in this app (that requires explicitly configuring
+  `JpaTransactionManager.setDataSource(...)`, not done here), so its
+  queries would autocommit independently — the same "`SET LOCAL` reverts
+  before the next statement" failure as above, one level higher. This was
+  tried first and every value came back `NULL`.
+- `TenantContextIT`'s cross-tenant leak test pins
+  `spring.datasource.hikari.maximum-pool-size=1` for that test class.
+  Without it, HikariCP would *probably* still hand the same physical
+  connection to two sequential requests, but not certainly — pinning the
+  pool makes connection reuse guaranteed rather than likely, which is what
+  turns this into a real regression test for "`SET LOCAL`, never plain
+  `SET`" instead of one that could pass by luck.

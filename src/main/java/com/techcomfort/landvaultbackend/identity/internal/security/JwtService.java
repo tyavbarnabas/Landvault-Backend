@@ -93,13 +93,24 @@ public class JwtService {
 
         String tenantIdClaim = claims.get("tenant_id", String.class);
         List<String> permissions = claims.get("permissions", List.class);
+        List<Map<String, Object>> rawRoles = claims.get("roles", List.class);
 
         return new AccessTokenClaims(
                 UUID.fromString(claims.getSubject()),
                 claims.get("email", String.class),
                 tenantIdClaim == null ? null : UUID.fromString(tenantIdClaim),
                 Boolean.TRUE.equals(claims.get("platform_staff", Boolean.class)),
-                permissions == null ? List.of() : List.copyOf(permissions)
+                permissions == null ? List.of() : List.copyOf(permissions),
+                rawRoles == null ? List.of() : rawRoles.stream().map(JwtService::toRoleClaim).toList()
         );
+    }
+
+    // issueAccessToken wrote this claim but nothing ever read it back until
+    // now — branch scope travelled in the token and was silently discarded.
+    // See AccessTokenClaims and TenantContextFilter.
+    private static RoleClaim toRoleClaim(Map<String, Object> raw) {
+        String role = (String) raw.get("role");
+        Object branch = raw.get("branch");
+        return new RoleClaim(role, branch == null ? null : UUID.fromString((String) branch));
     }
 }
