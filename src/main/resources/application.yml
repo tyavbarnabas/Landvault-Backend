@@ -30,3 +30,13 @@ app:
   cors:
     # ~/landvault's Vite dev server default — see its AGENTS.md.
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:8443}
+
+# API documentation is a development affordance, not a production endpoint
+# (see AGENTS.md) — disabled here so the OpenAPI document isn't even
+# generated outside dev, not just unreachable. SecurityConfig also gates
+# the docs paths behind the dev profile as a second, independent layer.
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false

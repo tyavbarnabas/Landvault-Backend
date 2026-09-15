@@ -4,6 +4,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -19,14 +20,24 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
  * Stateless JWT security: no session cookie, {@link JwtAuthenticationFilter}
  * validates the access token and populates authorities from its permission
- * slugs, {@code /api/auth/**} plus health/docs are public, everything else
- * requires authentication. {@code @EnableMethodSecurity} makes
+ * slugs, {@code /api/auth/**} and {@code /actuator/health} are public in
+ * every profile, everything else requires authentication.
+ * {@code @EnableMethodSecurity} makes
  * {@code @PreAuthorize("hasAuthority('...')")} usable from day one.
+ * <p>
+ * API documentation (Swagger UI / the raw OpenAPI JSON) is a development
+ * affordance, not a production endpoint — see AGENTS.md. It's public only
+ * when the {@code dev} profile is active; one chain with a
+ * profile-conditional path list rather than two {@code @Profile}-split
+ * chains, since duplicating CSRF/CORS/session/JWT-filter/exception-handling
+ * wiring across two beans for one list of paths would be the worse
+ * maintenance trade-off.
  */
 @Configuration
 @EnableWebSecurity
@@ -34,9 +45,28 @@ import java.util.List;
 @EnableConfigurationProperties(CorsProperties.class)
 public class SecurityConfig {
 
-    private static final String[] PUBLIC_PATHS = {
+    private static final String[] ALWAYS_PUBLIC_PATHS = {
             "/api/auth/**",
             "/actuator/health",
+            // A hand-rolled SecurityFilterChain doesn't get Boot's default
+            // exemption for the error-view path — without this, any
+            // request Spring MVC can't directly serve (wrong method, no
+            // handler) forwards internally to /error, which then gets
+            // re-evaluated by this same chain and comes back 401 instead
+            // of the real 404/405. Found while verifying this fix, not
+            // introduced by it — the original PUBLIC_PATHS had the same gap.
+            "/error"
+    };
+
+    // A publicly readable OpenAPI document hands an attacker the complete
+    // API surface — every endpoint, parameter, response shape — before
+    // they've authenticated at all. Free reconnaissance once this is
+    // actually deployed, so these are added to the public list only under
+    // the `dev` profile (see securityFilterChain below). Also consider
+    // disabled outright outside dev via springdoc.api-docs.enabled, so the
+    // document isn't generated at all, not just unreachable — see
+    // application.yml/application-dev.yml.
+    private static final String[] DEV_ONLY_PUBLIC_PATHS = {
             "/v3/api-docs/**",
             "/swagger-ui/**",
             "/swagger-ui.html"
@@ -67,14 +97,19 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain securityFilterChain(
-            HttpSecurity http, JwtService jwtService, CorsConfigurationSource corsConfigurationSource)
+            HttpSecurity http, JwtService jwtService, CorsConfigurationSource corsConfigurationSource, Environment environment)
             throws Exception {
+        List<String> publicPaths = new ArrayList<>(List.of(ALWAYS_PUBLIC_PATHS));
+        if (environment.matchesProfiles("dev")) {
+            publicPaths.addAll(List.of(DEV_ONLY_PUBLIC_PATHS));
+        }
+
         http
                 .csrf(AbstractHttpConfigurer::disable)
                 .cors(cors -> cors.configurationSource(corsConfigurationSource))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(PUBLIC_PATHS).permitAll()
+                        .requestMatchers(publicPaths.toArray(new String[0])).permitAll()
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions
                         .authenticationEntryPoint((request, response, ex) -> writeError(response, 401,

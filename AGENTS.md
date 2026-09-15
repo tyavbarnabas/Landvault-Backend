@@ -450,3 +450,27 @@ the same treatment as the permissions: read from the authenticated user's
 own row at login/refresh time, placed in the token, never accepted as a
 request parameter or body field for any endpoint that would use it to scope
 a query.
+
+## API documentation is a development affordance, not a production endpoint
+
+A publicly readable OpenAPI document (Swagger UI, `/v3/api-docs`) hands an
+attacker the complete API surface — every endpoint, parameter, and response
+shape — before they've authenticated at all. Free reconnaissance, once this
+is actually deployed. Both are gated to the `dev` profile two ways at once:
+`SecurityConfig` only adds their paths to the public list when
+`Environment.matchesProfiles("dev")`, and `springdoc.api-docs.enabled`/
+`springdoc.swagger-ui.enabled` are `false` in the base `application.yml`
+(re-enabled in `application-dev.yml`) so the document isn't even generated
+outside `dev`, not merely unreachable. `/api/auth/**` and
+`/actuator/health` stay public in every profile — real clients and health
+checks must work regardless of environment.
+
+**Gotcha for anyone touching `SecurityConfig` again**: a hand-rolled
+`SecurityFilterChain` does not get Spring Boot's default exemption for the
+error-view path. Any request the app can't directly serve — wrong HTTP
+method, no matching handler — gets an internal forward to `/error` to
+render the error response, and that forward is itself a fresh request this
+same chain evaluates. Without `/error` in the public path list, that
+forward gets rejected as unauthenticated, and the real 404/405 is masked by
+a misleading 401. `/error` is in `ALWAYS_PUBLIC_PATHS` for exactly this
+reason — don't remove it as looking redundant.

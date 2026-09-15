@@ -24,7 +24,9 @@ class JwtServiceTest {
         UUID userId = UUID.randomUUID();
         UUID tenantId = UUID.randomUUID();
         UUID branchId = UUID.randomUUID();
-        List<RoleClaim> roles = List.of(new RoleClaim("BRANCH_MANAGER", branchId), new RoleClaim("SALES_MANAGER", null));
+        // Lowercase, matching Role.code verbatim — JwtService itself does
+        // no case transformation, AuthService.loadContext doesn't either.
+        List<RoleClaim> roles = List.of(new RoleClaim("branch_manager", branchId), new RoleClaim("sales_manager", null));
         List<String> permissions = List.of("client.dashboard.view", "client.portfolio.view");
 
         AccessTokenIssue issued = service.issueAccessToken(userId, "user@example.com", tenantId, false, roles, permissions);

@@ -8,15 +8,12 @@ import com.techcomfort.landvaultbackend.identity.dto.RefreshResponse;
 import com.techcomfort.landvaultbackend.identity.dto.RegisterRequest;
 import com.techcomfort.landvaultbackend.identity.internal.UserStatus;
 import com.techcomfort.landvaultbackend.identity.internal.exceptions.AuthException;
-import com.techcomfort.landvaultbackend.identity.internal.domain.Permission;
 import com.techcomfort.landvaultbackend.identity.internal.domain.RefreshToken;
 import com.techcomfort.landvaultbackend.identity.internal.domain.Role;
-import com.techcomfort.landvaultbackend.identity.internal.domain.RolePermission;
 import com.techcomfort.landvaultbackend.identity.internal.domain.User;
 import com.techcomfort.landvaultbackend.identity.internal.domain.UserRole;
 import com.techcomfort.landvaultbackend.identity.internal.repository.PermissionRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.RefreshTokenRepository;
-import com.techcomfort.landvaultbackend.identity.internal.repository.RolePermissionRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.RoleRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.UserRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.UserRoleRepository;
@@ -30,6 +27,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
@@ -60,7 +58,6 @@ public class AuthService {
     private final RoleRepository roleRepository;
     private final PermissionRepository permissionRepository;
     private final UserRoleRepository userRoleRepository;
-    private final RolePermissionRepository rolePermissionRepository;
     private final RefreshTokenRepository refreshTokenRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
@@ -139,6 +136,10 @@ public class AuthService {
         // without needing to change this endpoint's shape.
 
         user.setLastLoginAt(Instant.now());
+        // Explicit, not relying on dirty checking — matches register()'s
+        // pattern, and keeps this correct even if the method's transaction
+        // boundary ever changes (e.g. to read-only).
+        userRepository.save(user);
 
         List<UserRole> assignments = userRoleRepository.findByUserId(user.getId());
         return issueAuthResponse(user, assignments);
@@ -214,16 +215,21 @@ public class AuthService {
         return new AuthResponse(userResponse, accessToken.token(), refresh.rawToken());
     }
 
-    /** One batched load (fixed number of queries, not one per role) covering both the JWT claims and the user-facing response. */
+    /**
+     * Two queries (roles, then their permission codes) covering both the
+     * JWT claims and the user-facing response — deliberately not one per
+     * role. A third round trip (the caller's own userRoleRepository.findByUserId)
+     * happens before this is called. Three fixed queries per login is
+     * acceptable at current volume and not worth chasing further; this is
+     * the most frequently hit authenticated-adjacent path, so it's worth
+     * having stayed fixed-count rather than growing with role count.
+     */
     private RoleAssignmentContext loadContext(List<UserRole> assignments) {
         List<UUID> roleIds = assignments.stream().map(UserRole::getRoleId).distinct().toList();
         List<Role> roles = roleRepository.findAllById(roleIds);
         Map<UUID, Role> rolesById = roles.stream().collect(Collectors.toMap(Role::getId, r -> r));
 
-        List<RolePermission> rolePermissions = rolePermissionRepository.findByRoleIdIn(roleIds);
-        List<UUID> permissionIds = rolePermissions.stream().map(RolePermission::getPermissionId).distinct().toList();
-        List<String> permissions = permissionRepository.findAllById(permissionIds).stream()
-                .map(Permission::getCode)
+        List<String> permissions = permissionRepository.findCodesByRoleIdIn(roleIds).stream()
                 .distinct()
                 .sorted()
                 .toList();
@@ -231,11 +237,12 @@ public class AuthService {
         boolean platformStaff = roles.stream().anyMatch(r -> PLATFORM_STAFF_ROLE_CODES.contains(r.getCode()));
         boolean superAdmin = roles.stream().anyMatch(r -> SUPER_ADMIN_ROLE_CODE.equals(r.getCode()));
 
-        // Uppercased for the JWT's `roles` claim specifically (matches the
-        // task's example shape) — the stored Role.code stays lowercase,
-        // this is a wire-format choice, not a rename of the seeded data.
+        // Emitted verbatim from Role.code — no case transformation. The
+        // adjacent `permissions` claim already passes its slugs through
+        // as-is, so a role claim can be compared directly against seeded
+        // Role.code values with nothing to remember in between.
         List<RoleClaim> roleClaims = assignments.stream()
-                .map(a -> new RoleClaim(rolesById.get(a.getRoleId()).getCode().toUpperCase(), a.getScopedBranchId()))
+                .map(a -> new RoleClaim(rolesById.get(a.getRoleId()).getCode(), a.getScopedBranchId()))
                 .toList();
 
         return new RoleAssignmentContext(permissions, platformStaff, superAdmin, roleClaims);
@@ -269,7 +276,7 @@ public class AuthService {
     private static String hashRefreshToken(String raw) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(digest.digest(raw.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            return HexFormat.of().formatHex(digest.digest(raw.getBytes(StandardCharsets.UTF_8)));
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);
         }

@@ -11,3 +11,12 @@ spring:
     properties:
       hibernate:
         format_sql: true
+
+# Re-enabled here — see the base application.yml for why they're off by
+# default. SecurityConfig separately permits these paths only when `dev`
+# is active, matching this.
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true

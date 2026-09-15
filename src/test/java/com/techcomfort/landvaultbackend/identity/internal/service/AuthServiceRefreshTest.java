@@ -7,7 +7,6 @@ import com.techcomfort.landvaultbackend.identity.internal.exceptions.AuthExcepti
 import com.techcomfort.landvaultbackend.identity.internal.domain.User;
 import com.techcomfort.landvaultbackend.identity.internal.repository.PermissionRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.RefreshTokenRepository;
-import com.techcomfort.landvaultbackend.identity.internal.repository.RolePermissionRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.RoleRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.UserRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.UserRoleRepository;
@@ -51,7 +50,6 @@ class AuthServiceRefreshTest {
     @Mock private RoleRepository roleRepository;
     @Mock private PermissionRepository permissionRepository;
     @Mock private UserRoleRepository userRoleRepository;
-    @Mock private RolePermissionRepository rolePermissionRepository;
     @Mock private RefreshTokenRepository refreshTokenRepository;
     @Mock private PasswordEncoder passwordEncoder;
     @Mock private JwtService jwtService;
@@ -63,7 +61,7 @@ class AuthServiceRefreshTest {
         JwtProperties jwtProperties = new JwtProperties("unused-in-this-test", Duration.ofMinutes(15), Duration.ofDays(30));
         authService = new AuthService(
                 userRepository, roleRepository, permissionRepository, userRoleRepository,
-                rolePermissionRepository, refreshTokenRepository, passwordEncoder, jwtService, jwtProperties);
+                refreshTokenRepository, passwordEncoder, jwtService, jwtProperties);
         // @PostConstruct isn't invoked by a plain `new` outside Spring —
         // only refresh() is under test here so dummyPasswordHash being
         // unset wouldn't currently bite, but call it anyway so this stays

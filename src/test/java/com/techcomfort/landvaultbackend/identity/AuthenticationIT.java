@@ -78,6 +78,15 @@ class AuthenticationIT {
         String accessToken = loggedIn.token();
         String refreshToken = loggedIn.refreshToken();
 
+        // The roles claim must carry Role.code verbatim (lowercase, no
+        // transformation) — this is AuthService.loadContext's behavior,
+        // not just JwtService's own round-trip fidelity, so it's worth
+        // checking here against a token that actually went through
+        // register()/login(), not a hand-built one.
+        assertThat(decodeJwtPayload(accessToken))
+                .contains("\"role\":\"buyer\"")
+                .doesNotContain("\"BUYER\"");
+
         ResponseEntity<MeResponse> meResponse = callMe(accessToken);
         assertThat(meResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(meResponse.getBody()).isNotNull();
@@ -110,6 +119,20 @@ class AuthenticationIT {
     void protectedEndpointWithNoTokenIsUnauthorized() {
         ResponseEntity<String> response = restTemplate.getForEntity("/api/me", String.class);
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    // No profile is active in this class (see the dev-profile-active
+    // counterpart, SwaggerDevProfileIT) — proves the docs paths are
+    // genuinely blocked by default, not just conditionally documented as
+    // such. auth/health stay reachable regardless.
+    @Test
+    void apiDocsAreNotPubliclyReadableOutsideDevProfile() {
+        assertThat(restTemplate.getForEntity("/v3/api-docs", String.class).getStatusCode())
+                .isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(restTemplate.getForEntity("/swagger-ui.html", String.class).getStatusCode())
+                .isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(restTemplate.getForEntity("/actuator/health", String.class).getStatusCode())
+                .isNotEqualTo(HttpStatus.UNAUTHORIZED);
     }
 
     @Test
@@ -161,5 +184,13 @@ class AuthenticationIT {
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(accessToken);
         return restTemplate.exchange("/api/me", HttpMethod.GET, new HttpEntity<>(headers), MeResponse.class);
+    }
+
+    // Raw payload decode, deliberately not via JwtService — this is
+    // checking the actual wire content the frontend would receive, not
+    // re-verifying JwtService's own (de)serialization.
+    private static String decodeJwtPayload(String jwt) {
+        String payload = jwt.split("\\.")[1];
+        return new String(java.util.Base64.getUrlDecoder().decode(payload), java.nio.charset.StandardCharsets.UTF_8);
     }
 }
