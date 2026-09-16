@@ -209,6 +209,7 @@ public class AuthService {
                 "unsubmitted",
                 "NG".equalsIgnoreCase(user.getCountry()) ? "local" : "diaspora",
                 Boolean.TRUE.equals(user.getTwoFaEnabled()),
+                Boolean.TRUE.equals(user.getMustChangePassword()),
                 ctx.superAdmin() ? "super_admin" : "client",
                 ctx.permissions());
 

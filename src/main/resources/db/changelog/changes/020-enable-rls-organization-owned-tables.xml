@@ -1,0 +1,268 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Row-level security for the six tables whose entities already
+        populate tenant_id = organizationId in prePersist (see each
+        entity's own prePersist override): organization_documents,
+        organization_regulatory, organization_state_regulators, directors,
+        organization_financial, organization_gateways. branch_id is never
+        set on any of them (they're corporate-level, not branch-owned), so
+        the branch check below always passes for these tables — a
+        branch-scoped user sees them the same as an org-wide one, matching
+        AGENTS.md: "a record belonging to the organization rather than a
+        specific branch... must remain visible to a branch-scoped user."
+
+        FORCE matters: without it, the table OWNER bypasses RLS entirely.
+        These tables are owned by the superuser role migrations run as, not
+        by the restricted role the app connects as (see 019), so FORCE is
+        defensive-in-depth here rather than strictly load-bearing today —
+        kept anyway so this doesn't silently break if ownership ever
+        changes. See AGENTS.md.
+
+        Two PERMISSIVE policies per table (Postgres OR-combines multiple
+        permissive policies for the same command automatically): one for
+        platform staff (see everything), one for tenant+branch scope. A
+        connection with neither landvault.tenant_id nor
+        landvault.platform_scope set (no TenantContext was ever established
+        — Liquibase's own connection, an unauthenticated request, a future
+        background job with no scope) matches neither policy and sees zero
+        rows. That's deliberate — fail closed. See AGENTS.md.
+
+        current_setting(name, true) — the `true` returns NULL instead of
+        raising when the GUC was never set at all on this connection, which
+        is the normal case for any non-request database use. The empty-
+        string checks alongside it exist because TenantScopedDataSource
+        explicitly sets these GUCs to '' (not leaving them unset) for an
+        authenticated request that genuinely has no tenant/branch — see
+        that class's own Javadoc for why unset and empty-string are two
+        different, deliberately distinguishable states.
+
+        tenant_id::text = current_setting(...), never
+        tenant_id = current_setting(...)::uuid — found the hard way, via a
+        failing integration test, not guessed. Postgres does not guarantee
+        left-to-right short-circuit evaluation of AND/OR in a WHERE/USING
+        clause the way a procedural language does; the planner is free to
+        evaluate the ::uuid cast on current_setting('landvault.branch_id')
+        BEFORE the "= ''" guard immediately to its left that was meant to
+        protect it, and casting '' to uuid throws
+        "invalid input syntax for type uuid". Casting the COLUMN to text
+        instead (always valid, a uuid column has no non-uuid values to
+        choke on) makes the comparison safe regardless of evaluation
+        order — there is no cast left to fail.
+    -->
+    <changeSet id="020-enable-rls-organization-owned-tables" author="landvault">
+        <sql>
+            ALTER TABLE organization_documents ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE organization_documents FORCE ROW LEVEL SECURITY;
+            ALTER TABLE organization_regulatory ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE organization_regulatory FORCE ROW LEVEL SECURITY;
+            ALTER TABLE organization_state_regulators ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE organization_state_regulators FORCE ROW LEVEL SECURITY;
+            ALTER TABLE directors ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE directors FORCE ROW LEVEL SECURITY;
+            ALTER TABLE organization_financial ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE organization_financial FORCE ROW LEVEL SECURITY;
+            ALTER TABLE organization_gateways ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE organization_gateways FORCE ROW LEVEL SECURITY;
+
+            CREATE POLICY organization_documents_platform ON organization_documents FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY organization_documents_tenant ON organization_documents FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                );
+
+            CREATE POLICY organization_regulatory_platform ON organization_regulatory FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY organization_regulatory_tenant ON organization_regulatory FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                );
+
+            CREATE POLICY organization_state_regulators_platform ON organization_state_regulators FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY organization_state_regulators_tenant ON organization_state_regulators FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                );
+
+            CREATE POLICY directors_platform ON directors FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY directors_tenant ON directors FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                );
+
+            CREATE POLICY organization_financial_platform ON organization_financial FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY organization_financial_tenant ON organization_financial FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                );
+
+            CREATE POLICY organization_gateways_platform ON organization_gateways FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY organization_gateways_tenant ON organization_gateways FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                );
+        </sql>
+        <rollback>
+            DROP POLICY IF EXISTS organization_documents_platform ON organization_documents;
+            DROP POLICY IF EXISTS organization_documents_tenant ON organization_documents;
+            ALTER TABLE organization_documents NO FORCE ROW LEVEL SECURITY;
+            ALTER TABLE organization_documents DISABLE ROW LEVEL SECURITY;
+
+            DROP POLICY IF EXISTS organization_regulatory_platform ON organization_regulatory;
+            DROP POLICY IF EXISTS organization_regulatory_tenant ON organization_regulatory;
+            ALTER TABLE organization_regulatory NO FORCE ROW LEVEL SECURITY;
+            ALTER TABLE organization_regulatory DISABLE ROW LEVEL SECURITY;
+
+            DROP POLICY IF EXISTS organization_state_regulators_platform ON organization_state_regulators;
+            DROP POLICY IF EXISTS organization_state_regulators_tenant ON organization_state_regulators;
+            ALTER TABLE organization_state_regulators NO FORCE ROW LEVEL SECURITY;
+            ALTER TABLE organization_state_regulators DISABLE ROW LEVEL SECURITY;
+
+            DROP POLICY IF EXISTS directors_platform ON directors;
+            DROP POLICY IF EXISTS directors_tenant ON directors;
+            ALTER TABLE directors NO FORCE ROW LEVEL SECURITY;
+            ALTER TABLE directors DISABLE ROW LEVEL SECURITY;
+
+            DROP POLICY IF EXISTS organization_financial_platform ON organization_financial;
+            DROP POLICY IF EXISTS organization_financial_tenant ON organization_financial;
+            ALTER TABLE organization_financial NO FORCE ROW LEVEL SECURITY;
+            ALTER TABLE organization_financial DISABLE ROW LEVEL SECURITY;
+
+            DROP POLICY IF EXISTS organization_gateways_platform ON organization_gateways;
+            DROP POLICY IF EXISTS organization_gateways_tenant ON organization_gateways;
+            ALTER TABLE organization_gateways NO FORCE ROW LEVEL SECURITY;
+            ALTER TABLE organization_gateways DISABLE ROW LEVEL SECURITY;
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

@@ -21,7 +21,7 @@ class AuthUserResponseSerializationTest {
     void serializedJsonExcludesCredentialFields() throws Exception {
         AuthUserResponse dto = new AuthUserResponse(
                 "Emeka Okonkwo", "emeka@example.com", "+2348000000000", "NG", Currency.NGN,
-                "unsubmitted", "local", true, "client", List.of("client.dashboard.view"));
+                "unsubmitted", "local", true, false, "client", List.of("client.dashboard.view"));
 
         String json = mapper.writeValueAsString(dto);
 

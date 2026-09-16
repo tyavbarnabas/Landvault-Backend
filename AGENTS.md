@@ -593,3 +593,215 @@ Two more, smaller things worth knowing if this is touched again:
   pool makes connection reuse guaranteed rather than likely, which is what
   turns this into a real regression test for "`SET LOCAL`, never plain
   `SET`" instead of one that could pass by luck.
+
+## Row-level security: the database enforces isolation, not the application
+
+The session variables `TenantScopedDataSource` sets are meaningless until
+something reads them. This is that something — RLS policies on the
+tenant-owned tables, enforced by Postgres itself rather than by repository
+code that something (a native `ST_Intersects` query, a psql session, a
+future reporting tool) could always bypass.
+
+### Which tables are policied, and which are deliberately not
+
+**Policied**: `organization_documents`, `organization_regulatory`,
+`organization_state_regulators`, `directors`, `organization_financial`,
+`organization_gateways` (generic `tenant_id`/`branch_id` shape, changeset
+020); `branches` (custom shape, changeset 021 — see below); `organizations`
+(its own id is the tenant, changeset 022).
+
+**Deliberately not policied, and why**:
+
+- `roles`, `permissions`, `role_permissions` — platform-wide reference
+  data, identical for every user. Policying them would break login for
+  everyone; there is no "tenant" for a permission slug to belong to.
+- `refresh_tokens` — looked up by `token_hash` only, never enumerated by
+  tenant, and needed during `/api/auth/refresh` *before* any tenant scope
+  exists — refresh is one of the things that establishes a scope, it can't
+  presuppose one.
+- `verification_decisions`, `verification_decision_documents`,
+  `support_access_grants` — reached only through their organization today,
+  with no tenant-facing endpoint consuming them yet. TODO: candidates for
+  policies once something tenant-facing exposes them; policying now would
+  only block the Super Admin flows that are their sole consumer.
+- `event_publication` — Modulith infrastructure, not domain data.
+- **`users` — the one deviation from this slice's own literal spec, and
+  the most important thing to understand before touching this table.**
+  RLS on `users` cannot be implemented as "self-read + tenant + platform"
+  without service-layer changes this slice was explicitly constrained not
+  to make, for two independent, structural reasons, not one:
+  1. `AuthService.register()`'s duplicate-email check
+     (`existsByEmailIgnoreCase`) must see every tenant's rows to enforce
+     global email uniqueness — no per-tenant or per-user scoping can ever
+     satisfy a query that is inherently cross-tenant by nature.
+  2. `AuthService.login()` (looked up by email) and `.refresh()` (looked
+     up by user id from the refresh token) both read `users` *before* any
+     `TenantContext` exists — same bootstrapping shape as `refresh_tokens`
+     above, just one table over. A self-read policy keyed on a
+     `landvault.user_id` GUC doesn't help either: at login you don't know
+     your own id yet, that's the whole point of looking yourself up.
+
+  Enabling RLS on `users` today, done "properly," would either lock out
+  every login (fail-closed with no scope to satisfy) or require a real
+  architectural addition (e.g. a `SECURITY DEFINER` function or a
+  dedicated bootstrap role for exactly these three queries) — genuine
+  future work, not something to bolt on silently. `users` stays open for
+  now; closing this gap is a TODO for whoever builds the next slice that
+  touches identity's repository layer.
+
+### Why `branches` needed a different policy shape
+
+`Branch.tenantId`/`branchId` are never populated (see the entity's own
+class Javadoc) — only `organizationId` is. Every other tenant-owned entity
+sets `tenantId = organizationId` in `prePersist`; `branches` alone doesn't.
+Writing its policy against the generic `tenant_id` column would have hidden
+every branch from every tenant user, silently, since that column is always
+null on every row. The policy compares `organization_id` instead. It also
+doesn't have a `branch_id` FK the way other tables do — each row *is* a
+branch — so its own branch-scope check compares the row's own `id` against
+`landvault.branch_id`, not a `branch_id` column.
+
+### Why a restricted database role, not just policies
+
+**Superusers (and any role with `BYPASSRLS`) unconditionally bypass row-
+level security — `FORCE ROW LEVEL SECURITY` cannot override this, full
+stop.** Before this slice, the application connected as the `postgres`
+superuser for everything. Every policy in 020/021/022 would have been
+syntactically correct and completely inert — the app itself would have
+seen every row, every time, regardless of what any policy said. This was
+caught before writing a single policy, by checking
+`pg_roles.rolbypassrls` for the connection the app actually used, not
+assumed.
+
+The fix (changeset 019): a new, non-superuser, non-owning role
+(`landvault_app`) for the application's own runtime connection
+(`spring.datasource.*`). Liquibase keeps running as the superuser
+(`spring.liquibase.*`, configured as an explicit, separate connection in
+`application.yml` — `url` is repeated rather than left to fall back to the
+primary datasource bean, so Liquibase is guaranteed its own connection
+rather than silently inheriting the app's restricted one) — migrations
+need `CREATE ROLE`/`GRANT`/`CREATE EXTENSION` privileges this role
+deliberately doesn't have. The role's password is never hardcoded in the
+changelog — `${appDbUsername}`/`${appDbPassword}` are Liquibase changelog
+parameters bound from `APP_DB_USERNAME`/`APP_DB_PASSWORD` (`.env`, same
+"never a secret in a committed file" rule as `JWT_SECRET`).
+
+Since `landvault_app` doesn't own these tables (the superuser role that ran
+the migrations does), `FORCE ROW LEVEL SECURITY` is defensive-in-depth for
+this specific role rather than strictly load-bearing today — RLS already
+applies to any non-owning, non-superuser role regardless of FORCE. It's
+kept anyway so this doesn't silently regress if table ownership ever
+changes.
+
+**Integration tests can't use `@ServiceConnection` for this** — that
+annotation wires *both* `spring.datasource.*` and `spring.liquibase.*` to
+the same container credentials, and this slice specifically needs them to
+differ (superuser for Liquibase, restricted role for the app). `RowLevelSecurityIT`
+wires both explicitly via `@DynamicPropertySource` instead. Tests that
+don't touch a policied table (`AuthenticationIT`, `TenantContextIT`,
+`SwaggerDevProfileIT`) were left on `@ServiceConnection` — they never
+exercise RLS either way, since `users`/`roles`/`permissions`/`refresh_tokens`
+aren't policied.
+
+### The fail-closed default, and its consequence
+
+With neither `landvault.tenant_id` nor `landvault.platform_scope` set —
+Liquibase's own connection, an unauthenticated request, a future
+background job or scheduled task that never establishes a scope — every
+policy in this slice evaluates false, and the table returns zero rows.
+That's deliberate: fail closed, not open. A bug that forgets to establish
+scope should make data disappear, not leak.
+
+**The consequence, worth remembering before writing the first scheduled
+job**: it cannot rely on "no context means see everything." Any background
+process that needs real data access has to explicitly establish a scope —
+platform scope for something that legitimately spans tenants, or an actual
+tenant scope for something that doesn't — the same way `TenantContextFilter`
+does for a request. There is no ambient "system" identity that sees past
+RLS today.
+
+### `tenant_id::text = current_setting(...)`, never `current_setting(...)::uuid`
+
+Found by a failing integration test, not by inspection. The policies
+originally cast the *setting* to `uuid`:
+`tenant_id = current_setting('landvault.tenant_id', true)::uuid`, guarded
+by an earlier `current_setting(...) != ''` check in the same `AND`/`OR`
+chain. Postgres does not guarantee left-to-right short-circuit evaluation
+of a `WHERE`/`USING` boolean expression the way a procedural language
+does — the planner is free to evaluate the `::uuid` cast before the guard
+immediately to its left that was meant to protect it, and casting `''` to
+`uuid` throws `invalid input syntax for type uuid: ""`. `RowLevelSecurityIT`
+caught this immediately (every read failed, not just returned wrong rows).
+The fix: cast the *column* to text instead —
+`tenant_id::text = current_setting('landvault.tenant_id', true)` — which
+has no cast that can ever fail, since a `uuid` column has no non-`uuid`
+values to choke on. Every policy in 020/021/022 uses this form; don't
+reintroduce the `::uuid`-on-the-setting version even though it reads more
+naturally.
+
+## The first Super Admin is a deployment step, not a Liquibase seed
+
+`POST /api/auth/register` can only ever create a buyer — deliberately, since
+a self-registering Super Admin would be a serious hole. That means the
+*first* Super Admin account can't come from the normal request path at all,
+and the obvious alternative — a Liquibase changeset that inserts the user —
+is wrong for a reason worth stating plainly so nobody reaches for it later:
+
+**A seeded account needs a password, and a password in a changelog is a
+password in git** — readable by anyone who clones the repo, and identical
+across every environment that runs the same migrations, including
+production. Hashing it first doesn't help: the hash is in git too, and a
+known BCrypt hash of a known candidate password is a known password.
+Credentials belong in the environment, never in version control — the same
+rule `JWT_SECRET`/`APP_DB_PASSWORD` already follow.
+
+`SuperAdminBootstrap` (`identity.internal.service`) is the alternative: an
+`ApplicationRunner` that reads `landvault.bootstrap.super-admin.*`
+(`BOOTSTRAP_SUPER_ADMIN*` in `.env`) and does nothing at all unless
+explicitly enabled — defaulting `enabled` to `false` means an ordinary
+startup has zero log noise, zero queries, zero risk. Runs after Liquibase
+(`ApplicationRunner`s fire once the context is fully refreshed, and
+Liquibase's own migration — a plain `InitializingBean` — completes as part
+of that refresh, strictly before), so the seeded `super_admin` role always
+exists by the time it looks for it — looked up by code, never created here;
+a missing role means migrations didn't run, and silently creating one would
+mask that.
+
+**Idempotent by construction, not by a flag**: it checks whether *any* user
+already holds the `super_admin` role (`UserRoleRepository.existsByRoleId`)
+before creating one, and skips (logging at INFO, not silently) if so. This
+is what makes leaving `BOOTSTRAP_SUPER_ADMIN=true` set after the first
+successful run harmless rather than a standing way to mint a second admin
+on every restart — deliberate, since whoever can set an environment
+variable on a running system must not be able to grant themselves platform
+staff this way.
+
+**Half-configured is a startup failure, not a silent no-op**: enabled with
+a blank email or password throws rather than returning quietly — a
+bootstrap that appears to have worked but didn't is discovered at the worst
+possible time (trying to log in, with no clue why), so it fails loudly at
+the moment the misconfiguration actually exists instead.
+
+User creation and the role assignment happen in one `@Transactional`
+method — a user with no role would be a locked-out account with no obvious
+cause, so it's both writes or neither.
+
+**Never logged: the password, at any level, including debug.** Only the
+created account's email is logged, and that log line was checked directly
+against a real startup log (not just read from the source) before this was
+considered done.
+
+### The open TODO: `must_change_password` is not enforced yet
+
+The bootstrap account is flagged `must_change_password = true` (a plain
+boolean column, defaulted `false` for every other row) and that flag is
+surfaced in the login response (`AuthUserResponse.mustChangePassword`) so
+the frontend can route to a change-password screen — but **login itself is
+not blocked on it**. There is no change-password endpoint yet to redirect
+to or to clear the flag once used, so blocking login here would strand the
+very account this slice exists to create. Whoever builds that endpoint
+should also make login check this flag and force the redirect — until
+then, a bootstrapped admin can go on using the bootstrap password
+indefinitely, which is a real, open gap, not a closed one. Don't remove
+this note once the endpoint exists without actually wiring the enforcement
+first.

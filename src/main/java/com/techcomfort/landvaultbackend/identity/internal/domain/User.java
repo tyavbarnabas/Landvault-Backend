@@ -82,6 +82,13 @@ public class User extends AbstractEntity {
     @Column(name = "last_login_at")
     private Instant lastLoginAt;
 
+    // True only for SuperAdminBootstrap's own account today — a bootstrap
+    // password has passed through an environment variable, probably a
+    // shell history, and possibly a deployment log. NOT enforced at login
+    // yet (no change-password endpoint exists) — see AGENTS.md.
+    @Column(name = "must_change_password", nullable = false)
+    private Boolean mustChangePassword;
+
     // Lazy: roles are needed at login, not on every read. Note: this user's
     // *permissions* are never stored anywhere on User — they're assembled
     // at login by flattening roles -> role_permissions -> permissions. See
@@ -94,6 +101,9 @@ public class User extends AbstractEntity {
         super.prePersist();
         if (twoFaEnabled == null) {
             twoFaEnabled = false;
+        }
+        if (mustChangePassword == null) {
+            mustChangePassword = false;
         }
         if (status == null) {
             status = UserStatus.PENDING_VERIFICATION;

@@ -17,4 +17,10 @@ import java.util.UUID;
 public interface UserRoleRepository extends JpaRepository<UserRole, UUID> {
 
     List<UserRole> findByUserId(UUID userId);
+
+    // Used by SuperAdminBootstrap to check "does anyone already hold this
+    // role" before creating a new account — a soft-deleted assignment is
+    // correctly excluded automatically, since UserRole's own
+    // @SQLRestriction("deleted = false") applies to every derived query.
+    boolean existsByRoleId(UUID roleId);
 }

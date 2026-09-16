@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        organizations IS the tenant (see AGENTS.md's naming-split note), so
+        its own id is what a tenant-scoped session compares against —
+        there's no separate tenant_id column to check, and no branch
+        dimension at all (an organization isn't scoped to one of its own
+        branches). Platform staff see every tenant; tenant staff see
+        exactly their own row and nothing else.
+
+        No tenant-onboarding flow exists yet to exercise WITH CHECK for
+        this table either way — a brand new organization is necessarily
+        created before any tenant scope naming it can exist (the same
+        bootstrapping shape as identity's login/register, see AGENTS.md's
+        note on why `users` isn't policied in this slice). For now this
+        means creating an organization is implicitly platform-scope-only,
+        which matches every other tenant-onboarding action being a Super
+        Admin flow that doesn't exist yet either.
+    -->
+    <changeSet id="022-enable-rls-organizations" author="landvault">
+        <sql>
+            ALTER TABLE organizations ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE organizations FORCE ROW LEVEL SECURITY;
+
+            CREATE POLICY organizations_platform ON organizations FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+
+            CREATE POLICY organizations_tenant ON organizations FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND id::text = current_setting('landvault.tenant_id', true)
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND id::text = current_setting('landvault.tenant_id', true)
+                );
+        </sql>
+        <rollback>
+            DROP POLICY IF EXISTS organizations_platform ON organizations;
+            DROP POLICY IF EXISTS organizations_tenant ON organizations;
+            ALTER TABLE organizations NO FORCE ROW LEVEL SECURITY;
+            ALTER TABLE organizations DISABLE ROW LEVEL SECURITY;
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

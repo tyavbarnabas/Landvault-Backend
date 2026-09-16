@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Row-level security is meaningless if the application connects as a
+        Postgres superuser: superusers (and any role with BYPASSRLS)
+        unconditionally bypass RLS, and FORCE ROW LEVEL SECURITY cannot
+        override that — FORCE only ever applies to a non-superuser table
+        owner. Before this changeset, the app connected as `postgres`
+        (superuser) for everything, which would have made every policy in
+        020/021/022 syntactically correct and completely inert. See
+        AGENTS.md.
+
+        This creates a plain, non-superuser, non-owning role for the
+        application's own runtime connection (spring.datasource.*).
+        Liquibase itself keeps running as the superuser (spring.liquibase.*,
+        configured separately in application.yml) — migrations need
+        CREATE EXTENSION/CREATE ROLE/GRANT privileges this role deliberately
+        does not have.
+
+        The password is never hardcoded here — ${appDbUsername}/
+        ${appDbPassword} are Liquibase changelog parameters, bound from
+        APP_DB_USERNAME/APP_DB_PASSWORD via spring.liquibase.parameters.* in
+        application.yml (real runs) or @DynamicPropertySource (tests) —
+        same "no secret ever lands in a committed file" rule as JWT_SECRET.
+    -->
+    <changeSet id="019-create-app-role" author="landvault">
+        <!-- splitStatements="false": Liquibase's default statement splitter
+             cuts on every semicolon, including the ones inside the DO $$
+             ... $$ blocks below — it doesn't understand Postgres dollar
+             quoting. Sending the whole block as one message is fine:
+             Postgres's simple query protocol already executes multiple
+             semicolon-separated statements sent together as one implicit
+             transaction. -->
+        <sql splitStatements="false">
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${appDbUsername}') THEN
+                    CREATE ROLE ${appDbUsername} LOGIN PASSWORD '${appDbPassword}';
+                ELSE
+                    ALTER ROLE ${appDbUsername} LOGIN PASSWORD '${appDbPassword}';
+                END IF;
+            END
+            $$;
+
+            DO $$
+            BEGIN
+                EXECUTE format('GRANT CONNECT ON DATABASE %I TO ${appDbUsername}', current_database());
+            END
+            $$;
+
+            GRANT USAGE ON SCHEMA public TO ${appDbUsername};
+            GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${appDbUsername};
+            ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${appDbUsername};
+        </sql>
+        <!-- Found by actually running this rollback against a real
+             database, not by inspection: the first attempt omitted
+             REVOKE CONNECT, and DROP ROLE failed with "role ... cannot be
+             dropped because some objects depend on it" / "privileges for
+             database landvault" — the GRANT CONNECT from the forward SQL
+             above is itself a dependency that has to be revoked first. -->
+        <rollback>
+            <!-- Nested <sql splitStatements="false"> rather than raw text
+                 directly under <rollback> — the changelog XSD doesn't allow
+                 a splitStatements attribute on <rollback> itself, only on a
+                 nested <sql> change. -->
+            <sql splitStatements="false">
+                REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM ${appDbUsername};
+                ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLES FROM ${appDbUsername};
+                REVOKE USAGE ON SCHEMA public FROM ${appDbUsername};
+
+                DO $$
+                BEGIN
+                    EXECUTE format('REVOKE CONNECT ON DATABASE %I FROM ${appDbUsername}', current_database());
+                END
+                $$;
+
+                DROP ROLE IF EXISTS ${appDbUsername};
+            </sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

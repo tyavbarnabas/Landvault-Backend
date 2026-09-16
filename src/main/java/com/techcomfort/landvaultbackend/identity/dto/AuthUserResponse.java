@@ -10,6 +10,11 @@ import java.util.List;
  * instead. {@code kycStatus}/{@code kycType} are computed defaults (no KYC
  * module exists yet) — "unsubmitted" is the honest state, not a fabrication.
  * Never carries passwordHash, the raw refresh token, or twoFaSecret.
+ * <p>
+ * {@code mustChangePassword} is true only for a bootstrapped Super Admin
+ * account today (see {@code SuperAdminBootstrap}) — surfaced here so the
+ * frontend can route to a change-password screen, but NOT yet enforced
+ * server-side (that screen doesn't exist). See AGENTS.md.
  */
 public record AuthUserResponse(
         String name,
@@ -20,6 +25,7 @@ public record AuthUserResponse(
         String kycStatus,
         String kycType,
         boolean twoFAEnabled,
+        boolean mustChangePassword,
         String role,
         List<String> permissions
 ) {

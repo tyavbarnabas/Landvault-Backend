@@ -24,6 +24,11 @@
     <include file="changes/016-create-role-permissions-table.xml" relativeToChangelogFile="true"/>
     <include file="changes/017-create-user-roles-table.xml" relativeToChangelogFile="true"/>
     <include file="changes/018-create-refresh-tokens-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/019-create-app-role.xml" relativeToChangelogFile="true"/>
+    <include file="changes/020-enable-rls-organization-owned-tables.xml" relativeToChangelogFile="true"/>
+    <include file="changes/021-enable-rls-branches.xml" relativeToChangelogFile="true"/>
+    <include file="changes/022-enable-rls-organizations.xml" relativeToChangelogFile="true"/>
+    <include file="changes/023-add-must-change-password.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

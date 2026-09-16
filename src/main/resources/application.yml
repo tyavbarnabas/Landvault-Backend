@@ -2,9 +2,14 @@ spring:
   application:
     name: landvault-backend
   datasource:
+    # The APPLICATION's own runtime connection — deliberately NOT the
+    # superuser Liquibase migrates with below. A superuser (or any
+    # BYPASSRLS role) unconditionally bypasses row-level security, which
+    # would make every RLS policy in the schema silently inert. See
+    # AGENTS.md and changeset 019.
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5433}/${DB_NAME:landvault}
-    username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:admin}
+    username: ${APP_DB_USERNAME:landvault_app}
+    password: ${APP_DB_PASSWORD}
   jpa:
     hibernate:
       ddl-auto: validate
@@ -16,9 +21,35 @@ spring:
   liquibase:
     enabled: true
     change-log: classpath:db/changelog/db.changelog-master.xml
+    # A separate, explicit connection from spring.datasource above — this
+    # one stays the superuser (DB_USERNAME/DB_PASSWORD), since migrations
+    # need CREATE EXTENSION / CREATE ROLE / GRANT privileges the app's own
+    # restricted role deliberately doesn't have. `url` is repeated
+    # explicitly (not left to fall back to the primary datasource bean) so
+    # Liquibase is guaranteed to build its own connection rather than
+    # silently reusing the app's — see AGENTS.md.
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5433}/${DB_NAME:landvault}
+    user: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:admin}
+    parameters:
+      appDbUsername: ${APP_DB_USERNAME:landvault_app}
+      appDbPassword: ${APP_DB_PASSWORD}
 
 server:
   port: ${SERVER_PORT:8080}
+
+landvault:
+  bootstrap:
+    # Creates the platform's first Super Admin account on startup — see
+    # SuperAdminBootstrap and AGENTS.md. Defaults to disabled: an ordinary
+    # startup does nothing at all. Never set BOOTSTRAP_SUPER_ADMIN=true
+    # permanently — set it, restart once, then unset it again.
+    super-admin:
+      enabled: ${BOOTSTRAP_SUPER_ADMIN:false}
+      email: ${BOOTSTRAP_SUPER_ADMIN_EMAIL:}
+      first-name: ${BOOTSTRAP_SUPER_ADMIN_FIRST_NAME:}
+      last-name: ${BOOTSTRAP_SUPER_ADMIN_LAST_NAME:}
+      password: ${BOOTSTRAP_SUPER_ADMIN_PASSWORD:}
 
 app:
   jwt:
