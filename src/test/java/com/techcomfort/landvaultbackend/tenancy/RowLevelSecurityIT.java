@@ -8,6 +8,7 @@ import com.techcomfort.landvaultbackend.identity.dto.MeResponse;
 import com.techcomfort.landvaultbackend.identity.dto.RegisterRequest;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.resttestclient.TestRestTemplate;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -33,6 +34,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.function.Supplier;
 
@@ -66,6 +68,17 @@ class RowLevelSecurityIT {
     private static final String APP_ROLE = "landvault_app_test";
     private static final String APP_ROLE_PASSWORD = "rls-it-app-password";
 
+    // The exact set of tables 020/021/022 issue ENABLE/FORCE ROW LEVEL
+    // SECURITY on — confirmed directly against a real migrated database
+    // (pg_class.relforcerowsecurity), not assumed. Kept as a fixed list
+    // here so policiedTablesHaveRowSecurityEnabledAndForced fails loudly,
+    // by name, if a future migration touches one of these without
+    // updating this list, rather than silently checking "whatever
+    // currently has RLS on" against itself.
+    private static final List<String> RLS_POLICIED_TABLES = List.of(
+            "organization_documents", "organization_regulatory", "organization_state_regulators",
+            "directors", "organization_financial", "organization_gateways", "branches", "organizations");
+
     @Container
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>(
             DockerImageName.parse("postgis/postgis:16-3.4-alpine").asCompatibleSubstituteFor("postgres"));
@@ -97,6 +110,88 @@ class RowLevelSecurityIT {
     private JdbcTemplate jdbcTemplate;
     @Autowired
     private PlatformTransactionManager transactionManager;
+
+    // Read from configuration, not hardcoded to APP_ROLE — this is the
+    // exact property Spring bound to build the app's own DataSource, so
+    // the guard tests below assert against whoever the app is *actually*
+    // connecting as. A hardcoded role name would keep passing even if the
+    // app were pointed at a different role entirely.
+    @Value("${spring.datasource.username}")
+    private String appRoleUsername;
+
+    // --- infrastructure assumptions every test above silently depends on ---
+    //
+    // None of the tests above would catch a regression here. Every RLS
+    // policy in the schema is inert the moment the connecting role can
+    // bypass row-level security — and the realistic way that happens is
+    // mundane, not malicious: someone hits a permissions error in staging,
+    // grants the app role SUPERUSER to unblock themselves, and moves on.
+    // Every policy silently stops filtering. No test above fails — they'd
+    // all still pass, because a superuser satisfies every USING/WITH CHECK
+    // clause trivially by never being subject to them at all. The
+    // application keeps working perfectly; it just returns every tenant's
+    // data to every tenant. These three tests exist to make that failure
+    // loud instead of invisible. See AGENTS.md.
+
+    @Test
+    void appRoleCannotBypassRowLevelSecurity() {
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = ?", appRoleUsername);
+
+        assertThat(rows)
+                .as("role '%s' (spring.datasource.username) does not exist in pg_roles at all — "
+                        + "the app isn't connecting as who this test thinks it is", appRoleUsername)
+                .hasSize(1);
+
+        Map<String, Object> role = rows.get(0);
+        assertThat(role.get("rolsuper"))
+                .as("role '%s' is a Postgres SUPERUSER — superusers bypass row-level security "
+                        + "unconditionally (FORCE ROW LEVEL SECURITY cannot override this), which makes "
+                        + "every tenant isolation policy in the schema inert", appRoleUsername)
+                .isEqualTo(false);
+        assertThat(role.get("rolbypassrls"))
+                .as("role '%s' has the BYPASSRLS attribute — this role can bypass row-level security, "
+                        + "which makes every tenant isolation policy in the schema inert", appRoleUsername)
+                .isEqualTo(false);
+    }
+
+    @Test
+    void policiedTablesHaveRowSecurityEnabledAndForced() {
+        for (String table : RLS_POLICIED_TABLES) {
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList("""
+                    SELECT c.relrowsecurity AS enabled, c.relforcerowsecurity AS forced
+                    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = 'public' AND c.relname = ?
+                    """, table);
+
+            assertThat(rows)
+                    .as("table '%s' does not exist — RLS_POLICIED_TABLES is out of sync with the schema", table)
+                    .hasSize(1);
+
+            Map<String, Object> row = rows.get(0);
+            assertThat(row.get("enabled"))
+                    .as("table '%s' does not have ROW LEVEL SECURITY enabled — its tenant isolation "
+                            + "policies (if they still exist at all) are not being applied", table)
+                    .isEqualTo(true);
+            assertThat(row.get("forced"))
+                    .as("table '%s' does not have FORCE ROW LEVEL SECURITY — its owner would bypass "
+                            + "its own tenant isolation policies", table)
+                    .isEqualTo(true);
+        }
+    }
+
+    @Test
+    void appRoleHasNoCreatePrivilegeOnPublicSchema() {
+        Boolean canCreate = jdbcTemplate.queryForObject(
+                "SELECT has_schema_privilege(?, 'public', 'CREATE')", Boolean.class, appRoleUsername);
+
+        assertThat(canCreate)
+                .as("role '%s' can CREATE in schema public — it's granted only SELECT/INSERT/UPDATE/DELETE "
+                        + "(see changeset 019); CREATE would let it ALTER or DROP a row-level security "
+                        + "policy directly, bypassing RLS by a route these other tests can't see",
+                        appRoleUsername)
+                .isFalse();
+    }
 
     // --- isolation, branch scope, platform scope, write protection, no-context ---
 

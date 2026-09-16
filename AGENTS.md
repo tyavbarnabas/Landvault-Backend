@@ -805,3 +805,30 @@ then, a bootstrapped admin can go on using the bootstrap password
 indefinitely, which is a real, open gap, not a closed one. Don't remove
 this note once the endpoint exists without actually wiring the enforcement
 first.
+
+## Three tests that pin infrastructure assumptions, not application behavior
+
+`RowLevelSecurityIT.appRoleCannotBypassRowLevelSecurity`,
+`.policiedTablesHaveRowSecurityEnabledAndForced`, and
+`.appRoleHasNoCreatePrivilegeOnPublicSchema` don't test anything this
+codebase's own logic does — they pin facts about the database role and
+schema that every *other* RLS test silently assumes are true and none of
+them would catch if one stopped being true. Concretely: if the
+`landvault_app` role were ever granted `SUPERUSER` (the realistic way this
+happens — someone hits a permissions error in staging, escalates the role
+to unblock themselves, and moves on, not an attack), every other test in
+that class would keep passing, because a superuser satisfies every
+`USING`/`WITH CHECK` clause trivially by never being subject to them.
+Nothing would fail, nothing would log, nothing would look different — the
+application would keep working perfectly and silently return every
+tenant's data to every tenant. These three tests exist so that specific
+failure mode is loud instead of invisible.
+
+The role name is read from `spring.datasource.username` at test time
+(`@Value`), never hardcoded — a hardcoded name would keep passing even if
+the app were reconfigured to connect as something else entirely, defeating
+the point. Confirmed these tests can actually fail, not just always pass,
+by temporarily granting the escalation each one guards against (`ALTER
+ROLE ... SUPERUSER`, `NO FORCE ROW LEVEL SECURITY`, `GRANT CREATE`)
+directly in the test body, watching it go red, then reverting — a guard
+test that cannot fail isn't a guard.
