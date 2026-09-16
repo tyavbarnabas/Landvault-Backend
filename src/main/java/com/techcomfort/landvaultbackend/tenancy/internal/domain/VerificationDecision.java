@@ -1,7 +1,7 @@
 package com.techcomfort.landvaultbackend.tenancy.internal.domain;
 
 import com.techcomfort.landvaultbackend.common.AbstractAppendOnlyEntity;
-import com.techcomfort.landvaultbackend.tenancy.internal.VerificationDecisionType;
+import com.techcomfort.landvaultbackend.tenancy.internal.enums.VerificationDecisionType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;

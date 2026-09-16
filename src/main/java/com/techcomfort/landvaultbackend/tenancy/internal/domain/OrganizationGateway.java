@@ -1,8 +1,8 @@
 package com.techcomfort.landvaultbackend.tenancy.internal.domain;
 
 import com.techcomfort.landvaultbackend.common.AbstractEntity;
-import com.techcomfort.landvaultbackend.tenancy.internal.GatewayName;
-import com.techcomfort.landvaultbackend.tenancy.internal.GatewayStatus;
+import com.techcomfort.landvaultbackend.tenancy.internal.enums.GatewayName;
+import com.techcomfort.landvaultbackend.tenancy.internal.enums.GatewayStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;

@@ -2,7 +2,7 @@ package com.techcomfort.landvaultbackend.identity.internal.domain;
 
 import com.techcomfort.landvaultbackend.common.AbstractEntity;
 import com.techcomfort.landvaultbackend.common.Currency;
-import com.techcomfort.landvaultbackend.identity.internal.UserStatus;
+import com.techcomfort.landvaultbackend.identity.internal.enums.UserStatus;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Getter;

@@ -1,6 +1,6 @@
 package com.techcomfort.landvaultbackend.identity.internal.exceptions;
 
-import com.techcomfort.landvaultbackend.identity.internal.UserStatus;
+import com.techcomfort.landvaultbackend.identity.internal.enums.UserStatus;
 import com.techcomfort.landvaultbackend.identity.internal.service.AuthService;
 
 /**

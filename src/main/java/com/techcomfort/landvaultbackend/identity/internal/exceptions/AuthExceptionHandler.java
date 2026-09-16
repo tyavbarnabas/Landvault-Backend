@@ -1,7 +1,7 @@
 package com.techcomfort.landvaultbackend.identity.internal.exceptions;
 
 import com.techcomfort.landvaultbackend.common.ErrorResponse;
-import com.techcomfort.landvaultbackend.identity.internal.UserStatus;
+import com.techcomfort.landvaultbackend.identity.internal.enums.UserStatus;
 import com.techcomfort.landvaultbackend.identity.internal.controllers.AuthController;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;

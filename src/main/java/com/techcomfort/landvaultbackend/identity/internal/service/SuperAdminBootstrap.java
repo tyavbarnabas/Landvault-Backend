@@ -1,7 +1,7 @@
 package com.techcomfort.landvaultbackend.identity.internal.service;
 
 import com.techcomfort.landvaultbackend.common.Currency;
-import com.techcomfort.landvaultbackend.identity.internal.UserStatus;
+import com.techcomfort.landvaultbackend.identity.internal.enums.UserStatus;
 import com.techcomfort.landvaultbackend.identity.internal.domain.Role;
 import com.techcomfort.landvaultbackend.identity.internal.domain.User;
 import com.techcomfort.landvaultbackend.identity.internal.domain.UserRole;

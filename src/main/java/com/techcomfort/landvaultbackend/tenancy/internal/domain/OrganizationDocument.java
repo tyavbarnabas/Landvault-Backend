@@ -1,8 +1,8 @@
 package com.techcomfort.landvaultbackend.tenancy.internal.domain;
 
 import com.techcomfort.landvaultbackend.common.AbstractEntity;
-import com.techcomfort.landvaultbackend.tenancy.internal.DocumentStatus;
-import com.techcomfort.landvaultbackend.tenancy.internal.OrganizationDocumentType;
+import com.techcomfort.landvaultbackend.tenancy.internal.enums.DocumentStatus;
+import com.techcomfort.landvaultbackend.tenancy.internal.enums.OrganizationDocumentType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;

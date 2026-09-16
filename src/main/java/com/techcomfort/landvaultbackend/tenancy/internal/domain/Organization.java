@@ -1,10 +1,10 @@
 package com.techcomfort.landvaultbackend.tenancy.internal.domain;
 
 import com.techcomfort.landvaultbackend.common.AbstractEntity;
-import com.techcomfort.landvaultbackend.tenancy.internal.CompanyType;
-import com.techcomfort.landvaultbackend.tenancy.internal.TenantPlan;
-import com.techcomfort.landvaultbackend.tenancy.internal.TenantStatus;
-import com.techcomfort.landvaultbackend.tenancy.internal.VerificationState;
+import com.techcomfort.landvaultbackend.tenancy.internal.enums.CompanyType;
+import com.techcomfort.landvaultbackend.tenancy.internal.enums.TenantPlan;
+import com.techcomfort.landvaultbackend.tenancy.internal.enums.TenantStatus;
+import com.techcomfort.landvaultbackend.tenancy.internal.enums.VerificationState;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;

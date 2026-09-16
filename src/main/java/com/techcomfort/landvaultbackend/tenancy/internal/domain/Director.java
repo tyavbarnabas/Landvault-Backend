@@ -1,7 +1,7 @@
 package com.techcomfort.landvaultbackend.tenancy.internal.domain;
 
 import com.techcomfort.landvaultbackend.common.AbstractEntity;
-import com.techcomfort.landvaultbackend.tenancy.internal.GovIdType;
+import com.techcomfort.landvaultbackend.tenancy.internal.enums.GovIdType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;

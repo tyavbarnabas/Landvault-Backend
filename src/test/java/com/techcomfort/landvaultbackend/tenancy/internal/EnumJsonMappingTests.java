@@ -1,6 +1,8 @@
 package com.techcomfort.landvaultbackend.tenancy.internal;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.techcomfort.landvaultbackend.tenancy.internal.enums.VerificationDecisionType;
+import com.techcomfort.landvaultbackend.tenancy.internal.enums.VerificationState;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;

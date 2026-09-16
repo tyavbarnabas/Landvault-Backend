@@ -8,10 +8,13 @@
  * staff are users linked by {@code tenantId}; this module owns what that
  * tenant is, not who works for it.
  * <p>
- * Only enums exist here so far (see {@code tenancy.internal.domain}) —
- * there is no {@code Tenant} entity yet, so {@link com.techcomfort.landvaultbackend.tenancy.TenancyApi}
- * is currently empty. It still exists now so the module boundary is in
- * place before the first entity lands.
+ * Public surface: {@link com.techcomfort.landvaultbackend.tenancy.TenancyApi}
+ * (currently just {@code branchBelongsToTenant}, used by identity's tenant
+ * context filter) and the DTOs in {@code tenancy.dto}, which the two
+ * {@code /api/admin/tenants} read endpoints return — see
+ * {@code tenancy.internal.controllers.AdminTenantController}. Every write
+ * operation (onboarding, verification decisions, plan/status changes,
+ * support access) is a later slice; only reads exist today.
  */
 @org.springframework.modulith.ApplicationModule(
         displayName = "Tenancy"

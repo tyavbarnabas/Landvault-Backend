@@ -832,3 +832,99 @@ by temporarily granting the escalation each one guards against (`ALTER
 ROLE ... SUPERUSER`, `NO FORCE ROW LEVEL SECURITY`, `GRANT CREATE`)
 directly in the test body, watching it go red, then reverting — a guard
 test that cannot fail isn't a guard.
+
+## Tenancy slice A: the first real client, and what it found
+
+`GET /api/admin/tenants` and `GET /api/admin/tenants/{id}` are the first
+endpoints anything outside this backend actually calls — the first genuine
+exercise of JWT issue/parse, the tenant context filter, RLS's platform
+bypass, the pagination envelope, and enum wire casing together, against the
+frontend's real `tenantsService.ts` contract rather than an assumption
+about it. It found real gaps. Record them here rather than let each get
+silently "fixed" differently the next time someone touches this code.
+
+**`TenantSummaryDto` is deliberately not the frontend's `Tenant` shape.**
+`tenantsService.ts` types `fetchTenants()` as returning `Page<Tenant>` — the
+same full shape the detail page uses, including a real `branches: TenantBranch[]`
+array the directory then reduces client-side for a branch/estate count. This
+backend returns a slimmer `TenantSummaryDto` with `branchCount: number`
+instead, computed with one grouped query for the whole page
+(`BranchRepository.countGroupedByOrganizationId`) rather than loading every
+organization's branches to only count them — the N+1 this slice was
+explicitly told to avoid. **This is a real, live contract mismatch**:
+`TenantDirectory.tsx` today reads `t.branches.length` and
+`t.branches.reduce((s,b) => s + b.estateCount, 0)`, which this endpoint's
+response can't satisfy as-is. Reconciling it means either the frontend
+gaining a distinct, slimmer list-row type (matching what a directory
+actually needs) or this endpoint returning full branch arrays and eating
+the N+1 — not fixed unilaterally here since it's a frontend/backend contract
+decision, not a backend implementation detail.
+
+**There is no stored "primary contact" anywhere in the schema.** Not on
+`Organization`, not on any other tenancy table — no person's name, role
+title, personal government ID, or personal phone is captured for a tenant
+at all. `Organization` stores only company-level `companyEmail`/`companyPhone`.
+`TenantSummaryDto.primaryContactEmail` uses `companyEmail` as the closest
+real substitute; `primaryContactName` is always `null`; `TenantDetailDto.primaryContact`
+(the frontend's full `PrimaryContact` — name/role/work email/phone/government
+ID) is always `null` outright rather than a nested object filled with
+nulls, per the "honest absence, never a plausible-looking placeholder" rule
+above. Closing this needs either a schema change (out of scope for this
+slice) or reusing an existing director as the primary contact by
+convention — a real decision for whoever owns onboarding next, not made
+here.
+
+**`statesOfOperation` is derived, not stored** — there's no column or table
+holding "every state this tenant operates in." The directory response uses
+just `registeredState`/`operatingState` (no extra query per row); the
+detail response also unions in every state the organization has a
+regulator registration for (already loaded for the Regulatory section, so
+free). Neither is the frontend's actual concept, just the closest
+approximation from what's genuinely stored.
+
+**`directorsAttestation` has no backing column either** — inferred as
+"true once `verificationState` has progressed past `CREATED`", since Stage
+2 submission (the only way it advances) always carries attestation on the
+frontend's own `SubmitVerificationInput`. An inference from real state, not
+a fabrication, but still worth knowing it isn't a stored fact.
+
+**`additionalPermits` and `failedDocumentIds` are always empty/`null`** —
+no table backs "additional permits" as distinct from a state regulator
+entry, and `verification_decision_documents` (the join table that would
+back `failedDocumentIds`) has no entity or repository yet — building one is
+write-side work (`resubmitDocument`) explicitly out of scope for this
+read-only slice. Left `null`/empty rather than fabricated, and rather than
+building unused write-adjacent infrastructure just to populate a read.
+
+**`reviewerName` (on a verification decision) and `managerName` (on a
+branch) are always `null`.** Both entities store only a user id
+(`reviewerUserId`/`managerUserId`); resolving a name means calling
+`identity.IdentityApi`. `identity` already depends on `tenancy` (via
+`TenancyApi`, for the tenant-context filter's branch switcher, see the
+section above) — `tenancy` also depending on `identity` would be a genuine
+module dependency **cycle**, and `ModularityTests` correctly rejects it:
+this was tried, not assumed, and failed with exactly
+`Cycle detected: Slice identity -> Slice tenancy -> Slice identity`.
+Resolving user names cross-module needs a design that doesn't create a
+back-edge — e.g. a read model in `common` that `identity` populates and
+`tenancy` only reads, never a live call back into `identity` — not
+attempted here.
+
+**Enum-typed DTO fields are wire-value strings, not the internal enum
+types** (`String plan`, not `TenantPlan`) — a public DTO must not expose an
+internal type through its own signature (see the Modulith package-structure
+section above); `UserDto.status` already established this pattern for
+identity, this slice just follows it for every tenancy enum crossing the
+`tenancy.dto` boundary.
+
+**Director `idNumber`/`bvn` are masked to the last 4 characters** in every
+response (list and detail) — never returned in full. A reveal action needs
+its own endpoint with its own access logging (this file already requires
+every read of these to be logged) — not built here; masking is the only
+protection today. Verified with a real HTTP round trip asserting the raw
+response body doesn't contain the seeded full values, not just that the
+masked field looks right.
+
+**Estate count is always 0** — no inventory module exists yet to source a
+real count from; matches the no-fabricated-data rule rather than inventing
+a plausible number.
