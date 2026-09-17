@@ -189,14 +189,14 @@ public class TenantMapper {
                 director.getNationality(),
                 director.getIdType().getValue(),
                 mask(director.getIdNumber()),
-                mask(director.getBvn()),
                 director.getOwnershipPct(),
                 Boolean.TRUE.equals(director.getIsBeneficialOwner()));
     }
 
-    // NDPR-regulated — never returned in full. Matches the frontend's own
-    // BVN-masking convention (reveal is a separate, not-yet-built,
-    // access-logged action). See AGENTS.md and DirectorDto's Javadoc.
+    // NDPR-regulated — never returned in full. Reveal is a separate,
+    // not-yet-built, access-logged action. See AGENTS.md and DirectorDto's
+    // Javadoc. Still needed for idNumber even though bvn (its original
+    // co-user) is gone — don't delete this thinking it's now unused.
     private static String mask(String value) {
         if (value == null) {
             return null;

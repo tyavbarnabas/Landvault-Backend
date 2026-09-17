@@ -108,7 +108,7 @@ class AdminTenantControllerIT {
                 "GROWTH", "UNDER_REVIEW", "ACTIVE");
         orgSuspendedStarter = insertOrganization("Northbridge Estates Limited", null,
                 "STARTER", "VERIFIED", "SUSPENDED");
-        insertDirector(orgVerifiedEnterprise, "12345678901", "22134455667");
+        insertDirector(orgVerifiedEnterprise, "12345678901");
         seeded = true;
     }
 
@@ -199,7 +199,7 @@ class AdminTenantControllerIT {
     // --- the NDPR leak test ---
 
     @Test
-    void serializationExcludesFullBvnAndGovernmentId() {
+    void serializationMasksGovernmentIdAndHasNoBvnFieldAtAll() {
         String token = loginAsSuperAdmin();
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(token);
@@ -208,15 +208,17 @@ class AdminTenantControllerIT {
                 "/api/admin/tenants/" + orgVerifiedEnterprise, HttpMethod.GET, new HttpEntity<>(headers), String.class);
 
         assertThat(raw.getBody())
-                .as("full, unmasked NDPR-regulated values must never appear in a tenant detail response")
-                .doesNotContain("12345678901")
-                .doesNotContain("22134455667");
+                .as("the full, unmasked government id must never appear in a tenant detail response")
+                .doesNotContain("12345678901");
+        // Stronger than masking: bvn was removed entirely (see AGENTS.md),
+        // so the key itself must never appear on the wire, not just its
+        // value. A "bvn" match here would mean it silently crept back in.
+        assertThat(raw.getBody().toLowerCase()).doesNotContain("bvn");
 
         ResponseEntity<TenantDetailDto> parsed = restTemplate.exchange(
                 "/api/admin/tenants/" + orgVerifiedEnterprise, HttpMethod.GET, new HttpEntity<>(headers), TenantDetailDto.class);
         assertThat(parsed.getBody().directors()).isNotEmpty();
         assertThat(parsed.getBody().directors().get(0).idNumber()).endsWith("8901").doesNotContain("1234");
-        assertThat(parsed.getBody().directors().get(0).bvn()).endsWith("5667").doesNotContain("2213");
     }
 
     // --- helpers ---
@@ -288,20 +290,20 @@ class AdminTenantControllerIT {
         return id;
     }
 
-    private static void insertDirector(UUID organizationId, String idNumber, String bvn) {
+    private static void insertDirector(UUID organizationId, String idNumber) {
         try (Connection connection = superuserConnection();
              Statement statement = connection.createStatement()) {
             statement.execute("""
                     INSERT INTO directors (
                         id, tenant_id, created_at, created_by, deleted,
                         organization_id, full_name, role, nationality,
-                        id_type, id_number, bvn, ownership_pct, is_beneficial_owner
+                        id_type, id_number, ownership_pct, is_beneficial_owner
                     ) VALUES (
                         '%s', '%s', now(), 'it', false,
                         '%s', 'Ifeoma Balogun', 'Executive Director', 'Nigerian',
-                        'NIN', '%s', '%s', 60.00, true
+                        'NIN', '%s', 60.00, true
                     )
-                    """.formatted(UUID.randomUUID(), organizationId, organizationId, idNumber, bvn));
+                    """.formatted(UUID.randomUUID(), organizationId, organizationId, idNumber));
         } catch (SQLException e) {
             throw new IllegalStateException(e);
         }

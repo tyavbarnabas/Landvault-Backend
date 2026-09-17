@@ -255,19 +255,23 @@ Spring-level `spring.profiles.default` fallback baked into `application.yml`
 active for *anything* that doesn't explicitly set a profile, which is the
 opposite of what "quiet by default" means once a real deploy exists. This
 matters beyond noise: bind parameters get logged too, and this module now
-stores NDPR-regulated personal data (`directors.id_number`/`bvn`) that must
+stores NDPR-regulated personal data (`directors.id_number`) that must
 never land in a shared log.
 
 ## `directors` is the most sensitive table in the system
 
-`directors.id_number` and `directors.bvn` are NDPR-regulated personal data,
-stored in plaintext today with none of the following yet implemented —
-each is a standing TODO carried in the table's own Postgres comment, not
-just here: encrypt at rest; restrict reads to compliance staff (never all
-platform staff, never another tenant's staff); log every read as an
-auditable event, not an ordinary query; define and enforce a retention
-policy. Whoever builds the repository/service layer for this table owns
-closing these, not deferring them further.
+`directors.id_number` is NDPR-regulated personal data, stored in plaintext
+today with none of the following yet implemented — each is a standing TODO
+carried in the table's own Postgres comment, not just here: encrypt at
+rest; restrict reads to compliance staff (never all platform staff, never
+another tenant's staff); log every read as an auditable event, not an
+ordinary query; define and enforce a retention policy. Whoever builds the
+repository/service layer for this table owns closing these, not deferring
+them further.
+
+`directors.bvn` used to carry the same obligations and no longer exists at
+all — see "BVN was removed" below for why, and the one condition under
+which it could legitimately come back.
 
 **`is_beneficial_owner` is stored, never derived.** The threshold is 25%
 ownership (standard AML practice, protecting the platform from onboarding a
@@ -917,14 +921,52 @@ section above); `UserDto.status` already established this pattern for
 identity, this slice just follows it for every tenancy enum crossing the
 `tenancy.dto` boundary.
 
-**Director `idNumber`/`bvn` are masked to the last 4 characters** in every
+**Director `idNumber` is masked to the last 4 characters** in every
 response (list and detail) — never returned in full. A reveal action needs
 its own endpoint with its own access logging (this file already requires
-every read of these to be logged) — not built here; masking is the only
+every read of it to be logged) — not built here; masking is the only
 protection today. Verified with a real HTTP round trip asserting the raw
-response body doesn't contain the seeded full values, not just that the
-masked field looks right.
+response body doesn't contain the seeded full value, not just that the
+masked field looks right. (`bvn` was masked the same way when this slice
+was built; it was removed entirely shortly after — see "BVN was removed"
+below.)
 
 **Estate count is always 0** — no inventory module exists yet to source a
 real count from; matches the no-fabricated-data rule rather than inventing
 a plausible number.
+
+## BVN was removed — collected but never verified
+
+`directors.bvn` (and its frontend counterpart) existed for one slice, then
+was removed entirely — schema column dropped, entity/DTO fields deleted,
+form input removed, masked-reveal UI deleted. Worth recording why, so
+nobody re-adds it for the same reason it was added the first time (it
+"seemed like it should be there").
+
+**BVN verification is genuinely useful** — it confirms a person is who they
+claim to be by checking the number against NIBSS records. **But nothing in
+this system ever did that.** The number was collected as a plain string,
+stored, masked on display, and never checked against anything at all. An
+unverified BVN proves nothing: a director could type eleven arbitrary
+digits and it would sit in the database looking official — it looks like
+compliance evidence without being any.
+
+Meanwhile it's among the most sensitive personal data in Nigeria, and
+`directors` already carried four *unmet* obligations for it (see above):
+encrypt at rest, restrict reads to compliance staff, log every read,
+retention policy. So the position was **liability without benefit**: a
+breach would leak directors' BVNs, and the platform gained nothing in
+exchange, because the field was never actually used for anything.
+
+`id_number` (NIN or international passport) stayed — it corresponds to the
+identity document actually cross-checked against the CAC status report at
+onboarding, so it does real work today.
+
+**The condition under which BVN could legitimately return**: only
+alongside a real NIBSS (or equivalent) verification integration — never
+collected again as a bare, unverified string. And even then, store the
+**verification result** (a boolean, a verified-at timestamp, a provider
+reference), not the BVN itself. That gives the compliance evidence a
+reviewer actually needs without the platform ever holding the number —
+strictly less liability than what was just removed, not the same liability
+reintroduced with an extra step attached.

@@ -20,7 +20,12 @@ import java.util.UUID;
 
 /**
  * A director/beneficial owner of an {@link Organization}. Most sensitive
- * table in the system (NDPR-regulated idNumber/bvn) — see AGENTS.md.
+ * table in the system (NDPR-regulated idNumber) — see AGENTS.md.
+ * <p>
+ * {@code bvn} was collected here once and removed (changeset 024): it was
+ * never verified against anything, so it was liability without benefit —
+ * see AGENTS.md for the full reasoning and the condition under which it
+ * could legitimately return.
  */
 @Getter
 @Setter
@@ -56,10 +61,6 @@ public class Director extends AbstractEntity {
     // SENSITIVE — NDPR-regulated. See class Javadoc and the table comment.
     @Column(name = "id_number", nullable = false)
     private String idNumber;
-
-    // SENSITIVE — NDPR-regulated. See class Javadoc and the table comment.
-    @Column(name = "bvn")
-    private String bvn;
 
     @Column(name = "ownership_pct", nullable = false, precision = 5, scale = 2)
     private BigDecimal ownershipPct;

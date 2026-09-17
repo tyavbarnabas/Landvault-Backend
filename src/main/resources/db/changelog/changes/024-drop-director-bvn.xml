@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        BVN removed entirely — collected, stored, masked, and never verified
+        against anything (no NIBSS integration exists anywhere in this
+        system). An unverified BVN proves nothing — a director could type
+        eleven arbitrary digits and it would sit in the database looking
+        official — while carrying real liability: it's among the most
+        sensitive personal data in Nigeria, and directors.bvn already
+        carried four unmet obligations (encrypt at rest, restrict reads to
+        compliance staff, log every read, a retention policy — see
+        008-create-directors-table.xml's own column comment, left
+        untouched as the accurate historical record of what this column
+        was). Liability without benefit. See AGENTS.md for the full
+        reasoning and the condition under which BVN could legitimately
+        return: only alongside real verification, and even then storing
+        the verification RESULT, not the number itself.
+
+        id_number stays — it corresponds to the identity document actually
+        cross-checked against the CAC status report, so it does real work.
+
+        Rollback re-adds the column (nullable) to restore the shape only —
+        the data is gone either way, this does not recover it.
+    -->
+    <changeSet id="024-drop-director-bvn" author="landvault">
+        <!-- The table comment (not just the column) mentioned bvn by name
+             and used it as the audit-logging example — refreshed here so
+             `\d+ directors` doesn't keep pointing at a column that no
+             longer exists. 008's own column comment is left untouched as
+             the accurate historical record of what the column was. -->
+        <sql>
+            ALTER TABLE directors DROP COLUMN bvn;
+
+            COMMENT ON TABLE directors IS
+                'id_number is NDPR-regulated personal data. TODO (not yet implemented): (1) encrypt at rest — stored in plaintext today; (2) restrict reads to compliance staff, not all platform staff, and never tenant staff from another organization; (3) log every read against the director record — a Super Admin viewing a director''s id_number is an auditable event, not an ordinary query; (4) define a retention policy — do not keep these longer than a documented compliance need requires. bvn was removed entirely (see AGENTS.md''s "BVN was removed") rather than kept unused.';
+        </sql>
+        <rollback>
+            <sql>
+                ALTER TABLE directors ADD COLUMN bvn varchar(255);
+
+                COMMENT ON TABLE directors IS
+                    'id_number and bvn are NDPR-regulated personal data. TODO (not yet implemented): (1) encrypt at rest — stored in plaintext today; (2) restrict reads to compliance staff, not all platform staff, and never tenant staff from another organization; (3) log every read against the director record — a Super Admin viewing a BVN is an auditable event, not an ordinary query; (4) define a retention policy — do not keep these longer than a documented compliance need requires.';
+            </sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

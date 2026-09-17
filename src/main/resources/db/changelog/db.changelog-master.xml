@@ -29,6 +29,7 @@
     <include file="changes/021-enable-rls-branches.xml" relativeToChangelogFile="true"/>
     <include file="changes/022-enable-rls-organizations.xml" relativeToChangelogFile="true"/>
     <include file="changes/023-add-must-change-password.xml" relativeToChangelogFile="true"/>
+    <include file="changes/024-drop-director-bvn.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

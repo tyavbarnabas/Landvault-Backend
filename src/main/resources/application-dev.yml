@@ -4,7 +4,7 @@
 #
 # SQL logging lives here, not in the base config: it's noisy, and bind
 # parameters can expose personal data — this slice's `directors` table holds
-# NDPR-regulated BVN/id_number values that must never land in a shared log.
+# an NDPR-regulated id_number value that must never land in a shared log.
 spring:
   jpa:
     show-sql: true

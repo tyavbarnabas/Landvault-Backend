@@ -4,11 +4,15 @@ import java.math.BigDecimal;
 import java.util.UUID;
 
 /**
- * {@code idNumber}/{@code bvn} are NDPR-regulated and NEVER returned in
- * full here — masked to the last 4 characters, matching how the frontend
- * already displays BVN. A reveal action needs its own endpoint with its
- * own access logging (AGENTS.md already requires every read of these to be
- * logged) — not built in this slice. See {@code TenantMapper#mask}.
+ * {@code idNumber} is NDPR-regulated and NEVER returned in full here —
+ * masked to the last 4 characters. A reveal action needs its own endpoint
+ * with its own access logging (AGENTS.md already requires every read of it
+ * to be logged) — not built in this slice. See {@code TenantMapper#mask}.
+ * <p>
+ * No {@code bvn} field — it was collected once and removed entirely
+ * (backend changeset 024, frontend in the same slice): it was never
+ * verified against anything, so it was liability without benefit. See
+ * AGENTS.md.
  */
 public record DirectorDto(
         UUID id,
@@ -17,7 +21,6 @@ public record DirectorDto(
         String nationality,
         String idType,
         String idNumber,
-        String bvn,
         BigDecimal ownershipPct,
         boolean isBeneficialOwner
 ) {
