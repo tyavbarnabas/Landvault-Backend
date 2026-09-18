@@ -18,6 +18,7 @@ import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.SQLRestriction;
 
 import java.time.LocalDate;
+import java.util.UUID;
 
 /**
  * A land-developer company — the tenant itself, so tenantId/branchId stay
@@ -121,4 +122,11 @@ public class Organization extends AbstractEntity {
     @Enumerated(EnumType.STRING)
     @Column(name = "verification_state", nullable = false, length = 32)
     private VerificationState verificationState;
+
+    // Set by POST .../begin-review — the reviewer who began this
+    // organization's verification review. A plain UUID FK (not
+    // @ManyToOne), same cross-module-reference convention as every other
+    // identity.User pointer in this schema. Null until review begins.
+    @Column(name = "reviewer_user_id")
+    private UUID reviewerUserId;
 }

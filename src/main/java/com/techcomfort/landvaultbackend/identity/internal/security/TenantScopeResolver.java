@@ -2,8 +2,7 @@ package com.techcomfort.landvaultbackend.identity.internal.security;
 
 import com.techcomfort.landvaultbackend.common.TenantScope;
 import com.techcomfort.landvaultbackend.tenancy.TenancyApi;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.Objects;
 import java.util.Set;
@@ -16,9 +15,8 @@ import java.util.stream.Collectors;
  * so both are testable without a servlet request or a database. See
  * AGENTS.md for the reasoning behind each branch below.
  */
+@Slf4j
 final class TenantScopeResolver {
-
-    private static final Logger log = LoggerFactory.getLogger(TenantScopeResolver.class);
 
     private TenantScopeResolver() {
     }

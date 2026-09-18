@@ -3,6 +3,7 @@ package com.techcomfort.landvaultbackend.tenancy.internal.mapper;
 import com.techcomfort.landvaultbackend.tenancy.dto.AddressDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.CompanyIdentityDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.CompanyPresenceDto;
+import com.techcomfort.landvaultbackend.tenancy.dto.CreateTenantRequest;
 import com.techcomfort.landvaultbackend.tenancy.dto.DirectorDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.FinancialSettlementDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.RegulatoryDto;
@@ -14,6 +15,9 @@ import com.techcomfort.landvaultbackend.tenancy.dto.TenantDocumentDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.TenantEntitlementsDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.TenantSummaryDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.VerificationDecisionDto;
+import com.techcomfort.landvaultbackend.tenancy.internal.enums.CompanyType;
+import com.techcomfort.landvaultbackend.tenancy.internal.enums.TenantPlan;
+import com.techcomfort.landvaultbackend.tenancy.internal.enums.TenantStatus;
 import com.techcomfort.landvaultbackend.tenancy.internal.enums.VerificationState;
 import com.techcomfort.landvaultbackend.tenancy.internal.domain.Branch;
 import com.techcomfort.landvaultbackend.tenancy.internal.domain.Director;
@@ -28,6 +32,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Set;
@@ -105,6 +110,53 @@ public class TenantMapper {
 
                 org.getVerificationState().getValue(),
                 decisions.stream().map(TenantMapper::toDecision).toList());
+    }
+
+    /**
+     * {@code POST /api/admin/tenants}'s request -> a new, unsaved
+     * {@link Organization} — the reverse direction of {@link #toDetail}
+     * above. {@code status}/{@code verificationState} and the default
+     * entitlements are fixed here, not read from the request — see
+     * AGENTS.md Part 0 (the two axes are set independently, never derived)
+     * and Part 1 (SA-1.3 plan/entitlement changes are out of scope for this
+     * slice). Doesn't touch the database — {@code AdminTenantService} still
+     * owns the duplicate-RC-number check and the actual save.
+     */
+    public Organization toNewOrganization(CreateTenantRequest request) {
+        CompanyIdentityDto identity = request.identity();
+        AddressDto registered = identity.registeredAddress();
+        AddressDto operating = identity.operatingAddress();
+        CompanyPresenceDto presence = request.presence();
+        SocialsDto socials = presence.socials();
+
+        return Organization.builder()
+                .registeredName(identity.registeredName())
+                .tradingName(identity.tradingName())
+                .rcNumber(identity.rcNumber())
+                .companyType(CompanyType.fromValue(identity.companyType()))
+                .dateOfIncorporation(LocalDate.parse(identity.dateOfIncorporation()))
+                .registeredStreet(registered.street())
+                .registeredCity(registered.city())
+                .registeredState(registered.state())
+                .operatingStreet(operating.street())
+                .operatingCity(operating.city())
+                .operatingState(operating.state())
+                .companyEmail(presence.companyEmail())
+                .companyPhone(presence.companyPhone())
+                .website(presence.website())
+                .socialInstagram(socials == null ? null : socials.instagram())
+                .socialTwitter(socials == null ? null : socials.twitter())
+                .socialFacebook(socials == null ? null : socials.facebook())
+                .socialLinkedin(socials == null ? null : socials.linkedin())
+                .plan(TenantPlan.fromValue(request.plan()))
+                // Default entitlements — matches the frontend's own
+                // DEFAULT_ENTITLEMENTS.
+                .marketplacePublishing(false)
+                .mlmModule(false)
+                .fxRails(false)
+                .status(TenantStatus.ACTIVE)
+                .verificationState(VerificationState.CREATED)
+                .build();
     }
 
     private static String displayName(Organization org) {

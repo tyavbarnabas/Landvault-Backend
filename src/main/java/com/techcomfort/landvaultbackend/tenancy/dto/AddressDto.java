@@ -1,4 +1,6 @@
 package com.techcomfort.landvaultbackend.tenancy.dto;
 
-public record AddressDto(String street, String city, String state) {
+import jakarta.validation.constraints.NotBlank;
+
+public record AddressDto(@NotBlank String street, @NotBlank String city, @NotBlank String state) {
 }

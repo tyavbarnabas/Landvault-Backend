@@ -30,6 +30,9 @@
     <include file="changes/022-enable-rls-organizations.xml" relativeToChangelogFile="true"/>
     <include file="changes/023-add-must-change-password.xml" relativeToChangelogFile="true"/>
     <include file="changes/024-drop-director-bvn.xml" relativeToChangelogFile="true"/>
+    <include file="changes/025-add-organization-reviewer-user-id.xml" relativeToChangelogFile="true"/>
+    <include file="changes/026-create-audit-log-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/027-add-organizations-rc-number-unique.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

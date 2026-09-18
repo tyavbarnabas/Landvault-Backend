@@ -2,16 +2,26 @@ package com.techcomfort.landvaultbackend.tenancy.internal.controllers;
 
 import com.techcomfort.landvaultbackend.common.PageResponse;
 import com.techcomfort.landvaultbackend.common.PageResponses;
+import com.techcomfort.landvaultbackend.common.TenantContext;
+import com.techcomfort.landvaultbackend.common.TenantScope;
+import com.techcomfort.landvaultbackend.tenancy.dto.CreateTenantRequest;
+import com.techcomfort.landvaultbackend.tenancy.dto.ResubmitDocumentRequest;
 import com.techcomfort.landvaultbackend.tenancy.dto.TenantDetailDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.TenantSummaryDto;
+import com.techcomfort.landvaultbackend.tenancy.dto.VerificationDecisionRequest;
 import com.techcomfort.landvaultbackend.tenancy.internal.enums.TenantPlan;
 import com.techcomfort.landvaultbackend.tenancy.internal.enums.VerificationState;
 import com.techcomfort.landvaultbackend.tenancy.internal.service.AdminTenantService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -22,12 +32,14 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * The first two tenancy endpoints, and the first real exercise of the whole
- * stack by an actual client — JWT → tenant context filter → RLS platform
- * bypass → pagination envelope → enum wire casing. Both are platform-scope
- * reads: a Super Admin sees every tenant, which works because
- * {@code TenantScopeResolver} sets {@code platform_scope = on} for platform
- * staff and every RLS policy has a platform bypass. See AGENTS.md.
+ * The tenant directory/detail reads (slice A), plus slice B1's create +
+ * verification-lifecycle writes. Every write endpoint here requires
+ * {@code admin.tenants.manage} (a stricter authority than the reads'
+ * {@code admin.tenants.view}) and resolves the acting Super Admin's id from
+ * {@link TenantContext} — set by identity's {@code TenantContextFilter} for
+ * every authenticated request — rather than importing anything from
+ * {@code identity} directly (which would reopen the module cycle
+ * {@code TenantStaffAccountRequested}'s Javadoc describes). See AGENTS.md.
  */
 @RestController
 @RequestMapping("/api/admin/tenants")
@@ -64,5 +76,44 @@ public class AdminTenantController {
         return service.getTenantDetail(id)
                 .map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    @PostMapping
+    @PreAuthorize("hasAuthority('admin.tenants.manage')")
+    public ResponseEntity<TenantDetailDto> createTenant(@Valid @RequestBody CreateTenantRequest request) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(service.createTenant(request, currentUserId()));
+    }
+
+    @PostMapping("/{id}/submit-documents")
+    @PreAuthorize("hasAuthority('admin.tenants.manage')")
+    public ResponseEntity<TenantDetailDto> submitDocuments(@PathVariable UUID id) {
+        return ResponseEntity.ok(service.submitDocuments(id));
+    }
+
+    @PostMapping("/{id}/begin-review")
+    @PreAuthorize("hasAuthority('admin.tenants.manage')")
+    public ResponseEntity<TenantDetailDto> beginReview(@PathVariable UUID id) {
+        return ResponseEntity.ok(service.beginReview(id, currentUserId()));
+    }
+
+    @PostMapping("/{id}/verification-decision")
+    @PreAuthorize("hasAuthority('admin.tenants.manage')")
+    public ResponseEntity<TenantDetailDto> recordVerificationDecision(
+            @PathVariable UUID id, @Valid @RequestBody VerificationDecisionRequest request) {
+        return ResponseEntity.ok(service.recordVerificationDecision(id, request, currentUserId()));
+    }
+
+    @PostMapping("/{id}/documents/{documentId}/resubmit")
+    @PreAuthorize("hasAuthority('admin.tenants.manage')")
+    public ResponseEntity<TenantDetailDto> resubmitDocument(
+            @PathVariable UUID id, @PathVariable UUID documentId, @Valid @RequestBody ResubmitDocumentRequest request) {
+        return ResponseEntity.ok(service.resubmitDocument(id, documentId, request));
+    }
+
+    private UUID currentUserId() {
+        return TenantContext.get()
+                .map(TenantScope::userId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "No TenantContext for an authenticated request — TenantContextFilter should have set one."));
     }
 }

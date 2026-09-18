@@ -9,4 +9,6 @@ import java.util.UUID;
 public interface OrganizationDocumentRepository extends JpaRepository<OrganizationDocument, UUID> {
 
     List<OrganizationDocument> findByOrganizationId(UUID organizationId);
+
+    boolean existsByOrganizationId(UUID organizationId);
 }

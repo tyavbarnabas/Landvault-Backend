@@ -12,4 +12,8 @@ import java.util.UUID;
  * — see {@link OrganizationSpecifications}.
  */
 public interface OrganizationRepository extends JpaRepository<Organization, UUID>, JpaSpecificationExecutor<Organization> {
+
+    // Case-insensitive — "RC1234567" and "rc1234567" are the same company
+    // registration, not two different tenants.
+    boolean existsByRcNumberIgnoreCase(String rcNumber);
 }

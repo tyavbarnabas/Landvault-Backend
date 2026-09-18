@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Records which reviewer began an organization's verification review
+        (POST .../begin-review) — a plain UUID FK to identity's users table,
+        same "no @ManyToOne across modules" convention as every other
+        cross-module reference in this schema (see AGENTS.md). Nullable:
+        every existing/new organization starts with no reviewer until
+        begin-review actually runs.
+    -->
+    <changeSet id="025-add-organization-reviewer-user-id" author="landvault">
+        <sql>
+            ALTER TABLE organizations ADD COLUMN reviewer_user_id uuid;
+            CREATE INDEX idx_organizations_reviewer_user_id ON organizations (reviewer_user_id);
+        </sql>
+        <rollback>
+            <sql>
+                DROP INDEX idx_organizations_reviewer_user_id;
+                ALTER TABLE organizations DROP COLUMN reviewer_user_id;
+            </sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

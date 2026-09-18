@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        One company, one RC number — AdminTenantService.createTenant checks
+        this proactively (for a clean 409 response, see AGENTS.md), but the
+        constraint exists too as the actual source of truth: a service-layer
+        check-then-insert alone has a race between two concurrent creates.
+        Any raw DataIntegrityViolationException that still reaches the
+        service (losing that race) is caught and translated the same way —
+        never allowed to surface as a raw 500.
+    -->
+    <changeSet id="027-add-organizations-rc-number-unique" author="landvault">
+        <sql>
+            ALTER TABLE organizations ADD CONSTRAINT uq_organizations_rc_number UNIQUE (rc_number);
+        </sql>
+        <rollback>
+            <sql>
+                ALTER TABLE organizations DROP CONSTRAINT uq_organizations_rc_number;
+            </sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

@@ -164,10 +164,10 @@ File storage: frontend notes it needs real S3/MinIO-backed URLs behind "download
 |---|---|---|---|
 | GET | `/api/admin/tenants?<TenantFilters>&cursor&limit` | — | `Page<Tenant>` |
 | GET | `/api/admin/tenants/{id}` | — | `Tenant` |
-| POST | `/api/admin/tenants/draft` | `CreateTenantDraftInput` | `Tenant` (Stage 1: identity/contact/presence) |
-| POST | `/api/admin/tenants/{id}/submit-verification` | `SubmitVerificationInput` | `Tenant` (Stage 2: documents/regulatory/directors/financial) |
+| POST | `/api/admin/tenants` | `CreateTenantDraftInput` | `Tenant` (Stage 1: identity/contact/presence) |
+| POST | `/api/admin/tenants/{id}/submit-documents` | — | `Tenant` (see divergence note below — NOT the frontend's Stage 2) |
 | POST | `/api/admin/tenants/{id}/begin-review` | — | `Tenant` |
-| POST | `/api/admin/tenants/{id}/verification-decision` | `RecordDecisionInput` | `Tenant` (appends `verificationHistory`, never overwrites it) |
+| POST | `/api/admin/tenants/{id}/verification-decision` | `{ decision, reason?, failedDocumentIds? }` (no `reviewerName` — see note) | `Tenant` (appends `verificationHistory`, never overwrites it) |
 | POST | `/api/admin/tenants/{id}/documents/{documentId}/resubmit` | `{ fileName, size }` | `Tenant` |
 | PATCH | `/api/admin/tenants/{id}/plan` | `{ plan, entitlements }` | `Tenant` |
 | PATCH | `/api/admin/tenants/{id}/status` | `{ status, actor }` | `Tenant` |
@@ -176,6 +176,13 @@ File storage: frontend notes it needs real S3/MinIO-backed URLs behind "download
 | GET | `/api/admin/audit-log?cursor&limit` | — | `Page<AuditLogEntry>` |
 
 `Tenant.verificationState`: `created → documents_submitted → under_review → verified` (or `rejected`, `suspended`). `Tenant` has `branches: TenantBranch[]` — real multi-branch support belongs here, not bolted on later.
+
+**Two real divergences from `tenantsService.ts`, introduced deliberately by the "Tenancy slice B1" task and not yet reconciled:**
+
+1. **Path**: the row above was previously `POST /api/admin/tenants/draft` — that path doesn't exist anywhere in the real frontend code (confirmed by direct inspection of `tenantsService.ts`'s `createTenantDraft`, which calls `POST /api/admin/tenants`). This table was simply wrong; now fixed.
+2. **`submit-documents` is a genuinely different, simpler primitive than the frontend's real `submit-verification`.** The frontend's Stage 2 submits the *entire* verification payload in one call — `documents`, `regulatory`, `directors`, `directorsAttestation`, `financial` — and moves `verificationState` to `documents_submitted` as a side effect of that payload arriving. This backend's `submit-documents` takes **no body at all**: it only advances `CREATED → DOCUMENTS_SUBMITTED`, gated on at least one `OrganizationDocument` already existing (uploaded through some other, not-yet-built, mechanism — no document-upload endpoint exists in this slice either). **The real frontend's Stage 2 submission cannot work against this backend as built.** This was a deliberate scope-narrowing by the slice B1 task (build the verification *state-machine skeleton* with a document-existence guard; regulatory/director/financial *data capture* is a future slice), not a bug silently "fixed" toward the frontend — but it means `submit-verification` (and the document-upload endpoint it implies) is still a real gap, not yet scheduled.
+
+Also: `RecordDecisionInput.reviewerName` (client-supplied) is intentionally **not** part of the real request body — the reviewer is the authenticated caller (`AccessTokenClaims.userId()`/`TenantContext.userId()`), the same "never client-supplied" principle as `tenant_id`. `reviewerName` is a mock-mode-only convenience with no real session to derive it from.
 
 ## Super Admin: marketplace listing conflicts (SA-3.4) — `listingConflictsService.ts`
 | Method | Path | Request | Response |

@@ -242,6 +242,20 @@ tenant) — each sets the inherited `tenantId` equal to its own
 three onto it rather than leaving them on plain `AbstractEntity` with a
 manually-populated `tenantId`.
 
+## Logging: Lombok's `@Slf4j`, not a hand-written `Logger` field
+
+Every class that logs uses `@Slf4j` (generates the `log` field via
+annotation), not `private static final Logger log = LoggerFactory.getLogger(X.class)`
+by hand — consistent with how heavily this codebase already leans on Lombok
+elsewhere (`@Getter`/`@Setter`/`@Builder`/`@RequiredArgsConstructor` on
+nearly every class). The two classes that predate this convention
+(`SuperAdminBootstrap`, `TenantScopeResolver`) were converted to match
+rather than left as the odd ones out. Log the *fact* an action happened
+(`"Tenant created: ... by actor {}"`) at INFO, never anything sensitive —
+same rule as `SuperAdminBootstrap`'s own comment: a password (or a
+temporary one, see `TenantStaffAccountListener`) is never logged, at any
+level, including debug.
+
 ## `dev` profile and SQL logging
 
 `show-sql`/`format_sql` live in `application-dev.yml`, not the base
@@ -369,9 +383,182 @@ replacement for `AbstractEntity`.
 Recording a `VerificationDecision` with `decision = REQUEST_MORE_INFO` does
 **not** change the organization's `verification_state` — it stays
 `UNDER_REVIEW` while the reviewer waits for a clearer scan. Only `APPROVED`
-and `REJECTED` transition state. The transition logic itself lands in a
-later slice (the service layer); this rule is recorded now so it isn't
-reinvented differently when that slice is built.
+and `REJECTED` transition state. Built in `AdminTenantService.recordVerificationDecision`
+(Tenancy slice B1) — `EnumJsonMappingTests`-style regression coverage for
+this exact rule lives in `AdminTenantWriteIT.requestMoreInfoLeavesVerificationStateUnderReview`,
+exercised over real HTTP, not just a unit test, since this is exactly the
+kind of exception a generic "decision implies transition" implementation
+gets wrong by default.
+
+## A verification decision cascades to every document's status, not just `verificationState`
+
+`recordVerificationDecision` doesn't stop at flipping `Organization.verificationState`
+— found missing during a live manual walkthrough, not written from the task
+spec (which only mentioned `failedDocumentIds` in the context of
+`REJECTED`), then fixed once the gap was actually visible: a tenant
+approved via real HTTP came back `verificationState: "verified"` while
+every one of its documents still sat at `status: "pending"` forever, which
+doesn't reflect reality — a verified tenant's evidence should read as
+verified too. Matches the real frontend's own mock logic exactly
+(`recordVerificationDecision` in `tenantsService.ts`):
+
+- **`APPROVED`** → every `OrganizationDocument` on the tenant becomes
+  `VERIFIED`.
+- **`REJECTED`** → the documents named in `failedDocumentIds` become
+  `REJECTED` (with the decision's `reason` copied onto each one's own
+  `rejectionReason`); every *other* document on the tenant becomes
+  `VERIFIED` — a rejection is a statement about specific evidence, not an
+  indictment of the whole submission.
+- **`REQUEST_MORE_INFO`** → no document status changes at all, same as
+  `verificationState` — see the note above.
+
+## Document resubmission doesn't itself advance verification state
+
+`POST /api/admin/tenants/{id}/documents/{documentId}/resubmit` replaces one
+`OrganizationDocument`'s metadata (`fileName`/`size`/`storageKey`) and resets
+its `status` to `PENDING` — nothing more. It deliberately does **not** touch
+the organization's `verificationState`: `submit-documents`/`begin-review`
+still have to run again afterward to move the tenant back into the review
+queue. Keeping the state machine's edges explicit (state only ever changes
+inside `submitDocuments`/`beginReview`/`recordVerificationDecision`) means
+there's no side door where re-uploading a file quietly re-triggers a review
+transition nobody asked for.
+
+## `TenantStatus.SUSPENDED` vs `VerificationState.SUSPENDED` — two different axes, same word
+
+Both enums have a `SUSPENDED` constant, and they mean **completely
+different things** — see "The two status axes on `Organization`" above for
+the full status/verificationState split this sits inside. `TenantStatus.SUSPENDED`
+means portal access is cut off (the tenant's staff can't log in / use the
+console at all). `VerificationState.SUSPENDED` means marketplace
+publishing/payment collection is paused while still `ACTIVE` on the portal
+axis — e.g. a compliant tenant suspended for non-payment (Northbridge
+Estates in the frontend's seed data) can still explore the portal and
+manage estates; a portal-`SUSPENDED` tenant can't do anything regardless of
+its verification state. **Never write a method that takes both a
+`TenantStatus` and a `VerificationState` and reasons about them together as
+if they were one concept** — that's the tell the two axes are being
+collapsed into one, which this whole design exists to prevent. Tenancy
+slice B1 touches `VerificationState` only; `TenantStatus` transitions
+(suspend/reactivate/offboard) are slice B2's job, not this one's.
+
+## `audit` is a cross-cutting module, not a shared/open one
+
+`audit` is a real Spring Modulith application module (not `Type.OPEN` like
+`common`) — it has actual behaviour (`AuditApiImpl`, a real table), not just
+shared base types. It's cross-cutting for a structural reason: *every*
+module will eventually need to write an audit entry (a tenant is created, a
+verification decision is recorded, a support-access grant is used, a plan
+changes), and none of those writes should ever touch `audit_log_entries`
+directly — they call `AuditApi.record(AuditEntryRequest)`, the module's one
+public method, same "define an `<Module>Api` interface, never expose the
+entity/repository" rule every other module follows. `action` is a plain
+string code (`"tenant.created"`, `"tenant.verification_approved"`, ...), not
+a shared enum, specifically so a future module adding a new audit event
+never has to modify a type `audit` owns.
+
+`AuditApi.record(...)` is a **plain `@Transactional` method call**, not an
+event — deliberately, unlike `TenantStaffAccountRequested` below. An audit
+entry must roll back together with whatever it's recording (a tenant
+creation that fails partway through must not leave an orphaned "tenant
+created" audit row), so it has to run in the caller's own transaction, the
+same way a direct method call always does. There's no cycle risk here to
+justify an event: `audit` doesn't need anything back from `tenancy`/
+`identity`/etc., so the dependency is one-directional and ordinary.
+
+The read side (a `GET` audit-log endpoint, dashboard activity-stream wiring)
+is explicitly out of scope for slice B1 — `AuditLogEntryRepository` exists
+with no custom query methods yet, on purpose.
+
+## Cross-module writes that would create a cycle: use a plain `@EventListener`, never `@ApplicationModuleListener`
+
+`identity` already depends on `tenancy` (via `TenancyApi`, for the
+tenant-context filter's branch switcher). So when `tenancy`'s tenant-creation
+flow (Tenancy slice B1) needed to create an `identity`-owned `User` +
+`UserRole` (the new tenant's first Executive Director account), a direct
+`tenancy` → `identity` call would have closed that into a two-module cycle —
+confirmed directly, not guessed: it was tried, and `ModularityTests` failed
+with "Cycle detected: Slice identity -> Slice tenancy -> Slice identity."
+
+The fix: `tenancy` publishes a plain Spring application event,
+`TenantStaffAccountRequested` (a record living in `tenancy`'s own public
+package, not `internal` — publishing a public event type is a normal part
+of a module's public API, no different from a DTO), and `identity`'s
+`TenantStaffAccountListener` consumes it with a **plain**
+`org.springframework.context.event.@EventListener`, never Spring Modulith's
+`@ApplicationModuleListener`. This distinction matters and is easy to get
+backwards:
+
+- Modulith's `@ApplicationModuleListener` defaults to **asynchronous,
+  after-commit** execution, backed by the `event_publication` tracking
+  table already in this schema (for reliable at-least-once delivery across
+  a restart). That's the right tool when the two things genuinely don't
+  need to happen atomically. It is the **wrong** tool here: "the
+  organization, its first Executive Director user, and that user's role
+  assignment all roll back together as one transaction" is a hard
+  requirement of this slice, and async/after-commit delivery would mean the
+  organization commits *before* the user is ever created, with no way to
+  undo it if user creation then fails.
+- A plain `@EventListener` runs **synchronously, on the same thread, inside
+  the same transaction** as the `ApplicationEventPublisher.publishEvent(...)`
+  call that raised it — behaviourally identical to a direct method call for
+  transaction-propagation purposes. An exception thrown inside the listener
+  propagates straight back out of `publishEvent(...)` and fails/rolls back
+  the whole enclosing `@Transactional` method, exactly as if `tenancy` had
+  called `identity` directly. `TenantStaffAccountListener`'s handler method
+  is additionally marked `@Transactional(propagation = MANDATORY)` — not to
+  start a transaction (`publishEvent` already runs inside one), but to fail
+  loudly if it's ever invoked with no active transaction, rather than
+  silently doing the wrong thing.
+
+The dependency direction stays exactly what it already was: only `identity`
+imports `TenantStaffAccountRequested` (the same direction `TenancyApi`
+already goes), `tenancy` imports nothing from `identity` at all. This
+pattern — a public event type owned by the module doing the writing,
+consumed by a plain synchronous listener in the module that owns the target
+entity — is the general answer whenever two Modulith application modules
+would otherwise need to depend on each other in both directions for a
+same-transaction write. Reach for it before reaching for
+`@ApplicationModuleListener` if "must roll back together" is a requirement.
+
+**A real bug this created, found and fixed after the fact**: `TenantStaffAccountListener`
+originally saved the new `User` with no email-uniqueness check at all —
+unlike `AuthService.register()`, which proactively checks
+`existsByEmailIgnoreCase` before writing. The DB-level unique index
+(`idx_users_email_lower`) still caught a collision, so no duplicate account
+could ever actually get created — but the error the caller saw was wrong:
+`AdminTenantController`'s only `DataIntegrityViolationException` handler at
+the time unconditionally reported every conflict as `RC_NUMBER_ALREADY_REGISTERED`,
+even when the real cause was the primary contact's email being taken by an
+existing account. Fixed by: (1) the same proactive-check-plus-DB-backstop
+pattern already used for `rc_number`, added to the listener; (2) a new
+`common.DuplicateEmailException` — living in `common`, not `identity`,
+specifically so `tenancy`'s exception handler (which cannot import anything
+from `identity`) can still catch and correctly label it. Worth remembering
+next time a listener/service writes to a uniquely-constrained column: a
+`DataIntegrityViolationException` handler that reports one fixed message
+for every possible constraint violation will mislabel every collision
+except the one it was written for.
+
+## The verification reviewer's identity comes from the authenticated caller, never the request body
+
+`VerificationDecisionRequest` (the body of `POST /api/admin/tenants/{id}/verification-decision`)
+deliberately has no `reviewerName`/`reviewerUserId` field, even though the
+frontend's own `RecordDecisionInput.reviewerName: string` exists — that
+field is a mock-mode-only convenience the frontend uses because there's no
+real session in mock mode to derive an identity from. The real backend
+already has one: `reviewerUserId` (on `VerificationDecision` and
+`Organization.reviewerUserId`, set by `begin-review`) is always the
+authenticated Super Admin's own id, resolved server-side from
+`common.TenantContext.get().userId()` — the same "never client-supplied"
+principle already applied to `tenant_id` (see "Permission slugs are
+authorities" above). A client-supplied reviewer identity would let any
+caller attribute a decision to someone else entirely; trusting the token
+(or, here, the tenant-context scope `TenantContextFilter` already resolved
+from it) is the only safe source. `AdminTenantController` reads this via
+`TenantContext`/`TenantScope` from `common` specifically so it never has to
+import anything from `identity` — see the event-listener note above for why
+that matters.
 
 ## Support access is visibility, not authority
 

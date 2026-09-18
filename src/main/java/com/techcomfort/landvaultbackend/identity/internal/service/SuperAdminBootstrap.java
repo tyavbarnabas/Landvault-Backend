@@ -9,8 +9,7 @@ import com.techcomfort.landvaultbackend.identity.internal.repository.RoleReposit
 import com.techcomfort.landvaultbackend.identity.internal.repository.UserRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.UserRoleRepository;
 import lombok.RequiredArgsConstructor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -31,12 +30,12 @@ import org.springframework.transaction.annotation.Transactional;
  * Liquibase's own migration runs, completes — is fully refreshed), and does
  * nothing at all unless explicitly enabled. See {@link SuperAdminBootstrapProperties}.
  */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 @EnableConfigurationProperties(SuperAdminBootstrapProperties.class)
 public class SuperAdminBootstrap implements ApplicationRunner {
 
-    private static final Logger log = LoggerFactory.getLogger(SuperAdminBootstrap.class);
     private static final String SUPER_ADMIN_ROLE_CODE = "super_admin";
 
     private final SuperAdminBootstrapProperties properties;

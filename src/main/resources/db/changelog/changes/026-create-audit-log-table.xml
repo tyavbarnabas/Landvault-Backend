@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        audit.internal.domain.AuditLogEntry — platform-wide, append-only
+        (no updated_at/deleted, same AbstractAppendOnlyEntity convention as
+        verification_decisions). Cross-cutting by design: every module will
+        eventually write here through AuditApi.record(...), never directly
+        against this table — see AGENTS.md.
+
+        tenant_id is nullable — a platform-level action (e.g. a future
+        Super Admin settings change) has none. actor_user_id is NOT NULL:
+        every audited action has a real actor, even a platform action
+        (there's no "the system did this" audit entry in this design —
+        system/background work that isn't a slice yet has no writer here).
+    -->
+    <changeSet id="026-create-audit-log-table" author="landvault">
+        <sql>
+            CREATE TABLE audit_log_entries (
+                id              uuid NOT NULL,
+                created_at      timestamp(6) with time zone NOT NULL,
+                created_by      varchar(255),
+
+                actor_user_id   uuid NOT NULL,
+                action          varchar(100) NOT NULL,
+                target_type     varchar(100) NOT NULL,
+                target_id       uuid NOT NULL,
+                tenant_id       uuid,
+                detail          text,
+                privileged      boolean NOT NULL DEFAULT false,
+                occurred_at     timestamp(6) with time zone NOT NULL,
+
+                PRIMARY KEY (id)
+            );
+
+            CREATE INDEX idx_audit_log_entries_tenant_id ON audit_log_entries (tenant_id);
+            CREATE INDEX idx_audit_log_entries_actor_user_id ON audit_log_entries (actor_user_id);
+            CREATE INDEX idx_audit_log_entries_target ON audit_log_entries (target_type, target_id);
+            CREATE INDEX idx_audit_log_entries_occurred_at ON audit_log_entries (occurred_at);
+
+            COMMENT ON TABLE audit_log_entries IS
+                'Append-only platform-wide audit trail — never updated or deleted. Written only through audit.AuditApi.record(...), never directly, so every module logs through one interface instead of writing to this table by hand.';
+        </sql>
+        <rollback>
+            <sql>
+                DROP TABLE audit_log_entries;
+            </sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
