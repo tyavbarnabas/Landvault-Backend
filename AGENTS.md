@@ -261,16 +261,52 @@ level, including debug.
 `show-sql`/`format_sql` live in `application-dev.yml`, not the base
 `application.yml` — the base config stays quiet under every environment
 where no profile is explicitly activated, including tests and any deploy
-that forgets to set one. **`dev` is the local default**: local development
-is expected to run with `SPRING_PROFILES_ACTIVE=dev` set (already in
-`.env.example`/`.env`, loaded via `springboot4-dotenv`), not via a
-Spring-level `spring.profiles.default` fallback baked into `application.yml`
-— that was tried and reverted, because it makes `dev` (and SQL logging)
-active for *anything* that doesn't explicitly set a profile, which is the
-opposite of what "quiet by default" means once a real deploy exists. This
-matters beyond noise: bind parameters get logged too, and this module now
-stores NDPR-regulated personal data (`directors.id_number`) that must
-never land in a shared log.
+that forgets to set one. Local development is expected to run with
+`SPRING_PROFILES_ACTIVE=dev`, not via a Spring-level
+`spring.profiles.default` fallback baked into `application.yml` — that was
+tried and reverted, because it makes `dev` (and SQL logging) active for
+*anything* that doesn't explicitly set a profile, which is the opposite of
+what "quiet by default" means once a real deploy exists. This matters beyond
+noise: bind parameters get logged too, and this module now stores
+NDPR-regulated personal data (`directors.id_number`) that must never land in
+a shared log.
+
+### `SPRING_PROFILES_ACTIVE` in `.env` does NOT activate the profile
+
+This file previously claimed the `dev` profile comes from `.env` "loaded via
+`springboot4-dotenv`". **That is false, and was verified false** — an earlier
+version of this note asserted it without checking. Running the app with
+`SPRING_PROFILES_ACTIVE=dev` present on line 1 of `.env` logs:
+
+```
+No active profile set, falling back to 1 default profile: "default"
+```
+
+The reason: dotenv contributes a *property source* to the Spring
+`Environment`, but profile activation is resolved earlier, during config-data
+processing, before that property source is consulted. Everything else in
+`.env` still works fine (`DB_PORT`, `JWT_SECRET`, `BOOTSTRAP_SUPER_ADMIN*`,
+…), because those are ordinary late-bound property lookups. Profile selection
+is the one thing that needs the value *before* Boot reads any
+`application-{profile}.yml`.
+
+**The profile must come from the real environment**: an env var on the
+IntelliJ run configuration, or `SPRING_PROFILES_ACTIVE=dev ./mvnw spring-boot:run`
+from a shell. Both were confirmed working (`The following 1 profile is
+active: "dev"`).
+
+**What this silently broke for however long it was believed**: everything
+`application-dev.yml` carries was simply never active locally — `show-sql`
+and `format_sql` (so SQL logging was never on, despite the section above
+describing it as a local default), and Swagger UI / `/v3/api-docs`, which the
+base config disables and only `dev` re-enables. `SwaggerDevProfileIT` passes
+regardless because it activates the profile explicitly, so no test ever
+contradicted the claim. It surfaced only when the password-reset slice added
+`spring.mail.*` to `application-dev.yml` and startup began failing outright
+with "required a bean of type 'JavaMailSender'" — a missing profile finally
+became loud instead of invisible. If a future slice puts something in
+`application-dev.yml` and it "doesn't seem to apply", check the profile line
+in the startup log first.
 
 ## `directors` is the most sensitive table in the system
 
@@ -697,6 +733,200 @@ revocation those branches exist to make stick. This was a real bug caught
 by the Testcontainers integration test, not the mocked unit tests (mocks
 don't roll back anything, so they couldn't have caught it) — a reminder
 that the integration test isn't redundant with the unit tests here.
+
+## One `otp_codes` table, discriminated by purpose
+
+Password reset's one-time codes live in a single `otp_codes` table carrying a
+`purpose` discriminator, **not** a `password_reset_codes` table. Registration
+verification is deliberately deferred but may be switched on later, and
+sensitive-action confirmation is plausible after that — three near-identical
+tables (each with its own hashing, expiry, attempt-limiting and rate-limiting
+code) would be strictly worse than one. Turning on a new purpose should be a
+configuration and code-path decision, not new infrastructure.
+
+**`purpose` has exactly one legal value today** (`PASSWORD_RESET`), enforced by
+a CHECK constraint. `REGISTRATION` is deliberately *not* pre-seeded as an
+allowed value: a value with no code path behind it is the same kind of
+fabrication as a permission slug nothing checks. Widen the CHECK in the slice
+that actually builds the new purpose.
+
+**`channel` is the opposite case, deliberately**: `EMAIL | SMS | WHATSAPP` are
+all legal, though only `EMAIL` is ever produced today. That column exists so an
+SMS/WhatsApp implementation needs no schema change — it records how a code was
+actually delivered, which is a fact about the row, not a claim that a code path
+exists.
+
+**`destination` is captured at send time, never re-read from the user at verify
+time.** If the user's email changes between requesting a code and using it, the
+record must still say where the code actually went.
+
+**`otp_codes` is not RLS-policied**, for exactly the same reason as
+`refresh_tokens` and `users`: both reset endpoints are public and run *before*
+any tenant scope exists, so the fail-closed default would return zero rows and
+break the flow outright. Codes are reached only by `user_id`, never enumerated
+across tenants.
+
+### SHA-256, not BCrypt, for codes
+
+`otp_codes.code_hash` is SHA-256 — deliberately *not* the `BCryptPasswordEncoder`
+used for passwords. BCrypt's slowness exists to protect low-entropy, long-lived
+secrets against offline cracking. A one-time code is neither: it lives ten
+minutes and is attempt-limited to five guesses, so the brute-force protection
+is the *limiter*, not the hash cost. BCrypt here would buy nothing and make
+every verification needlessly slow. Same reasoning, same algorithm, as
+`refresh_tokens.token_hash`.
+
+Comparison is `MessageDigest.isEqual`, not `String.equals` — constant-time, so
+verification timing never narrows the code.
+
+### `consumedAt` marks every terminal state, not just successful use
+
+A code stops being usable for three reasons, and they're deliberately recorded
+differently:
+
+- **used successfully** → `consumed_at` set
+- **superseded by a resend** → `consumed_at` set (never two valid codes at once)
+- **attempt limit exhausted** → `consumed_at` stays null; this is already
+  visible as `attempt_count` reaching the limit
+
+So no information is lost by the first two sharing a column — the three cases
+stay distinguishable from the surrounding data.
+
+## The neutral-response rule on password reset
+
+`POST /api/auth/forgot-password` returns **the same status and the same body**
+whether or not the address belongs to an account, and whether or not a code was
+actually generated. Three separate branches return without generating anything
+(unknown email, account over its rate limit, and the success path's own
+early exits) and none of them is distinguishable from outside.
+
+This is the same discipline as the timing-safe `login()`: a helpful "no account
+found" hands an attacker a way to enumerate which addresses are registered.
+`AuthException.InvalidOrExpiredResetCode` extends it to the *verify* side — one
+exception and one message for "no code was requested", "expired", "already
+used", "attempt limit exhausted", "wrong code" and "no such account", because
+distinguishing them leaks both account existence and whether a reset is in
+flight.
+
+**Don't add a branch to `AuthController.forgotPassword` that varies the
+response** — that would undo the whole point of the endpoint.
+
+**One honest limitation, stated rather than papered over**: the *body* is
+byte-identical (asserted in `PasswordResetIT`), but a real account still does
+strictly more work (a DB write plus delivery) than an unknown address, which
+leaves a theoretical timing side-channel. `login()` closes its equivalent with
+a precomputed dummy hash; this endpoint does not attempt to equalise, because
+doing so would mean performing fake writes. The exposure is far narrower than a
+distinguishable response would be, and it is a known, accepted gap — not one
+this slice claims to have closed.
+
+## "Sessions revoked" on password reset means refresh tokens, not access tokens
+
+A completed reset revokes **every one of the user's refresh tokens**, so no new
+session can be minted. An **already-issued access token still rides out its
+remaining lifetime** — up to the full 15 minutes.
+
+This is the same accepted trade-off as every other permission change in this
+system (see the JWT section above, and the tenant-suspension gate). It is
+recorded here because a user resetting their password *specifically because
+they think they're compromised* would reasonably assume the attacker is
+ejected instantly, and they aren't. Never describe this as instant severance in
+an API response, a comment, or UI copy. Closing it properly needs the same
+denylist-or-shorter-expiry decision the JWT note describes, not a quiet patch.
+
+## `noRollbackFor` on `resetPassword`, and why the mocked test can't catch it
+
+`AuthService.resetPassword` is `@Transactional(noRollbackFor = AuthException.InvalidOrExpiredResetCode.class)`
+and that is **load-bearing**, exactly as it is on `refresh()`. The wrong-code
+branch increments `attempt_count` and *then* throws to fail the request;
+Spring's default rollback-on-unchecked-exception would silently undo every
+increment, leaving the counter permanently at zero and PR-4's brute-force
+protection completely inert — a six-digit code with no working limiter.
+
+This was verified by deliberately removing the annotation and watching
+`PasswordResetIT.fiveWrongAttemptsInvalidateTheCodeEvenForTheCorrectOne` go red
+with `expected: 5 but was: 0`, then restoring it — a guard that can't fail isn't
+a guard. Note which test caught it: the **mocked unit test
+(`AuthServicePasswordResetTest.aWrongCodeIncrementsTheAttemptCounter`) passed
+either way**, because mocks don't roll back anything. Same lesson already
+recorded for refresh-token theft detection: for anything that writes and then
+throws, the integration test is not redundant with the unit tests.
+
+## OTP delivery: MailDev + `JavaMailSender`, and the alternatives rejected
+
+`OtpDeliveryService` has two implementations. **`EmailOtpDeliveryService` is
+the default** — plain SMTP via Spring's `JavaMailSender`, pointed at **MailDev**
+in development. `LoggingOtpDeliveryService` exists for tests and CI only.
+Each obvious alternative was considered and rejected for a specific reason:
+
+- **Why not just log the code to the console?** It proves the *flow* works but
+  never exercises the *email*. SMTP connection handling, message construction,
+  the subject line, the body — all of it stays untested until the day you point
+  at a real provider and discover something is wrong. MailDev exercises the
+  whole real path.
+- **Why not a provider account (Brevo, SES, Gmail) from the start?** It makes
+  the slice depend on a vendor signup, credentials in config, and a daily send
+  limit, for a feature nobody outside the team is using yet. MailDev needs none
+  of that: `docker compose up -d` and there's a working inbox at
+  `http://localhost:1080`.
+- **Why MailDev rather than MailHog?** Both are local fake SMTP servers with a
+  web UI; MailDev is actively maintained, MailHog's development has largely
+  stalled.
+- **Why `JavaMailSender` rather than a provider SDK?** It's plain SMTP, already
+  in Spring Boot, and vendor-agnostic. Moving from MailDev to Brevo, SES or a
+  self-hosted server is a **host/port/credentials change per profile, not a code
+  change**. A provider SDK would weld the sending code to one vendor.
+- **What MailDev deliberately cannot do** is deliver to a real inbox. That is
+  the point: test emails can never reach real people.
+
+`EmailOtpDeliveryService` is therefore environment-agnostic by design — it never
+knows which SMTP server it's talking to. Keep it that way; a provider-specific
+branch inside it would defeat the entire arrangement. The message is plain text
+(code, expiry, and an ignore-this-if-you-didn't-ask-for-it line); an HTML
+template system is deliberately out of scope.
+
+### Where the SMTP host is, and is not, configured
+
+`spring.mail.*` is set **only in `application-dev.yml`** (MailDev at
+`localhost:1025`, no auth, no TLS). The base `application.yml` deliberately
+defines **no default host at all**. With no host, Boot creates no
+`JavaMailSender` bean, so `EmailOtpDeliveryService` cannot be constructed and
+the application **fails at startup** — the same fail-loud-on-missing-config rule
+as `JWT_SECRET`. A deployment that forgets to configure mail must not boot
+happily and silently send into a container that isn't there. An earlier draft
+defaulted the host to an empty string; that was wrong, because Boot treats the
+property as *present* and builds a sender with a blank host, turning a startup
+failure into a confusing runtime one.
+
+The `from` address is configuration too (`landvault.otp.from-address`), never
+hardcoded in the sending code.
+
+### `LoggingOtpDeliveryService` is for tests only — and that is a security boundary
+
+Selected by `landvault.otp.delivery=log`, set once in
+`src/test/resources/application.properties` so the whole suite gets it without
+each test class opting in (that file layers *onto* the main `application.yml`
+rather than replacing it — a different filename, so both load; this was
+verified, not assumed). `PasswordResetIT` reads codes back out of that log line,
+which is why the suite passes with **no MailDev container running**.
+
+**It is the only place in this codebase permitted to log a code.** Every other
+path — `EmailOtpDeliveryService` included — treats a code the way
+`SuperAdminBootstrap` treats a password: never logged at any level including
+debug, and never returned in an API response (`PasswordResetIT` asserts the
+response body doesn't contain it). Selecting `log` in a real environment would
+write live reset codes into the application log, where anyone with log access
+could take over an account. That's why it is no longer the `matchIfMissing`
+default: forgetting to configure delivery now yields email (or a loud startup
+failure), never silent logging.
+
+`landvault.otp.*` also carries `code-ttl` (10m), `max-attempts` (5),
+`rate-limit-max-requests` (3) and `rate-limit-window` (15m). Every one is a
+security parameter: the attempt limit is what makes a million-combination code
+safe, and the rate limit is what stops the endpoint being a free way to flood
+someone's inbox and run up delivery costs. Rate limiting counts codes
+*generated* in the window, so superseded and failed ones still count — otherwise
+requesting repeatedly would reset the limit each time.
 
 ## Permission slugs are authorities; `tenant_id` is never client-supplied
 

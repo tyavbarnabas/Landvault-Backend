@@ -19,5 +19,20 @@ services:
       timeout: 5s
       retries: 10
 
+  # Local fake SMTP server + web inbox. Reset codes are read from the web UI
+  # at http://localhost:1080 during development — nothing it receives can
+  # ever reach a real person's inbox, which is the entire point of it. See
+  # AGENTS.md for why this rather than a provider account or console logging.
+  maildev:
+    # Pinned, deliberately not `latest`: untagged pulls 3.0.0-rc.3, a release
+    # candidate whose web UI 404s at `/` (only /index.html resolves). Verified
+    # directly — don't "modernise" this to an untagged image.
+    image: maildev/maildev:2.1.0
+    container_name: landvault-maildev
+    restart: unless-stopped
+    ports:
+      - "${MAILDEV_WEB_PORT:-1080}:1080"   # web UI
+      - "${MAILDEV_SMTP_PORT:-1025}:1025"  # SMTP
+
 volumes:
   landvault_postgres_data:

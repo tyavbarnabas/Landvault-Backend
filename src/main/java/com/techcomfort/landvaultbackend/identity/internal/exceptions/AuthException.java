@@ -48,4 +48,15 @@ public abstract class AuthException extends RuntimeException {
     /** Not found, expired, revoked, or lost a concurrent rotation race. */
     public static class InvalidRefreshToken extends AuthException {
     }
+
+    /**
+     * Deliberately one exception for every password-reset failure: no code
+     * was ever requested, the code expired, it was already used, its attempt
+     * limit is exhausted, the code is simply wrong, or the email matches no
+     * account at all. Distinguishing them would tell an attacker which
+     * addresses are registered and whether a reset is in flight — the same
+     * reasoning that makes {@link InvalidCredentials} generic.
+     */
+    public static class InvalidOrExpiredResetCode extends AuthException {
+    }
 }

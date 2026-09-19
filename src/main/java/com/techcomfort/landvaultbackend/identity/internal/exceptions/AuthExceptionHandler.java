@@ -52,6 +52,15 @@ public class AuthExceptionHandler {
                 .body(ErrorResponse.of("Refresh token is invalid or expired.", "INVALID_REFRESH_TOKEN"));
     }
 
+    // 400, not 401: this isn't a failed authentication of a session, it's a
+    // bad input to a public endpoint. One message for every failure mode —
+    // see AuthException.InvalidOrExpiredResetCode.
+    @ExceptionHandler(AuthException.InvalidOrExpiredResetCode.class)
+    public ResponseEntity<ErrorResponse> handleInvalidOrExpiredResetCode() {
+        return ResponseEntity.badRequest()
+                .body(ErrorResponse.of("That reset code is invalid or has expired. Request a new one.", "INVALID_OR_EXPIRED_CODE"));
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException ex) {
         Map<String, String> fieldErrors = ex.getBindingResult().getFieldErrors().stream()

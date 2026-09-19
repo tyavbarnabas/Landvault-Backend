@@ -11,6 +11,20 @@ spring:
     properties:
       hibernate:
         format_sql: true
+  # MailDev, from docker-compose.yml — a local fake SMTP server whose inbox
+  # is at http://localhost:1080. No auth, no TLS: it accepts anything and
+  # delivers to nobody, which is exactly what a development mail path should
+  # do. Only the host/port/credentials differ between here and a real
+  # provider — EmailOtpDeliveryService itself is environment-agnostic.
+  mail:
+    host: localhost
+    port: ${MAILDEV_SMTP_PORT:1025}
+    properties:
+      mail:
+        smtp:
+          auth: false
+          starttls:
+            enable: false
 
 # Re-enabled here — see the base application.yml for why they're off by
 # default. SecurityConfig separately permits these paths only when `dev`

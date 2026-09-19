@@ -60,6 +60,16 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
+        <!--
+            Plain SMTP via JavaMailSender, deliberately not a provider SDK:
+            switching from MailDev to Brevo/SES/a self-hosted server is a
+            host/port/credentials change per profile, not a code change. See
+            AGENTS.md.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>

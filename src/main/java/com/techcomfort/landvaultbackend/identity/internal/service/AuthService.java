@@ -1,17 +1,25 @@
 package com.techcomfort.landvaultbackend.identity.internal.service;
 
+import com.techcomfort.landvaultbackend.audit.AuditApi;
+import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
 import com.techcomfort.landvaultbackend.identity.dto.AuthResponse;
 import com.techcomfort.landvaultbackend.identity.dto.AuthUserResponse;
+import com.techcomfort.landvaultbackend.identity.dto.ForgotPasswordRequest;
 import com.techcomfort.landvaultbackend.identity.dto.LoginRequest;
 import com.techcomfort.landvaultbackend.identity.dto.RefreshRequest;
 import com.techcomfort.landvaultbackend.identity.dto.RefreshResponse;
 import com.techcomfort.landvaultbackend.identity.dto.RegisterRequest;
+import com.techcomfort.landvaultbackend.identity.dto.ResetPasswordRequest;
+import com.techcomfort.landvaultbackend.identity.internal.enums.OtpChannel;
+import com.techcomfort.landvaultbackend.identity.internal.enums.OtpPurpose;
 import com.techcomfort.landvaultbackend.identity.internal.enums.UserStatus;
 import com.techcomfort.landvaultbackend.identity.internal.exceptions.AuthException;
+import com.techcomfort.landvaultbackend.identity.internal.domain.OtpCode;
 import com.techcomfort.landvaultbackend.identity.internal.domain.RefreshToken;
 import com.techcomfort.landvaultbackend.identity.internal.domain.Role;
 import com.techcomfort.landvaultbackend.identity.internal.domain.User;
 import com.techcomfort.landvaultbackend.identity.internal.domain.UserRole;
+import com.techcomfort.landvaultbackend.identity.internal.repository.OtpCodeRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.PermissionRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.RefreshTokenRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.RoleRepository;
@@ -24,6 +32,8 @@ import com.techcomfort.landvaultbackend.identity.internal.security.RoleClaim;
 import com.techcomfort.landvaultbackend.tenancy.TenancyApi;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -42,12 +52,15 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
- * Registration, login and refresh — the business logic behind
- * {@code AuthController}. See AGENTS.md for the token-lifetime, rotation
- * and tenant-never-client-supplied rules this implements.
+ * Registration, login, refresh and password reset — the business logic
+ * behind {@code AuthController}. See AGENTS.md for the token-lifetime,
+ * rotation, tenant-never-client-supplied and neutral-response rules this
+ * implements.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
+@EnableConfigurationProperties(OtpProperties.class)
 public class AuthService {
 
     private static final Set<String> PLATFORM_STAFF_ROLE_CODES = Set.of("super_admin", "platform_moderator", "compliance_officer");
@@ -64,6 +77,10 @@ public class AuthService {
     private final JwtService jwtService;
     private final JwtProperties jwtProperties;
     private final TenancyApi tenancyApi;
+    private final OtpCodeRepository otpCodeRepository;
+    private final OtpDeliveryService otpDeliveryService;
+    private final OtpProperties otpProperties;
+    private final AuditApi auditApi;
 
     // Precomputed once at startup, not per login attempt — see login()'s
     // timing-safe-failure comment. Not `final`/constructor-assigned: it's
@@ -206,6 +223,115 @@ public class AuthService {
                 user.getId(), user.getEmail(), user.getTenantId(), ctx.platformStaff(), ctx.roleClaims(), ctx.permissions());
 
         return new RefreshResponse(accessToken.token(), newRefresh.rawToken());
+    }
+
+    /**
+     * Issues a password-reset code, or silently does nothing — the caller
+     * cannot tell which. Three separate branches here return without
+     * generating anything: an unknown email, an account over its request
+     * rate limit, and (implicitly) any other reason there is nothing to
+     * send. Every one of them produces the same response the success path
+     * does, because a distinguishable response would let an attacker
+     * enumerate which addresses are registered. See AGENTS.md.
+     */
+    @Transactional
+    public void requestPasswordReset(ForgotPasswordRequest request) {
+        var maybeUser = userRepository.findByEmailIgnoreCase(request.email());
+        if (maybeUser.isEmpty()) {
+            return;
+        }
+        User user = maybeUser.get();
+
+        Instant now = Instant.now();
+        long recentRequests = otpCodeRepository.countByUserIdAndPurposeAndCreatedAtAfter(
+                user.getId(), OtpPurpose.PASSWORD_RESET, now.minus(otpProperties.rateLimitWindow()));
+        if (recentRequests >= otpProperties.rateLimitMaxRequests()) {
+            // Nothing generated, nothing sent — otherwise this endpoint is a
+            // free way to flood someone's inbox and run up delivery costs.
+            log.info("Password reset request rate limit reached for user {}; no code generated", user.getId());
+            return;
+        }
+
+        // Never two valid codes at once: requesting again supersedes the
+        // outstanding code rather than adding a second usable one.
+        List<OtpCode> outstanding = otpCodeRepository.findByUserIdAndPurposeAndConsumedAtIsNull(
+                user.getId(), OtpPurpose.PASSWORD_RESET);
+        outstanding.forEach(code -> code.setConsumedAt(now));
+        otpCodeRepository.saveAll(outstanding);
+
+        String rawCode = OtpCodes.generate();
+        OtpCode otpCode = OtpCode.builder()
+                .userId(user.getId())
+                .codeHash(OtpCodes.hash(rawCode))
+                .purpose(OtpPurpose.PASSWORD_RESET)
+                .channel(OtpChannel.EMAIL)
+                // Captured now, not re-read at verify time — see OtpCode.
+                .destination(user.getEmail())
+                .expiresAt(now.plus(otpProperties.codeTtl()))
+                .attemptCount(0)
+                .build();
+        otpCodeRepository.save(otpCode);
+
+        // The raw code leaves this method exactly once, to be delivered, and
+        // is never logged or persisted here — only its hash was stored above.
+        otpDeliveryService.send(otpCode.getDestination(), rawCode, otpCode.getChannel());
+        log.info("Password reset code issued for user {} via {}", user.getId(), otpCode.getChannel());
+    }
+
+    /**
+     * Verifies a reset code and replaces the password. Every failure throws
+     * the same {@link AuthException.InvalidOrExpiredResetCode} — see that
+     * class for why the reasons are not distinguished.
+     * <p>
+     * {@code noRollbackFor} is load-bearing, exactly as it is on
+     * {@link #refresh}: the wrong-code branch below increments
+     * {@code attemptCount} and <em>then</em> throws to fail the request.
+     * Spring's default rollback-on-unchecked-exception would silently undo
+     * every increment, leaving the attempt limit permanently at zero and the
+     * brute-force protection (PR-4) inert — a million-guess code with no
+     * working limiter.
+     */
+    @Transactional(noRollbackFor = AuthException.InvalidOrExpiredResetCode.class)
+    public void resetPassword(ResetPasswordRequest request) {
+        User user = userRepository.findByEmailIgnoreCase(request.email())
+                .orElseThrow(AuthException.InvalidOrExpiredResetCode::new);
+
+        OtpCode code = otpCodeRepository
+                .findFirstByUserIdAndPurposeAndConsumedAtIsNullOrderByCreatedAtDesc(user.getId(), OtpPurpose.PASSWORD_RESET)
+                .orElseThrow(AuthException.InvalidOrExpiredResetCode::new);
+
+        if (code.getExpiresAt().isBefore(Instant.now())) {
+            throw new AuthException.InvalidOrExpiredResetCode();
+        }
+        if (code.getAttemptCount() >= otpProperties.maxAttempts()) {
+            throw new AuthException.InvalidOrExpiredResetCode();
+        }
+        if (!OtpCodes.matches(request.code(), code.getCodeHash())) {
+            code.setAttemptCount(code.getAttemptCount() + 1);
+            otpCodeRepository.save(code);
+            throw new AuthException.InvalidOrExpiredResetCode();
+        }
+
+        user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
+        userRepository.save(user);
+
+        // Terminal: a used code can never be reused, even while it would
+        // otherwise still be inside its expiry window.
+        code.setConsumedAt(Instant.now());
+        otpCodeRepository.save(code);
+
+        // Stops new sessions being minted. Already-issued access tokens are
+        // NOT severed — they ride out their remaining lifetime (up to the
+        // 15-minute TTL), the same accepted trade-off as every other
+        // permission change here. See AGENTS.md; don't describe this as
+        // instant revocation.
+        revokeTokenFamily(user.getId());
+
+        auditApi.record(AuditEntryRequest.of(
+                user.getId(), "auth.password_reset_completed", "user", user.getId(), user.getTenantId(),
+                "Password reset via one-time code; refresh tokens revoked."));
+
+        log.info("Password reset completed for user {}; refresh tokens revoked", user.getId());
     }
 
     private AuthResponse issueAuthResponse(User user, List<UserRole> assignments) {

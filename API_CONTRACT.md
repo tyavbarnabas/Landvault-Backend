@@ -10,8 +10,17 @@ Base path convention below: `/api/...`. Auth: `Authorization: Bearer <token>` on
 | POST | `/api/auth/login` | `{ email, password }` | `{ user: AuthUser, token }` |
 | POST | `/api/auth/register` | `RegisterInput` | `{ user: AuthUser, token }` |
 | POST | `/api/auth/refresh` | (cookie or stored refresh token) | `{ token }` |
+| POST | `/api/auth/forgot-password` | `{ email }` | `{ message }` — always 200, always the same body |
+| POST | `/api/auth/reset-password` | `{ email, code, newPassword }` | `{ message }` |
 
 `AuthUser`: `{ name, email, phone, country, currency, kycStatus, kycType, twoFAEnabled, role: "client"|"super_admin", permissions: string[] }`
+
+The two password-reset routes are **built** (unlike most of this document), and back the frontend's existing `/forgot-password` route, which previously pointed at nothing. Two things the frontend must not assume:
+
+- `forgot-password` reveals nothing about whether the account exists — same status, same body, every time. Don't render "no account with that email"; there is no such response to render.
+- `reset-password` returns one generic `400 INVALID_OR_EXPIRED_CODE` for every failure (wrong code, expired, already used, attempt limit exhausted, no such account). Don't try to distinguish them in UI copy — the backend deliberately doesn't tell you which it was. Prompt the user to request a new code.
+
+See AGENTS.md for the neutral-response rule and the honest scope of "sessions revoked" on reset.
 
 ## Estates — `estatesService.ts` (mockData.ts: `Estate`, `Plot`)
 | Method | Path | Response |

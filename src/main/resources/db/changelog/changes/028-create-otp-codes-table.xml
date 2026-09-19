@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        identity.internal.domain.OtpCode — one-time codes, discriminated by
+        `purpose` rather than one table per purpose. Password reset is the
+        only purpose today; registration verification and sensitive-action
+        confirmation are plausible later, and three near-identical tables
+        would be worse than one.
+
+        Stores only code_hash, never the code: same reasoning as
+        refresh_tokens.token_hash — a database leak must not be a live
+        credential leak. SHA-256, not BCrypt: a code is short-lived and
+        attempt-limited, so BCrypt's deliberate slowness buys nothing.
+
+        Deliberately NOT row-level-security policied, same as refresh_tokens
+        and users: both reset endpoints are public and run before any tenant
+        scope exists, so a fail-closed policy would return zero rows and
+        break the flow outright. See AGENTS.md.
+
+        Column shapes match Hibernate's mapping for the entity, so
+        ddl-auto=validate passes. Don't hand-tune one without re-checking
+        against that mapping.
+    -->
+    <changeSet id="028-create-otp-codes-table" author="landvault">
+        <sql>
+            CREATE TABLE otp_codes (
+                id             uuid NOT NULL,
+                tenant_id      uuid,
+                branch_id      uuid,
+                created_at     timestamp(6) with time zone NOT NULL,
+                updated_at     timestamp(6) with time zone,
+                created_by     varchar(255),
+                updated_by     varchar(255),
+                deleted        boolean NOT NULL,
+
+                user_id        uuid NOT NULL,
+                code_hash      varchar(255) NOT NULL,
+                purpose        varchar(40) NOT NULL,
+                channel        varchar(20) NOT NULL,
+                destination    varchar(255) NOT NULL,
+                expires_at     timestamp(6) with time zone NOT NULL,
+                consumed_at    timestamp(6) with time zone,
+                attempt_count  integer NOT NULL,
+
+                PRIMARY KEY (id)
+            );
+
+            COMMENT ON COLUMN otp_codes.code_hash IS
+                'SHA-256 of the code, never the code itself. SHA-256 rather than BCrypt: codes are short-lived and attempt-limited, so a slow hash buys nothing here.';
+            COMMENT ON COLUMN otp_codes.destination IS
+                'Where the code was actually sent, captured at send time — deliberately not re-read from the user record at verify time, in case the address changed in between.';
+            COMMENT ON COLUMN otp_codes.consumed_at IS
+                'Set when this code can never be used again: successfully used, or superseded by a newer code. Attempt exhaustion is not recorded here — it is visible as attempt_count reaching the limit.';
+
+            -- Only PASSWORD_RESET today. Adding a value here without a code
+            -- path behind it would be a fabrication; extend this CHECK in
+            -- the slice that actually builds the new purpose.
+            ALTER TABLE otp_codes ADD CONSTRAINT chk_otp_codes_purpose
+                CHECK (purpose IN ('PASSWORD_RESET'));
+
+            -- All three are legal values; only EMAIL is produced today. The
+            -- column exists so an SMS/WhatsApp implementation needs no
+            -- schema change.
+            ALTER TABLE otp_codes ADD CONSTRAINT chk_otp_codes_channel
+                CHECK (channel IN ('EMAIL', 'SMS', 'WHATSAPP'));
+        </sql>
+        <rollback>
+            DROP TABLE otp_codes;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="028-create-otp-codes-fk-indexes" author="landvault">
+        <addForeignKeyConstraint
+                baseTableName="otp_codes" baseColumnNames="user_id"
+                constraintName="fk_otp_codes_user_id"
+                referencedTableName="users" referencedColumnNames="id"/>
+        <!-- Serves both reads this slice makes: the active-code lookup and
+             the rate-limit count, which filter on exactly these two. -->
+        <createIndex indexName="idx_otp_codes_user_id_purpose" tableName="otp_codes">
+            <column name="user_id"/>
+            <column name="purpose"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

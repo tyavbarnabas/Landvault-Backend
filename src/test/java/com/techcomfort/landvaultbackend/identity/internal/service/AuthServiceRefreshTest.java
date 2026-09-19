@@ -1,10 +1,12 @@
 package com.techcomfort.landvaultbackend.identity.internal.service;
 
+import com.techcomfort.landvaultbackend.audit.AuditApi;
 import com.techcomfort.landvaultbackend.identity.dto.RefreshRequest;
 import com.techcomfort.landvaultbackend.identity.dto.RefreshResponse;
 import com.techcomfort.landvaultbackend.identity.internal.domain.RefreshToken;
 import com.techcomfort.landvaultbackend.identity.internal.exceptions.AuthException;
 import com.techcomfort.landvaultbackend.identity.internal.domain.User;
+import com.techcomfort.landvaultbackend.identity.internal.repository.OtpCodeRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.PermissionRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.RefreshTokenRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.RoleRepository;
@@ -55,15 +57,21 @@ class AuthServiceRefreshTest {
     @Mock private PasswordEncoder passwordEncoder;
     @Mock private JwtService jwtService;
     @Mock private TenancyApi tenancyApi;
+    @Mock private OtpCodeRepository otpCodeRepository;
+    @Mock private OtpDeliveryService otpDeliveryService;
+    @Mock private AuditApi auditApi;
 
     private AuthService authService;
 
     @BeforeEach
     void setUp() {
         JwtProperties jwtProperties = new JwtProperties("unused-in-this-test", Duration.ofMinutes(15), Duration.ofDays(30));
+        OtpProperties otpProperties = new OtpProperties(
+                Duration.ofMinutes(10), 5, 3, Duration.ofMinutes(15), "noreply@example.com");
         authService = new AuthService(
                 userRepository, roleRepository, permissionRepository, userRoleRepository,
-                refreshTokenRepository, passwordEncoder, jwtService, jwtProperties, tenancyApi);
+                refreshTokenRepository, passwordEncoder, jwtService, jwtProperties, tenancyApi,
+                otpCodeRepository, otpDeliveryService, otpProperties, auditApi);
         // @PostConstruct isn't invoked by a plain `new` outside Spring —
         // only refresh() is under test here so dummyPasswordHash being
         // unset wouldn't currently bite, but call it anyway so this stays

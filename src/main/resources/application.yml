@@ -35,6 +35,14 @@ spring:
       appDbUsername: ${APP_DB_USERNAME:landvault_app}
       appDbPassword: ${APP_DB_PASSWORD}
 
+# spring.mail.* is deliberately absent here, with no default host.
+# application-dev.yml points at MailDev; every other environment sets its own
+# (SPRING_MAIL_HOST/SPRING_MAIL_PORT/… bind straight through). A deployment
+# that forgets fails at STARTUP — with no host there is no JavaMailSender
+# bean, so EmailOtpDeliveryService cannot be constructed — rather than
+# booting fine and silently sending into a container that isn't there. Same
+# fail-loud-on-missing-config rule as JWT_SECRET. See AGENTS.md.
+
 server:
   port: ${SERVER_PORT:8080}
 
@@ -50,6 +58,29 @@ landvault:
       first-name: ${BOOTSTRAP_SUPER_ADMIN_FIRST_NAME:}
       last-name: ${BOOTSTRAP_SUPER_ADMIN_LAST_NAME:}
       password: ${BOOTSTRAP_SUPER_ADMIN_PASSWORD:}
+
+  otp:
+    # One-time codes (password reset today). Every value here is a security
+    # parameter — see AGENTS.md before widening one.
+    #
+    # `delivery` selects the OtpDeliveryService implementation:
+    #   email (default) — EmailOtpDeliveryService, real SMTP via JavaMailSender
+    #   log             — LoggingOtpDeliveryService, writes the code to the log
+    #
+    # `log` is for tests and CI only. It must never be selected in a real
+    # environment: it would write live reset codes into the application log,
+    # which is exactly what every other path here refuses to do.
+    delivery: ${OTP_DELIVERY:email}
+    # Never hardcoded in the sending code — a deployment sets its own.
+    from-address: ${MAIL_FROM:noreply@landvault.com}
+    code-ttl: 10m
+    # A 6-digit code is a million combinations — without an attempt limit it
+    # is trivially brute-forceable. Exhausting this invalidates the code.
+    max-attempts: 5
+    # Caps code generation per account per window, so the endpoint can't be
+    # used to flood an inbox or run up delivery costs.
+    rate-limit-max-requests: 3
+    rate-limit-window: 15m
 
 app:
   jwt:

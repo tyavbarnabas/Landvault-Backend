@@ -33,6 +33,7 @@
     <include file="changes/025-add-organization-reviewer-user-id.xml" relativeToChangelogFile="true"/>
     <include file="changes/026-create-audit-log-table.xml" relativeToChangelogFile="true"/>
     <include file="changes/027-add-organizations-rc-number-unique.xml" relativeToChangelogFile="true"/>
+    <include file="changes/028-create-otp-codes-table.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>
