@@ -4,9 +4,13 @@ import com.techcomfort.landvaultbackend.common.PageResponse;
 import com.techcomfort.landvaultbackend.common.PageResponses;
 import com.techcomfort.landvaultbackend.common.TenantContext;
 import com.techcomfort.landvaultbackend.common.TenantScope;
+import com.techcomfort.landvaultbackend.tenancy.dto.CreateSupportAccessGrantRequest;
 import com.techcomfort.landvaultbackend.tenancy.dto.CreateTenantRequest;
 import com.techcomfort.landvaultbackend.tenancy.dto.ResubmitDocumentRequest;
+import com.techcomfort.landvaultbackend.tenancy.dto.SupportAccessGrantDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.TenantDetailDto;
+import com.techcomfort.landvaultbackend.tenancy.dto.TenantPlanUpdateRequest;
+import com.techcomfort.landvaultbackend.tenancy.dto.TenantStatusRequest;
 import com.techcomfort.landvaultbackend.tenancy.dto.TenantSummaryDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.VerificationDecisionRequest;
 import com.techcomfort.landvaultbackend.tenancy.internal.enums.TenantPlan;
@@ -21,6 +25,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -108,6 +113,31 @@ public class AdminTenantController {
     public ResponseEntity<TenantDetailDto> resubmitDocument(
             @PathVariable UUID id, @PathVariable UUID documentId, @Valid @RequestBody ResubmitDocumentRequest request) {
         return ResponseEntity.ok(service.resubmitDocument(id, documentId, request));
+    }
+
+    @PostMapping("/{id}/status")
+    @PreAuthorize("hasAuthority('admin.tenants.manage')")
+    public ResponseEntity<TenantDetailDto> changeStatus(@PathVariable UUID id, @Valid @RequestBody TenantStatusRequest request) {
+        return ResponseEntity.ok(service.changeStatus(id, request, currentUserId()));
+    }
+
+    @PutMapping("/{id}/plan")
+    @PreAuthorize("hasAuthority('admin.tenants.manage')")
+    public ResponseEntity<TenantDetailDto> updatePlan(@PathVariable UUID id, @Valid @RequestBody TenantPlanUpdateRequest request) {
+        return ResponseEntity.ok(service.updatePlan(id, request, currentUserId()));
+    }
+
+    @PostMapping("/{id}/support-access")
+    @PreAuthorize("hasAuthority('admin.tenants.manage')")
+    public ResponseEntity<SupportAccessGrantDto> grantSupportAccess(
+            @PathVariable UUID id, @Valid @RequestBody CreateSupportAccessGrantRequest request) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(service.grantSupportAccess(id, request, currentUserId()));
+    }
+
+    @GetMapping("/{id}/support-access")
+    @PreAuthorize("hasAuthority('admin.tenants.manage')")
+    public ResponseEntity<List<SupportAccessGrantDto>> listSupportAccessGrants(@PathVariable UUID id) {
+        return ResponseEntity.ok(service.listSupportAccessGrants(id));
     }
 
     private UUID currentUserId() {

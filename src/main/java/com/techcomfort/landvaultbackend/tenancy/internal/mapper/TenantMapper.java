@@ -9,6 +9,7 @@ import com.techcomfort.landvaultbackend.tenancy.dto.FinancialSettlementDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.RegulatoryDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.SocialsDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.StateRegulatorEntryDto;
+import com.techcomfort.landvaultbackend.tenancy.dto.SupportAccessGrantDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.TenantBranchDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.TenantDetailDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.TenantDocumentDto;
@@ -27,6 +28,7 @@ import com.techcomfort.landvaultbackend.tenancy.internal.domain.OrganizationFina
 import com.techcomfort.landvaultbackend.tenancy.internal.domain.OrganizationGateway;
 import com.techcomfort.landvaultbackend.tenancy.internal.domain.OrganizationRegulatory;
 import com.techcomfort.landvaultbackend.tenancy.internal.domain.OrganizationStateRegulator;
+import com.techcomfort.landvaultbackend.tenancy.internal.domain.SupportAccessGrant;
 import com.techcomfort.landvaultbackend.tenancy.internal.domain.VerificationDecision;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -267,6 +269,10 @@ public class TenantMapper {
                 financial.getSettlementCurrency(),
                 gateways.stream().collect(java.util.stream.Collectors.toMap(
                         g -> g.getGatewayName().getValue(), g -> g.getStatus().getValue(), (a, b) -> a, java.util.LinkedHashMap::new)));
+    }
+
+    public static SupportAccessGrantDto toSupportAccessGrantDto(SupportAccessGrant grant) {
+        return new SupportAccessGrantDto(grant.getId(), grant.getOrganizationId(), grant.getReason(), grant.getRequestedAt(), grant.getExpiresAt());
     }
 
     private static VerificationDecisionDto toDecision(VerificationDecision decision) {

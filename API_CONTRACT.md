@@ -169,10 +169,10 @@ File storage: frontend notes it needs real S3/MinIO-backed URLs behind "download
 | POST | `/api/admin/tenants/{id}/begin-review` | — | `Tenant` |
 | POST | `/api/admin/tenants/{id}/verification-decision` | `{ decision, reason?, failedDocumentIds? }` (no `reviewerName` — see note) | `Tenant` (appends `verificationHistory`, never overwrites it) |
 | POST | `/api/admin/tenants/{id}/documents/{documentId}/resubmit` | `{ fileName, size }` | `Tenant` |
-| PATCH | `/api/admin/tenants/{id}/plan` | `{ plan, entitlements }` | `Tenant` |
-| PATCH | `/api/admin/tenants/{id}/status` | `{ status, actor }` | `Tenant` |
-| POST | `/api/admin/tenants/{id}/support-access` | `{ reason, actor }` | `SupportAccessGrant` |
-| GET | `/api/admin/tenants/{id}/support-access` | — | `SupportAccessGrant[]` |
+| PUT | `/api/admin/tenants/{id}/plan` | `{ plan, marketplacePublishing, mlmModule, fxRails }` | `Tenant` (flat, not nested — see divergence note below) |
+| POST | `/api/admin/tenants/{id}/status` | `{ status, reason? }` | `Tenant` (`reason` required for `suspended`/`offboarded`; no `actor` — see note below) |
+| POST | `/api/admin/tenants/{id}/support-access` | `{ reason, durationMinutes? }` (default 30) | `SupportAccessGrant` (no `actor` — grantee is the authenticated caller) |
+| GET | `/api/admin/tenants/{id}/support-access` | — | `SupportAccessGrant[]` (most recent first) |
 | GET | `/api/admin/audit-log?cursor&limit` | — | `Page<AuditLogEntry>` |
 
 `Tenant.verificationState`: `created → documents_submitted → under_review → verified` (or `rejected`, `suspended`). `Tenant` has `branches: TenantBranch[]` — real multi-branch support belongs here, not bolted on later.
@@ -183,6 +183,11 @@ File storage: frontend notes it needs real S3/MinIO-backed URLs behind "download
 2. **`submit-documents` is a genuinely different, simpler primitive than the frontend's real `submit-verification`.** The frontend's Stage 2 submits the *entire* verification payload in one call — `documents`, `regulatory`, `directors`, `directorsAttestation`, `financial` — and moves `verificationState` to `documents_submitted` as a side effect of that payload arriving. This backend's `submit-documents` takes **no body at all**: it only advances `CREATED → DOCUMENTS_SUBMITTED`, gated on at least one `OrganizationDocument` already existing (uploaded through some other, not-yet-built, mechanism — no document-upload endpoint exists in this slice either). **The real frontend's Stage 2 submission cannot work against this backend as built.** This was a deliberate scope-narrowing by the slice B1 task (build the verification *state-machine skeleton* with a document-existence guard; regulatory/director/financial *data capture* is a future slice), not a bug silently "fixed" toward the frontend — but it means `submit-verification` (and the document-upload endpoint it implies) is still a real gap, not yet scheduled.
 
 Also: `RecordDecisionInput.reviewerName` (client-supplied) is intentionally **not** part of the real request body — the reviewer is the authenticated caller (`AccessTokenClaims.userId()`/`TenantContext.userId()`), the same "never client-supplied" principle as `tenant_id`. `reviewerName` is a mock-mode-only convenience with no real session to derive it from.
+
+**Tenancy slice B2, two more real divergences, deliberate per that slice's own task spec:**
+
+1. **`POST .../status` requires `reason`** for `suspended`/`offboarded`. The real frontend's `setTenantStatus` sends only `{ status }` — no reason. The endpoint still requires one; wiring a reason prompt into that frontend action would be needed to actually drive this endpoint as built.
+2. **`PUT .../plan`'s body is flat**, not the real frontend's nested `{ plan, entitlements: {...} } }` shape. Also note: **no `actor` field** on either `status` or `support-access` — same "never client-supplied identity" principle as `reviewerName` above; the acting Super Admin and the support-access grantee are both always the authenticated caller.
 
 ## Super Admin: marketplace listing conflicts (SA-3.4) — `listingConflictsService.ts`
 | Method | Path | Request | Response |

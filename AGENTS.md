@@ -565,10 +565,78 @@ that matters.
 `support_access_grants` is time-boxed, reason-required, and fully logged —
 and it must **never** be usable to move money or sign documents on a
 tenant's behalf. It exists for troubleshooting a real issue, not as a
-side-channel around the platform's normal authorization rules. The
-enforcement of that boundary belongs in the authorization layer, built in a
-later slice; until then, treat it as a hard constraint on that future
-design, not a detail to reconsider once it's convenient not to.
+side-channel around the platform's normal authorization rules.
+
+**Built in tenancy slice B2** (`POST`/`GET /api/admin/tenants/{id}/support-access`):
+deliberately **a record, not a gate**. Creating a grant does not itself open
+any door — a Super Admin already has `admin.tenants.manage` and the
+platform-scope RLS bypass, which are what actually let them view a tenant's
+data, independent of whether a grant row exists. This endpoint's only job is
+producing the auditable record ("Ada viewed Estintin's data for this
+reason, in this window") — there is no code anywhere that checks for an
+active grant before allowing a read, and an expired grant blocks nothing.
+Building that gate is deliberately **not** done here: it's a genuinely
+larger design question (does it apply to every admin endpoint? how does it
+interact with platform-scope RLS?) that belongs in its own slice, not a
+quick addition riding on this one. `grantedToUserId` is always the
+authenticated caller (`TenantContext`), never the request body — same
+"never client-supplied" principle as everywhere else — and every grant's
+audit entry is written with **`privileged = true`**, the one thing
+`AuditLogEntry.privileged` exists for (see the `audit` module note above).
+
+## `TenantStatus.OFFBOARDED` is terminal
+
+Built in tenancy slice B2 (`POST /api/admin/tenants/{id}/status`).
+`OFFBOARDED` is a one-way door: no transition away from it is ever allowed,
+including back to `ACTIVE`. `SUSPENDED ↔ ACTIVE` moves freely in both
+directions (suspend for non-payment, reactivate once resolved), but once a
+tenant is offboarded, that endpoint refuses every further status change
+outright, `AdminTenantService.changeStatus` checks this before even looking
+at what status was requested. If the business genuinely needs to bring an
+offboarded tenant back, that's a deliberate new-tenant decision (a fresh
+`POST /api/admin/tenants`), not a status flip — reinstating the same
+`Organization` row would blur "this company's relationship with the
+platform ended" into something reversible, which defeats the point of
+having a terminal state at all. Setting the same status a tenant already
+has is rejected too (not silently accepted) — it usually means the caller
+is acting on stale data.
+
+## Closing the session-revocation gap: a login/refresh-time check, not an event
+
+Tenancy slice B2 raised a real question: when a tenant is suspended, should
+its staff's existing sessions be immediately cut off, or is the existing
+15-minute access-token exposure (see "JWT carries every role assignment"
+below) an acceptable trade-off here too? **Decision: closed, via a
+login/refresh-time check — not left open, and not solved with a
+revocation event.**
+
+The mechanism the task suggested — `tenancy` publishing an event that
+`identity` listens to and revokes refresh tokens on — was considered and
+rejected as **insufficient on its own**: revoking refresh tokens stops a
+suspended user from *renewing* their session, but doesn't stop them from
+simply logging in again fresh immediately afterward, since nothing would
+otherwise check tenant status at login either. The event alone would be
+security theatre — it closes a door while leaving the window next to it
+open.
+
+The actual fix: `TenancyApi.isTenantActive(UUID tenantId)` (a new, minimal
+public method — returns `boolean`, never the internal `TenantStatus` enum,
+same "don't leak an internal type across the module boundary" rule as
+everywhere else), called from `AuthService.login()` and `AuthService.refresh()`
+whenever `user.getTenantId() != null` (tenant staff only — buyers and
+platform staff have none). Both already do a fresh database read on every
+call, so this adds no *new* per-request DB check the way the token's own
+15-minute design deliberately avoids (see below) — it's one more read on a
+path that was already hitting the database. A suspended/offboarded tenant's
+staff can no longer log in, and cannot refresh past their current access
+token's remaining lifetime — which closes the gap within the **same
+15-minute window** this codebase already treats as an accepted trade-off
+for role revocation, with no new cross-module event, no `identity.internal`
+reached into from `tenancy` (the dependency direction was already
+`identity → tenancy`, unchanged), and no separate token-family revocation
+to keep correct. `AuthException.TenantNotActive` (403, `TENANT_NOT_ACTIVE`)
+is deliberately generic — `identity` only ever gets a `boolean` back, so it
+has nothing more specific to report than "not active."
 
 ## JWT carries every role assignment, not one effective scope
 
@@ -1157,3 +1225,30 @@ reference), not the BVN itself. That gives the compliance evidence a
 reviewer actually needs without the platform ever holding the number —
 strictly less liability than what was just removed, not the same liability
 reintroduced with an extra step attached.
+
+## Tenancy slice B2: two more deliberate divergences from `tenantsService.ts`
+
+Same spirit as slice B1's `submit-documents`-vs-`submit-verification` gap —
+the task's own spec for these two endpoints diverges from what the real
+frontend actually sends, on purpose, not by accident. Following the task
+spec here (not silently reconciling toward the frontend) since both are
+specific enough to read as deliberate:
+
+- **`POST .../status`**: this slice requires a `reason` field (required for
+  `SUSPENDED`/`OFFBOARDED`). The real frontend's `setTenantStatus` sends
+  only `{ status }` — no reason at all. The endpoint still accepts and
+  requires one; the real frontend would need a wiring change (adding a
+  reason prompt to that action) to actually satisfy this backend as built.
+- **`PUT .../plan`**: this slice's `TenantPlanUpdateRequest` is flat —
+  `{ plan, marketplacePublishing, mlmModule, fxRails }`. The real frontend's
+  `updateTenantPlan` sends a nested shape instead —
+  `{ plan, entitlements: { marketplacePublishing, mlmModule, fxRails } }`
+  (reusing `TenantEntitlements`). Same story: the endpoint works exactly as
+  the task specified, but the real frontend's current call wouldn't
+  deserialize into it as-is.
+
+Neither gap blocks anything in this slice's own tests (which call the
+endpoints exactly as specified) — they're recorded here so a future
+frontend-integration pass knows exactly what to reconcile, the same reason
+slice B1's divergences were written down rather than fixed silently in
+either direction.

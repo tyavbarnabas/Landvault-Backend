@@ -5,18 +5,24 @@ import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
 import com.techcomfort.landvaultbackend.common.PageResponse;
 import com.techcomfort.landvaultbackend.common.PageResponses;
 import com.techcomfort.landvaultbackend.tenancy.TenantStaffAccountRequested;
+import com.techcomfort.landvaultbackend.tenancy.dto.CreateSupportAccessGrantRequest;
 import com.techcomfort.landvaultbackend.tenancy.dto.CreateTenantRequest;
 import com.techcomfort.landvaultbackend.tenancy.dto.PrimaryContactDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.ResubmitDocumentRequest;
+import com.techcomfort.landvaultbackend.tenancy.dto.SupportAccessGrantDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.TenantDetailDto;
+import com.techcomfort.landvaultbackend.tenancy.dto.TenantPlanUpdateRequest;
+import com.techcomfort.landvaultbackend.tenancy.dto.TenantStatusRequest;
 import com.techcomfort.landvaultbackend.tenancy.dto.TenantSummaryDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.VerificationDecisionRequest;
 import com.techcomfort.landvaultbackend.tenancy.internal.domain.Organization;
 import com.techcomfort.landvaultbackend.tenancy.internal.domain.OrganizationDocument;
+import com.techcomfort.landvaultbackend.tenancy.internal.domain.SupportAccessGrant;
 import com.techcomfort.landvaultbackend.tenancy.internal.domain.VerificationDecision;
 import com.techcomfort.landvaultbackend.tenancy.internal.domain.VerificationDecisionDocument;
 import com.techcomfort.landvaultbackend.tenancy.internal.enums.DocumentStatus;
 import com.techcomfort.landvaultbackend.tenancy.internal.enums.TenantPlan;
+import com.techcomfort.landvaultbackend.tenancy.internal.enums.TenantStatus;
 import com.techcomfort.landvaultbackend.tenancy.internal.enums.VerificationDecisionType;
 import com.techcomfort.landvaultbackend.tenancy.internal.enums.VerificationState;
 import com.techcomfort.landvaultbackend.tenancy.internal.exceptions.TenancyException;
@@ -31,6 +37,7 @@ import com.techcomfort.landvaultbackend.tenancy.internal.repository.Organization
 import com.techcomfort.landvaultbackend.tenancy.internal.repository.OrganizationRepository;
 import com.techcomfort.landvaultbackend.tenancy.internal.repository.OrganizationSpecifications;
 import com.techcomfort.landvaultbackend.tenancy.internal.repository.OrganizationStateRegulatorRepository;
+import com.techcomfort.landvaultbackend.tenancy.internal.repository.SupportAccessGrantRepository;
 import com.techcomfort.landvaultbackend.tenancy.internal.repository.VerificationDecisionDocumentRepository;
 import com.techcomfort.landvaultbackend.tenancy.internal.repository.VerificationDecisionRepository;
 import lombok.RequiredArgsConstructor;
@@ -42,6 +49,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HashSet;
 import java.util.List;
@@ -67,6 +75,7 @@ public class AdminTenantService {
     private final OrganizationGatewayRepository organizationGatewayRepository;
     private final VerificationDecisionRepository verificationDecisionRepository;
     private final VerificationDecisionDocumentRepository verificationDecisionDocumentRepository;
+    private final SupportAccessGrantRepository supportAccessGrantRepository;
     private final TenantMapper mapper;
     private final ApplicationEventPublisher eventPublisher;
     private final AuditApi auditApi;
@@ -267,6 +276,129 @@ public class AdminTenantService {
 
         log.info("Tenant {} document {} resubmitted", tenantId, documentId);
         return toDetailDto(organization);
+    }
+
+    /**
+     * Changes {@code TenantStatus} — entirely independent of
+     * {@code VerificationState}, which this method never reads or writes;
+     * see AGENTS.md Part 0. {@code OFFBOARDED} is terminal: no transition
+     * away from it is ever allowed. Setting the same status the tenant
+     * already has is rejected too, not silently accepted — it usually
+     * means the caller has stale data. {@code reason} is required for
+     * {@code SUSPENDED}/{@code OFFBOARDED}, same service-layer-not-DB-constraint
+     * pattern as the verification decision reason rule.
+     */
+    @Transactional
+    public TenantDetailDto changeStatus(UUID tenantId, TenantStatusRequest request, UUID actorUserId) {
+        Organization organization = organizationRepository.findById(tenantId)
+                .orElseThrow(TenancyException.TenantNotFound::new);
+
+        TenantStatus currentStatus = organization.getStatus();
+        TenantStatus newStatus = TenantStatus.fromValue(request.status());
+
+        if (currentStatus == TenantStatus.OFFBOARDED) {
+            throw new TenancyException.InvalidStatusTransition(
+                    "This tenant has been offboarded — offboarding is terminal, it cannot transition to any other status.");
+        }
+        if (newStatus == currentStatus) {
+            throw new TenancyException.InvalidStatusTransition(
+                    "Tenant is already '" + currentStatus.getValue() + "'.");
+        }
+        boolean reasonRequired = newStatus == TenantStatus.SUSPENDED || newStatus == TenantStatus.OFFBOARDED;
+        if (reasonRequired && (request.reason() == null || request.reason().isBlank())) {
+            throw new TenancyException.StatusReasonRequired();
+        }
+
+        organization.setStatus(newStatus);
+        organizationRepository.save(organization);
+
+        auditApi.record(AuditEntryRequest.of(
+                actorUserId, "tenant.status_changed", "organization", organization.getId(), organization.getId(),
+                "Status changed from '" + currentStatus.getValue() + "' to '" + newStatus.getValue() + "'"
+                        + (request.reason() == null || request.reason().isBlank() ? "" : " — " + request.reason())));
+
+        log.info("Tenant {} status changed: {} -> {} by actor {}", tenantId, currentStatus, newStatus, actorUserId);
+        return toDetailDto(organization);
+    }
+
+    /**
+     * Changes plan and entitlements — independent of both
+     * {@code TenantStatus} and {@code VerificationState}; callable
+     * regardless of either (e.g. sales negotiating terms on a still-unverified
+     * tenant). No cross-validation between plan tier and entitlements —
+     * that rule doesn't exist anywhere in AGENTS.md or the frontend, so
+     * none is invented here.
+     */
+    @Transactional
+    public TenantDetailDto updatePlan(UUID tenantId, TenantPlanUpdateRequest request, UUID actorUserId) {
+        Organization organization = organizationRepository.findById(tenantId)
+                .orElseThrow(TenancyException.TenantNotFound::new);
+
+        TenantPlan oldPlan = organization.getPlan();
+        boolean oldMarketplacePublishing = Boolean.TRUE.equals(organization.getMarketplacePublishing());
+        boolean oldMlmModule = Boolean.TRUE.equals(organization.getMlmModule());
+        boolean oldFxRails = Boolean.TRUE.equals(organization.getFxRails());
+        TenantPlan newPlan = TenantPlan.fromValue(request.plan());
+
+        organization.setPlan(newPlan);
+        organization.setMarketplacePublishing(request.marketplacePublishing());
+        organization.setMlmModule(request.mlmModule());
+        organization.setFxRails(request.fxRails());
+        organizationRepository.save(organization);
+
+        String detail = "Plan changed from '%s' to '%s'; entitlements marketplacePublishing %s->%s, mlmModule %s->%s, fxRails %s->%s"
+                .formatted(oldPlan.getValue(), newPlan.getValue(),
+                        oldMarketplacePublishing, request.marketplacePublishing(),
+                        oldMlmModule, request.mlmModule(),
+                        oldFxRails, request.fxRails());
+        auditApi.record(AuditEntryRequest.of(
+                actorUserId, "tenant.plan_changed", "organization", organization.getId(), organization.getId(), detail));
+
+        log.info("Tenant {} plan changed: {} -> {} by actor {}", tenantId, oldPlan, newPlan, actorUserId);
+        return toDetailDto(organization);
+    }
+
+    /**
+     * Records that support access was requested — a pure audit record, not
+     * a gate. {@code grantedToUserId} is the authenticated caller, never
+     * client-supplied; the audit entry is deliberately {@code privileged = true}.
+     * See this class's own Javadoc and AGENTS.md — this does not, and must
+     * not, itself open any door a Super Admin's existing {@code admin.tenants.manage}
+     * authority and platform-scope RLS bypass don't already open.
+     */
+    @Transactional
+    public SupportAccessGrantDto grantSupportAccess(UUID tenantId, CreateSupportAccessGrantRequest request, UUID actorUserId) {
+        if (!organizationRepository.existsById(tenantId)) {
+            throw new TenancyException.TenantNotFound();
+        }
+
+        int durationMinutes = request.durationMinutes() == null ? 30 : request.durationMinutes();
+        Instant requestedAt = Instant.now();
+
+        SupportAccessGrant grant = SupportAccessGrant.builder()
+                .organizationId(tenantId)
+                .grantedToUserId(actorUserId)
+                .reason(request.reason())
+                .requestedAt(requestedAt)
+                .expiresAt(requestedAt.plus(Duration.ofMinutes(durationMinutes)))
+                .build();
+        grant = supportAccessGrantRepository.save(grant);
+
+        auditApi.record(new AuditEntryRequest(
+                actorUserId, "tenant.support_access_granted", "organization", tenantId, tenantId, request.reason(), true));
+
+        log.info("Support access granted for tenant {} to {} ({} minutes)", tenantId, actorUserId, durationMinutes);
+        return TenantMapper.toSupportAccessGrantDto(grant);
+    }
+
+    @Transactional(readOnly = true)
+    public List<SupportAccessGrantDto> listSupportAccessGrants(UUID tenantId) {
+        if (!organizationRepository.existsById(tenantId)) {
+            throw new TenancyException.TenantNotFound();
+        }
+        return supportAccessGrantRepository.findByOrganizationIdOrderByRequestedAtDesc(tenantId).stream()
+                .map(TenantMapper::toSupportAccessGrantDto)
+                .toList();
     }
 
     private void markAllDocumentsVerified(UUID tenantId) {

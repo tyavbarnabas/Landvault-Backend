@@ -33,6 +33,18 @@ public abstract class AuthException extends RuntimeException {
         }
     }
 
+    /**
+     * The account itself is fine, but it's tenant staff and its tenant's
+     * {@code TenantStatus} isn't {@code ACTIVE} — see
+     * {@code TenancyApi.isTenantActive} and AGENTS.md's session-revocation
+     * note (tenancy slice B2). Deliberately doesn't carry which
+     * {@code TenantStatus} the tenant is actually in — {@code identity}
+     * only ever gets a {@code boolean} back from {@code TenancyApi}, never
+     * the internal enum, so there's nothing more specific to report.
+     */
+    public static class TenantNotActive extends AuthException {
+    }
+
     /** Not found, expired, revoked, or lost a concurrent rotation race. */
     public static class InvalidRefreshToken extends AuthException {
     }

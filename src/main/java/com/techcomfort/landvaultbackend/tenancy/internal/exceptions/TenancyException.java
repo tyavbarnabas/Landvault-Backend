@@ -36,6 +36,33 @@ public abstract class TenancyException extends RuntimeException {
     public static class DecisionReasonRequired extends TenancyException {
     }
 
+    /** status = SUSPENDED or OFFBOARDED with a blank/missing reason — see AGENTS.md Part 1 of tenancy slice B2. */
+    public static class StatusReasonRequired extends TenancyException {
+    }
+
+    /**
+     * A {@code TenantStatus} transition that isn't allowed — away from the
+     * terminal {@code OFFBOARDED} state, or setting the same status the
+     * tenant already has (a no-op, rejected rather than silently
+     * succeeding since it usually means the caller has stale data). Kept
+     * deliberately separate from {@link InvalidVerificationTransition} —
+     * one exception per axis, so the two never get conflated even at the
+     * exception-naming level. See AGENTS.md Part 0.
+     */
+    public static class InvalidStatusTransition extends TenancyException {
+
+        private final String detail;
+
+        public InvalidStatusTransition(String detail) {
+            this.detail = detail;
+        }
+
+        @Override
+        public String getMessage() {
+            return detail;
+        }
+    }
+
     /**
      * submit-documents/begin-review/verification-decision called against a
      * {@code verificationState} that transition isn't valid from — e.g.

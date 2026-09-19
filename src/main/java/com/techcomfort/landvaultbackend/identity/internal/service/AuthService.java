@@ -21,6 +21,7 @@ import com.techcomfort.landvaultbackend.identity.internal.security.AccessTokenIs
 import com.techcomfort.landvaultbackend.identity.internal.security.JwtProperties;
 import com.techcomfort.landvaultbackend.identity.internal.security.JwtService;
 import com.techcomfort.landvaultbackend.identity.internal.security.RoleClaim;
+import com.techcomfort.landvaultbackend.tenancy.TenancyApi;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -62,6 +63,7 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final JwtProperties jwtProperties;
+    private final TenancyApi tenancyApi;
 
     // Precomputed once at startup, not per login attempt — see login()'s
     // timing-safe-failure comment. Not `final`/constructor-assigned: it's
@@ -130,6 +132,14 @@ public class AuthService {
         if (user.getStatus() == UserStatus.SUSPENDED || user.getStatus() == UserStatus.DEACTIVATED) {
             throw new AuthException.AccountNotActive(user.getStatus());
         }
+        // Tenant staff only (buyers/platform staff have no tenantId) — see
+        // AGENTS.md's session-revocation note (tenancy slice B2). Blocks
+        // issuing a fresh session; an already-issued access token still
+        // rides out its own 15-minute lifetime regardless, same accepted
+        // trade-off as every other permission change in this system.
+        if (user.getTenantId() != null && !tenancyApi.isTenantActive(user.getTenantId())) {
+            throw new AuthException.TenantNotActive();
+        }
 
         // TODO: the frontend's login is two-step (credentials, then OTP).
         // This is the credential step only; the OTP step lands later
@@ -169,6 +179,12 @@ public class AuthService {
 
         User user = userRepository.findById(existing.getUserId())
                 .orElseThrow(AuthException.InvalidRefreshToken::new);
+        // Same tenant-status gate as login() — checked before any write
+        // below, so a rejection here leaves the presented refresh token
+        // exactly as it was (not rotated, not revoked). See AGENTS.md.
+        if (user.getTenantId() != null && !tenancyApi.isTenantActive(user.getTenantId())) {
+            throw new AuthException.TenantNotActive();
+        }
 
         RawRefreshToken newRefresh = issueRefreshToken(user.getId());
         RefreshToken savedNewToken = refreshTokenRepository.save(newRefresh.entity());

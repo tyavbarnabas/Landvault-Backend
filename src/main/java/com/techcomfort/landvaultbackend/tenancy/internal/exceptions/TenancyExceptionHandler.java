@@ -78,6 +78,18 @@ public class TenancyExceptionHandler {
                 .body(ErrorResponse.of(ex.getMessage(), "INVALID_VERIFICATION_TRANSITION"));
     }
 
+    @ExceptionHandler(TenancyException.StatusReasonRequired.class)
+    public ResponseEntity<ErrorResponse> handleStatusReasonRequired() {
+        return ResponseEntity.badRequest()
+                .body(ErrorResponse.fieldErrors(Map.of("reason", "A reason is required when suspending or offboarding a tenant.")));
+    }
+
+    @ExceptionHandler(TenancyException.InvalidStatusTransition.class)
+    public ResponseEntity<ErrorResponse> handleInvalidStatusTransition(TenancyException.InvalidStatusTransition ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of(ex.getMessage(), "INVALID_STATUS_TRANSITION"));
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<ErrorResponse> handleIllegalArgument(IllegalArgumentException ex) {
         // Covers VerificationState/VerificationDecisionType/TenantPlan/etc.

@@ -18,4 +18,15 @@ public interface TenancyApi {
      * out of this API on purpose.
      */
     boolean branchBelongsToTenant(UUID branchId, UUID tenantId);
+
+    /**
+     * Used by {@code AuthService.login()}/{@code .refresh()} (tenancy slice
+     * B2) to refuse issuing a new access token to a suspended/offboarded
+     * tenant's staff — see AGENTS.md's "closing the session-revocation gap"
+     * note. Returns {@code false} (not an internal {@code TenantStatus}
+     * value — a DTO/API boundary must not leak an internal type) for an
+     * unknown {@code tenantId} too, failing closed the same way RLS does
+     * with no context established.
+     */
+    boolean isTenantActive(UUID tenantId);
 }

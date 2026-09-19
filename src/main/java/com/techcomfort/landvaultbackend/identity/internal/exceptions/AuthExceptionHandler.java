@@ -40,6 +40,12 @@ public class AuthExceptionHandler {
                 .body(ErrorResponse.of(message, suspended ? "ACCOUNT_SUSPENDED" : "ACCOUNT_DEACTIVATED"));
     }
 
+    @ExceptionHandler(AuthException.TenantNotActive.class)
+    public ResponseEntity<ErrorResponse> handleTenantNotActive() {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ErrorResponse.of("Your organization's account is not active. Contact your administrator.", "TENANT_NOT_ACTIVE"));
+    }
+
     @ExceptionHandler(AuthException.InvalidRefreshToken.class)
     public ResponseEntity<ErrorResponse> handleInvalidRefreshToken() {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED)

@@ -13,6 +13,7 @@ import com.techcomfort.landvaultbackend.identity.internal.repository.UserRoleRep
 import com.techcomfort.landvaultbackend.identity.internal.security.AccessTokenIssue;
 import com.techcomfort.landvaultbackend.identity.internal.security.JwtProperties;
 import com.techcomfort.landvaultbackend.identity.internal.security.JwtService;
+import com.techcomfort.landvaultbackend.tenancy.TenancyApi;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -53,6 +54,7 @@ class AuthServiceRefreshTest {
     @Mock private RefreshTokenRepository refreshTokenRepository;
     @Mock private PasswordEncoder passwordEncoder;
     @Mock private JwtService jwtService;
+    @Mock private TenancyApi tenancyApi;
 
     private AuthService authService;
 
@@ -61,7 +63,7 @@ class AuthServiceRefreshTest {
         JwtProperties jwtProperties = new JwtProperties("unused-in-this-test", Duration.ofMinutes(15), Duration.ofDays(30));
         authService = new AuthService(
                 userRepository, roleRepository, permissionRepository, userRoleRepository,
-                refreshTokenRepository, passwordEncoder, jwtService, jwtProperties);
+                refreshTokenRepository, passwordEncoder, jwtService, jwtProperties, tenancyApi);
         // @PostConstruct isn't invoked by a plain `new` outside Spring —
         // only refresh() is under test here so dummyPasswordHash being
         // unset wouldn't currently bite, but call it anyway so this stays
@@ -161,6 +163,27 @@ class AuthServiceRefreshTest {
                 .isInstanceOf(AuthException.InvalidRefreshToken.class);
 
         verify(refreshTokenRepository, never()).findByUserIdAndRevokedAtIsNull(any());
+        verify(refreshTokenRepository, never()).rotateIfActive(any(), any(), any());
+    }
+
+    @Test
+    void refreshIsRejectedWhenTenantIsNotActive() {
+        UUID userId = UUID.randomUUID();
+        UUID tenantId = UUID.randomUUID();
+        RefreshToken existing = activeToken(userId);
+        User user = User.builder().id(userId).firstName("A").lastName("B").email("a@b.com").build();
+        user.setTenantId(tenantId);
+
+        when(refreshTokenRepository.findByTokenHash(anyString())).thenReturn(Optional.of(existing));
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(tenancyApi.isTenantActive(tenantId)).thenReturn(false);
+
+        assertThatThrownBy(() -> authService.refresh(new RefreshRequest("whatever-raw-token")))
+                .isInstanceOf(AuthException.TenantNotActive.class);
+
+        // Rejected before any write — the presented token is left exactly
+        // as it was, not rotated or revoked.
+        verify(refreshTokenRepository, never()).save(any());
         verify(refreshTokenRepository, never()).rotateIfActive(any(), any(), any());
     }
 
