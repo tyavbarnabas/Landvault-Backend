@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        A tier is not always a square-metre band.
+
+        A LAND_SIZE tier is a size band ("250 sqm at N4.2M"). A UNIT_TYPE tier
+        is a product ("3-bedroom terrace at N85M") — the same concept, a
+        priced category a plot belongs to, but the discriminator is not square
+        metres. size_sqm was NOT NULL, which structurally forbade the second.
+
+        `price` stays the developer's own figure per tier either way, never
+        derived from a per-sqm rate — a rule that holds more strongly for
+        UNIT_TYPE, where a per-sqm rate isn't even definable.
+    -->
+    <changeSet id="040-add-price-tier-type" author="landvault">
+        <sql>
+            ALTER TABLE price_tiers ADD COLUMN tier_type varchar(16) NOT NULL DEFAULT 'LAND_SIZE';
+
+            COMMENT ON COLUMN price_tiers.tier_type IS
+                'LAND_SIZE (a size band) or UNIT_TYPE (a built-unit product). For UNIT_TYPE, size_sqm is null and `label` carries the meaning — no extra column is needed.';
+
+            ALTER TABLE price_tiers ADD CONSTRAINT chk_price_tiers_tier_type
+                CHECK (tier_type IN ('LAND_SIZE', 'UNIT_TYPE'));
+        </sql>
+        <rollback>
+            ALTER TABLE price_tiers DROP COLUMN tier_type;
+        </rollback>
+    </changeSet>
+
+    <!--
+        Separate changeset from the column add so each half rolls back
+        independently: re-imposing NOT NULL would fail if any UNIT_TYPE row
+        existed, and that failure should be legible on its own.
+    -->
+    <changeSet id="040-make-price-tier-size-nullable" author="landvault">
+        <sql>
+            ALTER TABLE price_tiers ALTER COLUMN size_sqm DROP NOT NULL;
+
+            COMMENT ON COLUMN price_tiers.size_sqm IS
+                'The NOMINAL size this tier represents — what its plots are sold and priced as, not what any survey at. Nullable since a UNIT_TYPE tier is discriminated by product, not square metres; chk_price_tiers_land_size_has_size requires it whenever tier_type = LAND_SIZE, where its absence would be meaningless.';
+
+            -- A LAND_SIZE tier without a size is meaningless. A UNIT_TYPE
+            -- tier does not NEED one, but is not forbidden from having one
+            -- (a built unit can sit on a known land area).
+            ALTER TABLE price_tiers ADD CONSTRAINT chk_price_tiers_land_size_has_size
+                CHECK (tier_type &lt;&gt; 'LAND_SIZE' OR size_sqm IS NOT NULL);
+        </sql>
+        <rollback>
+            ALTER TABLE price_tiers DROP CONSTRAINT chk_price_tiers_land_size_has_size;
+            ALTER TABLE price_tiers ALTER COLUMN size_sqm SET NOT NULL;
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

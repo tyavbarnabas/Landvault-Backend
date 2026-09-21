@@ -2,6 +2,7 @@ package com.techcomfort.landvaultbackend.inventory.internal.domain;
 
 import com.techcomfort.landvaultbackend.common.AbstractEntity;
 import com.techcomfort.landvaultbackend.common.Currency;
+import com.techcomfort.landvaultbackend.inventory.internal.enums.TierType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -49,10 +50,24 @@ public class PriceTier extends AbstractEntity {
     private UUID estateId;
 
     /**
+     * What discriminates this tier — a land size band, or a built-unit
+     * product type. See {@link TierType}.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "tier_type", nullable = false, length = 16)
+    private TierType tierType;
+
+    /**
      * The nominal size this tier represents — what plots in it are sold and
      * priced as, not what any of them survey at. See {@code Plot}.
+     * <p>
+     * <strong>Nullable, because a tier is not always a square-metre band.</strong>
+     * A {@code UNIT_TYPE} tier is a product ("3-bedroom terrace at ₦85M")
+     * where square metres aren't the discriminator and {@code label} carries
+     * the meaning instead. A database constraint requires this to be present
+     * for {@code LAND_SIZE} tiers, where its absence would be meaningless.
      */
-    @Column(name = "size_sqm", nullable = false, precision = 12, scale = 2)
+    @Column(name = "size_sqm", precision = 12, scale = 2)
     private BigDecimal sizeSqm;
 
     /**
@@ -78,7 +93,20 @@ public class PriceTier extends AbstractEntity {
     @Column(name = "currency", nullable = false, length = 3)
     private Currency currency;
 
-    /** Optional display name, e.g. "Standard 250". */
+    /**
+     * Display name, e.g. "Standard 250". Optional for a {@code LAND_SIZE}
+     * tier, where {@link #sizeSqm} already identifies it — but it is what
+     * carries the meaning for a {@code UNIT_TYPE} tier.
+     */
     @Column(name = "label")
     private String label;
+
+    @Override
+    public void prePersist() {
+        super.prePersist();
+        // Mirrors the column default — every existing tier is a land band.
+        if (tierType == null) {
+            tierType = TierType.LAND_SIZE;
+        }
+    }
 }

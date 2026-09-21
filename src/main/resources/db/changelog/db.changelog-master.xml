@@ -44,6 +44,8 @@
     <include file="changes/036-create-plots-table.xml" relativeToChangelogFile="true"/>
     <include file="changes/037-create-estate-titles-table.xml" relativeToChangelogFile="true"/>
     <include file="changes/038-create-estate-verification-checks-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/039-add-plot-property-and-listing-type.xml" relativeToChangelogFile="true"/>
+    <include file="changes/040-add-price-tier-type.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

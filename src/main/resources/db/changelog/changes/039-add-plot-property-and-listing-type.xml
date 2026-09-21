@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Makes built property and rentals POSSIBLE without building either.
+
+        Inventory slice 1 was land-sale-only by construction: nothing
+        distinguished bare land from a built unit, or a sale listing from a
+        rental. Adding these columns after marketplace/sales/finance read
+        these tables would mean a migration plus a refactor across four
+        modules; adding them now costs almost nothing.
+
+        Deliberately NOT included: a units table, bedroom counts, service
+        charges, tenancy agreements, construction status. Those need their
+        shape understood before they are designed. See AGENTS.md.
+
+        Both columns are NOT NULL with defaults, so every existing row
+        backfills correctly — each is bare land offered for sale.
+    -->
+    <changeSet id="039-add-plot-property-and-listing-type" author="landvault">
+        <sql>
+            ALTER TABLE plots ADD COLUMN property_type varchar(16) NOT NULL DEFAULT 'LAND';
+            ALTER TABLE plots ADD COLUMN listing_intent varchar(16) NOT NULL DEFAULT 'FOR_SALE';
+
+            COMMENT ON COLUMN plots.property_type IS
+                'LAND or BUILT. The hierarchy EXTENDS rather than forks: Estate -> Block -> Plot -> Unit (0..n). Land is always the base — bare land is a plot with no units, a house is a plot with one, an apartment block is a plot with many. BUILT therefore means "this plot carries units", not "this is a different kind of thing". Geometry stays at PLOT level regardless: two flats in the same building do not overlap spatially, so a double-sold apartment is caught by unit identity, never by ST_Intersects.';
+            COMMENT ON COLUMN plots.listing_intent IS
+                'What the SELLER is offering: FOR_SALE, FOR_RENT or BOTH. This is the ONLY column rentals need in inventory — a rental is not a different property, it is a different TRANSACTION (recurring rent, tenancy agreement, deposit, renewals, ownership never transferring), and all of that belongs to sales/finance/documents. Do not build a parallel rental model here. Distinct from plots.intent, which is what a BUYER means to do with the land (develop vs hold) — different axes, both legitimate.';
+
+            ALTER TABLE plots ADD CONSTRAINT chk_plots_property_type
+                CHECK (property_type IN ('LAND', 'BUILT'));
+            ALTER TABLE plots ADD CONSTRAINT chk_plots_listing_intent
+                CHECK (listing_intent IN ('FOR_SALE', 'FOR_RENT', 'BOTH'));
+        </sql>
+        <rollback>
+            ALTER TABLE plots DROP COLUMN property_type;
+            ALTER TABLE plots DROP COLUMN listing_intent;
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

@@ -1073,6 +1073,98 @@ public, because it completes a login and its caller holds no token yet.
 Adding a new public auth route means adding it to that list; forgetting makes
 it require authentication, which is the safe direction to fail.
 
+## Built property and rentals: the hierarchy extends, it does not fork
+
+The catalogue must eventually carry developed properties (houses, apartments)
+and rentals. Three columns make that *possible* without building either —
+`plots.property_type`, `plots.listing_intent`, `price_tiers.tier_type`. There
+is deliberately **no `units` table**, no bedroom counts, no service charges,
+no tenancy agreements and no construction status: those need their shape
+understood before they are designed.
+
+**Land is always the base. A building sits on a plot.**
+
+```
+Estate → Block → Plot → Unit (0..n)
+```
+
+Bare land is a plot with no units; a house is a plot with one; an apartment
+block is a plot with many. So `property_type = BUILT` means "this plot carries
+units", never "this is a different kind of thing".
+
+Two consequences, and they are what keep slice 1's work valid:
+
+- **Geometry stays at plot level.** Two flats in the same building do not
+  overlap spatially, so conflict detection must never try to reason about
+  them. A double-sold apartment is caught by **unit identity**, not by
+  `ST_Intersects`. Plot-level detection keeps working exactly as designed.
+- **A rental is not a different property — it is a different *transaction*.**
+  What differs is recurring rent, a tenancy agreement, a deposit, renewals,
+  and ownership never transferring. That divergence belongs to `sales`,
+  `finance` and `documents`. Estates, blocks, plots and tiers are the same
+  rows either way, which is why `listing_intent` is the *only* column rentals
+  need here. Don't build a parallel rental model in `inventory`.
+
+### The renting party is a `Lessee`, never a "tenant"
+
+**"Tenant" already means *organization*** throughout this codebase —
+`tenant_id`, `TenantStatus`, `TenancyApi`, the entire isolation model. A
+renter is also colloquially a tenant, and that collision would cause real
+confusion the moment rentals are built.
+
+**Decision: the renting party is a `Lessee`.** Chosen over `Renter` because it
+has a natural counterpart (`Lessor`) for the owning side, and over `Occupant`
+because an occupant isn't necessarily the contracting party — family members
+occupy without being party to the agreement. It is also the term Nigerian
+property law already uses.
+
+No such entity exists yet; the point is that the vocabulary is settled before
+someone introduces one. **Never introduce a class, column or enum value that
+uses "tenant" to mean a person renting a property.**
+
+### `PlotIntent` and `ListingIntent` are different axes
+
+- **`PlotIntent`** (`DEVELOPMENT` | `INVESTMENT`) — what the **buyer** means
+  to do with the land: build on it, or hold it.
+- **`ListingIntent`** (`FOR_SALE` | `FOR_RENT` | `BOTH`) — what the **seller**
+  is offering.
+
+Both legitimate, and orthogonal: a plot can be `FOR_SALE` with
+`PlotIntent.INVESTMENT`. Each enum's Javadoc points at the other, because
+otherwise one will eventually be folded into the other by someone tidying up.
+
+### A tier is not always a square-metre band
+
+`price_tiers.tier_type` is `LAND_SIZE` or `UNIT_TYPE`. A land tier is a size
+band ("250 sqm at ₦4.2M"); a built-unit tier is a product ("3-bedroom terrace
+at ₦85M") — the same concept, a priced category a plot belongs to, but the
+discriminator isn't square metres. For a `UNIT_TYPE` tier, `size_sqm` is null
+and the existing `label` carries the meaning; no extra column was needed.
+
+`size_sqm` was `NOT NULL`, which structurally forbade built-unit tiers, so it
+is now nullable — guarded by
+`CHECK (tier_type <> 'LAND_SIZE' OR size_sqm IS NOT NULL)`, since a land tier
+without a size is meaningless. A `UNIT_TYPE` tier is permitted but not
+required to carry one.
+
+**`price` stays the developer's own figure per tier**, never derived from a
+per-sqm rate — the rule holds more strongly here, since a per-sqm rate isn't
+even definable for a built unit.
+
+**Operational caveat on rolling back changeset 040**: restoring `NOT NULL` on
+`size_sqm` only succeeds while no null-size tier exists. Once the capability
+is actually used, rolling back means dropping those rows first. That is
+inherent to the migration, not a defect — verified directly, and the reason
+the nullability change is its own changeset rather than bundled with the
+column add.
+
+### Completed units before off-plan
+
+When built property is eventually built, **do completed units first**.
+Off-plan drags milestone payments, construction tracking and arguably escrow
+into the critical path — a much larger surface than simply listing a finished
+house. Recorded here so the sequencing isn't relitigated.
+
 ## Inventory: nominal vs surveyed area, and why both exist
 
 `plots` carries **two** area columns, deliberately:

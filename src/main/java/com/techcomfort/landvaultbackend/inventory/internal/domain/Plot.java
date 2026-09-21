@@ -1,9 +1,11 @@
 package com.techcomfort.landvaultbackend.inventory.internal.domain;
 
 import com.techcomfort.landvaultbackend.common.AbstractEntity;
+import com.techcomfort.landvaultbackend.inventory.internal.enums.ListingIntent;
 import com.techcomfort.landvaultbackend.inventory.internal.enums.PlotIntent;
 import com.techcomfort.landvaultbackend.inventory.internal.enums.PlotOrientation;
 import com.techcomfort.landvaultbackend.inventory.internal.enums.PlotStatus;
+import com.techcomfort.landvaultbackend.inventory.internal.enums.PropertyType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -79,6 +81,29 @@ public class Plot extends AbstractEntity {
     @Column(name = "intent", length = 32)
     private PlotIntent intent;
 
+    /**
+     * Bare land, or a plot carrying a building. {@code BUILT} means this plot
+     * has units — the hierarchy extends rather than forks
+     * ({@code Estate → Block → Plot → Unit}), so land stays the base and
+     * geometry stays here at plot level. No {@code units} table exists yet;
+     * this makes one possible without committing to its shape.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "property_type", nullable = false, length = 16)
+    private PropertyType propertyType;
+
+    /**
+     * What the seller is offering — sale, rent, or either. The <em>only</em>
+     * column rentals need in this module: everything else a rental requires
+     * (recurring rent, agreements, deposits, renewals) is a transaction
+     * concern owned by {@code sales}/{@code finance}/{@code documents}.
+     * <p>
+     * Distinct from {@link #intent} — see {@link ListingIntent}.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "listing_intent", nullable = false, length = 16)
+    private ListingIntent listingIntent;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "orientation", length = 2)
     private PlotOrientation orientation;
@@ -126,6 +151,14 @@ public class Plot extends AbstractEntity {
         super.prePersist();
         if (isCorner == null) {
             isCorner = false;
+        }
+        // Mirrors the column defaults — every existing row is bare land
+        // offered for sale, which is what the backfill assumes too.
+        if (propertyType == null) {
+            propertyType = PropertyType.LAND;
+        }
+        if (listingIntent == null) {
+            listingIntent = ListingIntent.FOR_SALE;
         }
     }
 }
