@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        inventory.internal.domain.PriceTier — a size band an estate's plots
+        actually come in, with the developer's own price for that band.
+
+        Corner plots are deliberately NOT a tier: a corner is a per-plot
+        modifier on its tier's price (estates.corner_premium_pct), not its own
+        menu item.
+    -->
+    <changeSet id="035-create-price-tiers-table" author="landvault">
+        <sql>
+            CREATE TABLE price_tiers (
+                id          uuid NOT NULL,
+                tenant_id   uuid,
+                branch_id   uuid,
+                created_at  timestamp(6) with time zone NOT NULL,
+                updated_at  timestamp(6) with time zone,
+                created_by  varchar(255),
+                updated_by  varchar(255),
+                deleted     boolean NOT NULL,
+
+                estate_id   uuid NOT NULL,
+                size_sqm    numeric(12,2) NOT NULL,
+                price       numeric(19,4) NOT NULL,
+                currency    varchar(3) NOT NULL,
+                label       varchar(255),
+
+                PRIMARY KEY (id)
+            );
+
+            COMMENT ON COLUMN price_tiers.price IS
+                'This tier''s own developer-set price. NEVER derived from a single per-sqm rate: larger plots are routinely discounted per square metre (180 sqm at N18,000/sqm while 600 sqm sells at N14,500/sqm), so a per-sqm figure is a DISPLAYED comparison computed for the UI, never an input to pricing. Deriving price from a rate would quietly overcharge every large plot.';
+            COMMENT ON COLUMN price_tiers.size_sqm IS
+                'The NOMINAL size this tier represents — what its plots are sold and priced as, not what any of them survey at. See plots.nominal_size_sqm / plots.actual_area_sqm.';
+
+            ALTER TABLE price_tiers ADD CONSTRAINT chk_price_tiers_currency
+                CHECK (currency IN ('NGN', 'USD', 'GBP', 'EUR'));
+            -- Money is never negative, and a zero-priced tier is a data entry
+            -- error rather than a giveaway.
+            ALTER TABLE price_tiers ADD CONSTRAINT chk_price_tiers_price_positive
+                CHECK (price > 0);
+            ALTER TABLE price_tiers ADD CONSTRAINT chk_price_tiers_size_positive
+                CHECK (size_sqm > 0);
+        </sql>
+        <rollback>
+            DROP TABLE price_tiers;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="035-create-price-tiers-fk-indexes" author="landvault">
+        <addForeignKeyConstraint
+                baseTableName="price_tiers" baseColumnNames="estate_id"
+                constraintName="fk_price_tiers_estate_id"
+                referencedTableName="estates" referencedColumnNames="id"/>
+        <createIndex indexName="idx_price_tiers_estate_id" tableName="price_tiers">
+            <column name="estate_id"/>
+        </createIndex>
+        <createIndex indexName="idx_price_tiers_tenant_id" tableName="price_tiers">
+            <column name="tenant_id"/>
+        </createIndex>
+        <addUniqueConstraint tableName="price_tiers" columnNames="estate_id, size_sqm"
+                             constraintName="uq_price_tiers_estate_size"/>
+    </changeSet>
+
+</databaseChangeLog>

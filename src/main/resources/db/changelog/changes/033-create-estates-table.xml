@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        inventory.internal.domain.Estate — a land development owned by a
+        tenant's BRANCH. Unlike organizations/branches, estates populate the
+        inherited tenant_id and branch_id: branch ownership is what makes
+        branch-scoped RLS meaningful here.
+
+        This is the first table in the schema to store real geometry. SRID
+        4326 (WGS84 lat/lng), GiST-indexed, per AGENTS.md's spatial
+        conventions — those are decisions, not preferences.
+    -->
+    <changeSet id="033-create-estates-table" author="landvault">
+        <sql>
+            CREATE TABLE estates (
+                id                  uuid NOT NULL,
+                tenant_id           uuid,
+                branch_id           uuid,
+                created_at          timestamp(6) with time zone NOT NULL,
+                updated_at          timestamp(6) with time zone,
+                created_by          varchar(255),
+                updated_by          varchar(255),
+                deleted             boolean NOT NULL,
+
+                name                varchar(255) NOT NULL,
+                slug                varchar(255) NOT NULL,
+                description         text,
+                area                varchar(255),
+                city                varchar(255),
+                state               varchar(64),
+                address             varchar(255),
+                footprint           geometry(Polygon,4326),
+                corner_premium_pct  numeric(5,2),
+                intent              varchar(32),
+                published           boolean NOT NULL,
+                published_at        timestamp(6) with time zone,
+                image_url           varchar(255),
+
+                PRIMARY KEY (id)
+            );
+
+            COMMENT ON COLUMN estates.footprint IS
+                'Estate boundary, SRID 4326 (WGS84 lat/lng). Compute area with ST_Area(footprint::geography) for square metres — ST_Area on raw 4326 returns square DEGREES, which is not an error, just a plausible-looking wrong number.';
+            COMMENT ON COLUMN estates.corner_premium_pct IS
+                'A MODIFIER, never a separate tier: a corner plot costs its tier price x (1 + this/100), computed. Storing a corner price separately would create a second figure that can drift from the tier it derives from.';
+            COMMENT ON COLUMN estates.published IS
+                'The developer''s own opt-in switch — ONE of four conditions, not the whole gate. An estate is publicly listable only when ALL of: published = true; the owning tenant verification_state = VERIFIED; that tenant holds the marketplacePublishing entitlement; and tenant status is not SUSPENDED. That check belongs to the marketplace projection, deliberately not to this schema. See AGENTS.md so it is not reinvented or half-implemented there.';
+
+            ALTER TABLE estates ADD CONSTRAINT chk_estates_intent
+                CHECK (intent IS NULL OR intent IN ('DEVELOPMENT', 'INVESTMENT', 'BOTH'));
+        </sql>
+        <rollback>
+            DROP TABLE estates;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="033-create-estates-indexes" author="landvault">
+        <sql>
+            -- GiST, not btree: a spatial index is what keeps the real
+            -- ST_Intersects path fast enough to use, which is what stops
+            -- conflict detection degrading into a bounding-box heuristic.
+            CREATE INDEX idx_estates_footprint ON estates USING GIST (footprint);
+        </sql>
+        <rollback>
+            DROP INDEX idx_estates_footprint;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="033-create-estates-constraints" author="landvault">
+        <addUniqueConstraint tableName="estates" columnNames="tenant_id, slug"
+                             constraintName="uq_estates_tenant_slug"/>
+        <createIndex indexName="idx_estates_tenant_id" tableName="estates">
+            <column name="tenant_id"/>
+        </createIndex>
+        <createIndex indexName="idx_estates_branch_id" tableName="estates">
+            <column name="branch_id"/>
+        </createIndex>
+        <createIndex indexName="idx_estates_state" tableName="estates">
+            <column name="state"/>
+        </createIndex>
+        <createIndex indexName="idx_estates_published" tableName="estates">
+            <column name="published"/>
+        </createIndex>
+    </changeSet>
+
+    <!--
+        A child table, not a delimited string on estates: a comma-joined
+        column cannot be filtered or indexed, and breaks the first time an
+        amenity name contains the delimiter.
+    -->
+    <changeSet id="033-create-estate-amenities-table" author="landvault">
+        <sql>
+            CREATE TABLE estate_amenities (
+                id          uuid NOT NULL,
+                tenant_id   uuid,
+                branch_id   uuid,
+                created_at  timestamp(6) with time zone NOT NULL,
+                updated_at  timestamp(6) with time zone,
+                created_by  varchar(255),
+                updated_by  varchar(255),
+                deleted     boolean NOT NULL,
+
+                estate_id   uuid NOT NULL,
+                name        varchar(255) NOT NULL,
+
+                PRIMARY KEY (id)
+            );
+        </sql>
+        <rollback>
+            DROP TABLE estate_amenities;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="033-create-estate-amenities-fk-indexes" author="landvault">
+        <addForeignKeyConstraint
+                baseTableName="estate_amenities" baseColumnNames="estate_id"
+                constraintName="fk_estate_amenities_estate_id"
+                referencedTableName="estates" referencedColumnNames="id"/>
+        <createIndex indexName="idx_estate_amenities_estate_id" tableName="estate_amenities">
+            <column name="estate_id"/>
+        </createIndex>
+        <addUniqueConstraint tableName="estate_amenities" columnNames="estate_id, name"
+                             constraintName="uq_estate_amenities_estate_name"/>
+    </changeSet>
+
+</databaseChangeLog>

@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        inventory.internal.domain.Plot — the sellable unit.
+
+        No price column: a plot's price comes from its tier, plus the estate's
+        corner premium when is_corner. Storing it here would create a second
+        figure that can drift from the first.
+    -->
+    <changeSet id="036-create-plots-table" author="landvault">
+        <sql>
+            CREATE TABLE plots (
+                id                uuid NOT NULL,
+                tenant_id         uuid,
+                branch_id         uuid,
+                created_at        timestamp(6) with time zone NOT NULL,
+                updated_at        timestamp(6) with time zone,
+                created_by        varchar(255),
+                updated_by        varchar(255),
+                deleted           boolean NOT NULL,
+
+                estate_id         uuid NOT NULL,
+                block_id          uuid,
+                price_tier_id     uuid NOT NULL,
+                plot_number       varchar(32) NOT NULL,
+                is_corner         boolean NOT NULL,
+                status            varchar(32) NOT NULL,
+                intent            varchar(32),
+                orientation       varchar(2),
+                nominal_size_sqm  numeric(12,2) NOT NULL,
+                actual_area_sqm   numeric(12,2),
+                footprint         geometry(Polygon,4326),
+
+                PRIMARY KEY (id)
+            );
+
+            COMMENT ON COLUMN plots.nominal_size_sqm IS
+                'What this plot is SOLD AND PRICED as — the number on the deed and the invoice. Comes from its tier. Kept alongside actual_area_sqm rather than instead of it: a plot sold as 250 sqm may survey at 248.6, and keeping only one loses either the commercial truth or the physical truth.';
+            COMMENT ON COLUMN plots.actual_area_sqm IS
+                'What the SURVEY says, derived from footprint via ST_Area(footprint::geography) — square metres, a geography cast, never raw 4326 (which yields square degrees). Nullable, and MUST NEVER default to nominal_size_sqm: a plot with no footprint has no surveyed area, and copying the nominal value would manufacture a survey result nobody produced.';
+            COMMENT ON COLUMN plots.footprint IS
+                'This plot''s own boundary, SRID 4326. The within-estate double allocation — the same plot sold twice inside one estate — is the more common scam and is undetectable precisely BECAUSE plots have had no geometry. This column is what makes real ST_Intersects detection possible rather than a bounding-box heuristic.';
+            COMMENT ON COLUMN plots.is_corner IS
+                'With estates.corner_premium_pct this makes a corner plot''s price computable, which is why no corner price is stored anywhere.';
+
+            ALTER TABLE plots ADD CONSTRAINT chk_plots_status
+                CHECK (status IN ('AVAILABLE_DEV', 'AVAILABLE_INV', 'RESERVED', 'SOLD'));
+            ALTER TABLE plots ADD CONSTRAINT chk_plots_intent
+                CHECK (intent IS NULL OR intent IN ('DEVELOPMENT', 'INVESTMENT'));
+            ALTER TABLE plots ADD CONSTRAINT chk_plots_orientation
+                CHECK (orientation IS NULL OR orientation IN ('N','S','E','W','NE','NW','SE','SW'));
+            ALTER TABLE plots ADD CONSTRAINT chk_plots_nominal_size_positive
+                CHECK (nominal_size_sqm > 0);
+            ALTER TABLE plots ADD CONSTRAINT chk_plots_actual_area_positive
+                CHECK (actual_area_sqm IS NULL OR actual_area_sqm > 0);
+        </sql>
+        <rollback>
+            DROP TABLE plots;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="036-create-plots-indexes" author="landvault">
+        <sql>
+            CREATE INDEX idx_plots_footprint ON plots USING GIST (footprint);
+        </sql>
+        <rollback>
+            DROP INDEX idx_plots_footprint;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="036-create-plots-fk-indexes" author="landvault">
+        <addForeignKeyConstraint
+                baseTableName="plots" baseColumnNames="estate_id"
+                constraintName="fk_plots_estate_id"
+                referencedTableName="estates" referencedColumnNames="id"/>
+        <addForeignKeyConstraint
+                baseTableName="plots" baseColumnNames="block_id"
+                constraintName="fk_plots_block_id"
+                referencedTableName="blocks" referencedColumnNames="id"/>
+        <addForeignKeyConstraint
+                baseTableName="plots" baseColumnNames="price_tier_id"
+                constraintName="fk_plots_price_tier_id"
+                referencedTableName="price_tiers" referencedColumnNames="id"/>
+        <createIndex indexName="idx_plots_estate_id" tableName="plots">
+            <column name="estate_id"/>
+        </createIndex>
+        <createIndex indexName="idx_plots_block_id" tableName="plots">
+            <column name="block_id"/>
+        </createIndex>
+        <createIndex indexName="idx_plots_price_tier_id" tableName="plots">
+            <column name="price_tier_id"/>
+        </createIndex>
+        <createIndex indexName="idx_plots_tenant_id" tableName="plots">
+            <column name="tenant_id"/>
+        </createIndex>
+        <createIndex indexName="idx_plots_branch_id" tableName="plots">
+            <column name="branch_id"/>
+        </createIndex>
+        <createIndex indexName="idx_plots_status" tableName="plots">
+            <column name="status"/>
+        </createIndex>
+    </changeSet>
+
+    <!--
+        NULLS NOT DISTINCT is load-bearing, not decoration. block_id is
+        nullable (not every estate uses blocks), and Postgres's default treats
+        every NULL as distinct — so a plain unique constraint would happily
+        allow two "Plot 4" rows in the same block-less estate, which is
+        exactly the duplicate this constraint exists to prevent. Requires
+        Postgres 15+; the project runs 16.
+    -->
+    <changeSet id="036-create-plots-unique-number" author="landvault">
+        <sql>
+            ALTER TABLE plots ADD CONSTRAINT uq_plots_estate_block_number
+                UNIQUE NULLS NOT DISTINCT (estate_id, block_id, plot_number);
+        </sql>
+        <rollback>
+            ALTER TABLE plots DROP CONSTRAINT uq_plots_estate_block_number;
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

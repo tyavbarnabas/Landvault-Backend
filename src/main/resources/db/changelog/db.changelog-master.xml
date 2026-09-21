@@ -38,6 +38,12 @@
     <include file="changes/030-create-recovery-codes-table.xml" relativeToChangelogFile="true"/>
     <include file="changes/031-create-two-fa-challenges-table.xml" relativeToChangelogFile="true"/>
     <include file="changes/032-seed-audit-view-permission.xml" relativeToChangelogFile="true"/>
+    <include file="changes/033-create-estates-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/034-create-blocks-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/035-create-price-tiers-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/036-create-plots-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/037-create-estate-titles-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/038-create-estate-verification-checks-table.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

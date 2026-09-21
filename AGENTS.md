@@ -1073,6 +1073,107 @@ public, because it completes a login and its caller holds no token yet.
 Adding a new public auth route means adding it to that list; forgetting makes
 it require authentication, which is the safe direction to fail.
 
+## Inventory: nominal vs surveyed area, and why both exist
+
+`plots` carries **two** area columns, deliberately:
+
+- **`nominal_size_sqm`** — what the plot is *sold and priced as*. Comes from
+  its tier; it is the number on the deed and the invoice.
+- **`actual_area_sqm`** — what the *survey* says, derived from `footprint` via
+  `ST_Area(footprint::geography)`.
+
+A plot sold as "250 sqm" may survey at 248.6. **Price off the nominal tier;
+display the surveyed area separately.** Storing only one loses either the
+commercial truth or the physical truth, and there is no safe way to recover
+the missing one later.
+
+`actual_area_sqm` is nullable and **must never default to the nominal value**.
+A plot with no footprint has no surveyed area; copying the nominal figure
+across would manufacture a survey result nobody produced — the same
+fabrication rule that governs metrics elsewhere in this codebase.
+
+## Corner premium is a modifier, tier prices are never per-sqm
+
+**`estates.corner_premium_pct` is a modifier, not a tier.** A corner plot
+costs `tierPrice × (1 + cornerPremiumPct / 100)`, computed. No corner price is
+stored anywhere, so the two figures can never drift apart. Corner plots are
+deliberately absent from the tier list — a corner is a per-plot modifier, not
+a menu item.
+
+**`price_tiers.price` is the developer's own price for that band, never
+derived from a single per-sqm rate.** Larger plots are routinely discounted
+per square metre — 180 sqm at ₦18,000/sqm while 600 sqm sells at ₦14,500/sqm.
+A per-sqm figure is a *displayed comparison* computed for the UI so a buyer
+can weigh a 250 against a 600 honestly; it is never an input to pricing.
+Deriving price from a rate would quietly overcharge every large plot.
+
+Money and areas are `numeric` / `BigDecimal` throughout — never floating
+point.
+
+## Title is per-estate; `organization_documents` is the other half of that rule
+
+`estate_titles` holds the land title instrument (C of O, R of O, Governor's
+Consent, Gazette), one row per estate. A developer can hold clean title on one
+estate and none at all on the next, so this **cannot** live on
+`Organization` — and `organization_documents` already carries the mirror of
+the rule, deliberately holding corporate verification documents (CAC, TIN,
+SCUML) and no land title. The two halves are meant to be read together;
+changing one without the other reopens a question that is already settled.
+
+## `verification_source` is what makes a check worth more than a boolean
+
+`estate_verification_checks` records AGIS registration, encroachment status
+and title verification. Two columns carry the weight:
+
+- **`status`** — `NOT_CHECKED` is the default, and **it must never render as
+  positive**. The absence of a check is not a clean bill of health; the
+  frontend removed hardcoded "No encroachment notices on file" claims for
+  exactly this reason. A row that does not exist means nobody has looked.
+- **`verification_source`** — a green badge produced by a real registry API
+  call and a green badge produced by a human eyeballing a PDF are different
+  claims, and a buyer deciding whether to part with money deserves to know
+  which one they are looking at. If this collapsed into `verified: true`, the
+  badge would mean nothing. It is an enum rather than free text specifically
+  so `MANUAL_REVIEW` can never be spelled two ways — a typo would silently
+  split the one distinction the column exists to make.
+
+## The marketplace publication gate: four conditions, recorded here, enforced there
+
+An estate is publicly listable only when **all four** hold:
+
+1. `estates.published` is true (the developer's own opt-in switch)
+2. the owning tenant's `verificationState` is `VERIFIED`
+3. that tenant holds the `marketplacePublishing` entitlement
+4. the tenant's `status` is not `SUSPENDED`
+
+**The gate belongs to the `marketplace` projection, not to the inventory
+schema** — which is why `estates.published` is only condition 1 and carries a
+Postgres column comment saying so. A developer can pull one listing without
+touching tenant status, and a tenant can lose the right to publish without any
+estate changing. Whoever builds the projection implements all four; don't
+half-implement it as "published = true".
+
+## Inventory's geometry: where the spatial conventions finally bite
+
+`estates.footprint` and `plots.footprint` are the first real geometry in this
+schema — `geometry(Polygon,4326)`, both GiST-indexed, mapped to JTS `Polygon`.
+The AGENTS.md spatial conventions above stop being theoretical here, and the
+failure mode is the dangerous kind: `ST_Area` on raw 4326 returns square
+*degrees*, which is not an error, just a plausible-looking wrong number.
+
+**Plot-level geometry is the point, not a nicety.** The within-estate double
+allocation — the same plot sold twice inside one estate — is the more common
+scam and has been undetectable precisely *because* plots had no geometry.
+That column is what makes real `ST_Intersects` detection possible instead of
+the bounding-box heuristic this file forbids.
+
+One Postgres subtlety worth keeping: `plots`'s uniqueness is
+`UNIQUE NULLS NOT DISTINCT (estate_id, block_id, plot_number)`. `block_id` is
+nullable (not every estate uses blocks), and Postgres's default treats every
+NULL as distinct — so a plain unique constraint would happily allow two
+"Plot 4" rows in the same block-less estate, which is exactly the duplicate
+the constraint exists to prevent. Requires Postgres 15+; the project runs 16.
+
 ## The audit log is readable, and read-only by design
 
 `GET /api/admin/audit-log` is the audit module's only read surface, gated on

@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        inventory.internal.domain.Block — a subdivision within an estate.
+
+        Deliberately thin: blocks exist because plots are addressed as
+        "Block C, Plot 4", not because they carry data of their own. Pricing
+        and status belong to the plot or its tier; resist hanging either here.
+    -->
+    <changeSet id="034-create-blocks-table" author="landvault">
+        <sql>
+            CREATE TABLE blocks (
+                id          uuid NOT NULL,
+                tenant_id   uuid,
+                branch_id   uuid,
+                created_at  timestamp(6) with time zone NOT NULL,
+                updated_at  timestamp(6) with time zone,
+                created_by  varchar(255),
+                updated_by  varchar(255),
+                deleted     boolean NOT NULL,
+
+                estate_id   uuid NOT NULL,
+                name        varchar(64) NOT NULL,
+                label       varchar(255),
+
+                PRIMARY KEY (id)
+            );
+        </sql>
+        <rollback>
+            DROP TABLE blocks;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="034-create-blocks-fk-indexes" author="landvault">
+        <addForeignKeyConstraint
+                baseTableName="blocks" baseColumnNames="estate_id"
+                constraintName="fk_blocks_estate_id"
+                referencedTableName="estates" referencedColumnNames="id"/>
+        <createIndex indexName="idx_blocks_estate_id" tableName="blocks">
+            <column name="estate_id"/>
+        </createIndex>
+        <createIndex indexName="idx_blocks_tenant_id" tableName="blocks">
+            <column name="tenant_id"/>
+        </createIndex>
+        <addUniqueConstraint tableName="blocks" columnNames="estate_id, name"
+                             constraintName="uq_blocks_estate_name"/>
+    </changeSet>
+
+</databaseChangeLog>

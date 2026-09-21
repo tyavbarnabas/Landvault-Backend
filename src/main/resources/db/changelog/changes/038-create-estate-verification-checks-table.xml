@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        inventory.internal.domain.EstateVerificationCheck — one due-diligence
+        check on an estate (AGIS registration, encroachment status, title
+        verification).
+
+        Independent of the title instrument itself: an estate can hold a valid
+        C of O and still sit on land carrying an encroachment notice.
+    -->
+    <changeSet id="038-create-estate-verification-checks-table" author="landvault">
+        <sql>
+            CREATE TABLE estate_verification_checks (
+                id                   uuid NOT NULL,
+                tenant_id            uuid,
+                branch_id            uuid,
+                created_at           timestamp(6) with time zone NOT NULL,
+                updated_at           timestamp(6) with time zone,
+                created_by           varchar(255),
+                updated_by           varchar(255),
+                deleted              boolean NOT NULL,
+
+                estate_id            uuid NOT NULL,
+                check_type           varchar(40) NOT NULL,
+                status               varchar(20) NOT NULL,
+                verification_source  varchar(32),
+                last_verified_at     timestamp(6) with time zone,
+                notes                text,
+
+                PRIMARY KEY (id)
+            );
+
+            COMMENT ON COLUMN estate_verification_checks.status IS
+                'NOT_CHECKED is the default and MUST NEVER render as positive. The absence of a check is not a clean bill of health — the frontend removed hardcoded "No encroachment notices on file" claims for exactly this reason. A row that does not exist means nobody has looked.';
+            COMMENT ON COLUMN estate_verification_checks.verification_source IS
+                'What makes this row worth more than a boolean: a green badge from a real registry API call and a green badge from a human reading a PDF are different claims, and a buyer deciding whether to part with money deserves to know which one they are looking at. An enum rather than free text so manual_review can never be spelled two ways.';
+
+            ALTER TABLE estate_verification_checks ADD CONSTRAINT chk_evc_check_type
+                CHECK (check_type IN ('AGIS_REGISTRATION', 'ENCROACHMENT_STATUS', 'TITLE_VERIFICATION'));
+            ALTER TABLE estate_verification_checks ADD CONSTRAINT chk_evc_status
+                CHECK (status IN ('VERIFIED', 'PENDING', 'NOT_CHECKED', 'FAILED'));
+            ALTER TABLE estate_verification_checks ADD CONSTRAINT chk_evc_source
+                CHECK (verification_source IS NULL
+                       OR verification_source IN ('MANUAL_REVIEW', 'AGIS', 'QOREID', 'CAC_REGISTRY'));
+        </sql>
+        <rollback>
+            DROP TABLE estate_verification_checks;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="038-create-estate-verification-checks-fk-indexes" author="landvault">
+        <addForeignKeyConstraint
+                baseTableName="estate_verification_checks" baseColumnNames="estate_id"
+                constraintName="fk_evc_estate_id"
+                referencedTableName="estates" referencedColumnNames="id"/>
+        <createIndex indexName="idx_estate_verification_checks_estate_id" tableName="estate_verification_checks">
+            <column name="estate_id"/>
+        </createIndex>
+        <createIndex indexName="idx_estate_verification_checks_tenant_id" tableName="estate_verification_checks">
+            <column name="tenant_id"/>
+        </createIndex>
+        <!-- One row per check type per estate: a second AGIS row would make
+             "the" status ambiguous. -->
+        <addUniqueConstraint tableName="estate_verification_checks" columnNames="estate_id, check_type"
+                             constraintName="uq_estate_verification_checks_estate_type"/>
+    </changeSet>
+
+</databaseChangeLog>
