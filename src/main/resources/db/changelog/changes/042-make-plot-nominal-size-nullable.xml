@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        nominal_size_sqm becomes nullable, for built units only.
+
+        A plot's nominal size comes from its tier. A LAND_SIZE tier always has
+        one (enforced by chk_price_tiers_land_size_has_size), so those plots
+        always get a value. A UNIT_TYPE tier has none — and for a 4th-floor
+        apartment there genuinely IS no exclusive land area, only a share.
+
+        The alternatives were both worse: writing a zero fabricates a figure,
+        and requiring the caller to supply one forces them to invent it. This
+        codebase's hardest rule is that absent means absent.
+
+        A terrace on its own plot DOES have a real land size, so the column
+        stays available and the service accepts one for UNIT_TYPE plots when
+        offered. The "LAND_SIZE plots must have a size" half cannot be a CHECK
+        here — it depends on the referenced tier's type, which a row-level
+        constraint cannot see — so the service enforces it. See AGENTS.md.
+    -->
+    <changeSet id="042-make-plot-nominal-size-nullable" author="landvault">
+        <sql>
+            ALTER TABLE plots ALTER COLUMN nominal_size_sqm DROP NOT NULL;
+
+            COMMENT ON COLUMN plots.nominal_size_sqm IS
+                'What this plot is SOLD AND PRICED as — the number on the deed and the invoice — copied from its tier at creation, never accepted from the request (a caller-supplied size could contradict the tier it is priced by). Nullable ONLY for UNIT_TYPE tiers, where an apartment has no exclusive land area; writing a zero there would fabricate a figure. Kept alongside actual_area_sqm deliberately: a plot sold as 250 sqm may survey at 248.6, and keeping only one loses either the commercial or the physical truth.';
+        </sql>
+        <rollback>
+            ALTER TABLE plots ALTER COLUMN nominal_size_sqm SET NOT NULL;
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

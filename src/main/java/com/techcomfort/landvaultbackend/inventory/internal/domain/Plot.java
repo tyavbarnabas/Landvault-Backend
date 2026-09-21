@@ -116,8 +116,18 @@ public class Plot extends AbstractEntity {
      * instead of it: a plot sold as "250 sqm" may survey at 248.6, and
      * keeping only one of the two loses either the commercial truth or the
      * physical truth. Price off this; display the surveyed figure separately.
+     * <p>
+     * Copied from the tier at creation, <strong>never accepted from the
+     * request</strong> — a caller-supplied size could contradict the tier the
+     * plot is priced by, leaving the invoice and the deed disagreeing.
+     * <p>
+     * Nullable only for {@code UNIT_TYPE} tiers: an apartment has no
+     * exclusive land area, and writing a zero there would fabricate a figure.
+     * A {@code LAND_SIZE} plot always has one; that half is enforced in the
+     * service, because a row-level CHECK cannot see the referenced tier's
+     * type.
      */
-    @Column(name = "nominal_size_sqm", nullable = false, precision = 12, scale = 2)
+    @Column(name = "nominal_size_sqm", precision = 12, scale = 2)
     private BigDecimal nominalSizeSqm;
 
     /**

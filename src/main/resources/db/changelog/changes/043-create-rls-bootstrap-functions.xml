@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Two SECURITY DEFINER functions that let TenancyApi answer questions
+        which are asked BEFORE any tenant scope exists.
+
+        The bug they fix: both TenancyApi methods read RLS-policied tables
+        from a point in the request where no scope has been established yet,
+        so the policies fail closed and the queries return nothing.
+
+          - isTenantActive is called from AuthService.login()/refresh(). Login
+            is what ESTABLISHES a scope, so it cannot presuppose one. Result:
+            organizations returned 0 rows and EVERY tenant-staff login was
+            refused as TENANT_NOT_ACTIVE — the B2 session-revocation gate was
+            blocking all tenant staff, not just suspended ones.
+
+          - branchBelongsToTenant is called from TenantContextFilter while it
+            is still RESOLVING the scope, so TenantContext isn't populated
+            yet. Result: branches returned 0 rows and the X-Branch-Id switcher
+            silently never honoured a branch (it ignores failures by design,
+            so this was invisible).
+
+        Verified directly against the app's own role rather than inferred:
+        `SET ROLE landvault_app; SELECT count(*) FROM organizations WHERE
+        id = '<a real ACTIVE tenant>'` returns 0 with no GUCs set, and
+        branches likewise.
+
+        This is the same bootstrapping shape AGENTS.md already documents for
+        `users` and `refresh_tokens`, and names SECURITY DEFINER as the
+        intended remedy for. Both functions return a BOOLEAN, never a row, so
+        they answer exactly the question the caller is entitled to ask
+        without reopening either table to unscoped reads.
+
+        SET search_path is not optional on a SECURITY DEFINER function: it
+        stops a caller shadowing `organizations` with a temp table and having
+        the definer's privileges applied to it.
+    -->
+    <changeSet id="043-create-tenant-is-active-function" author="landvault">
+        <sql splitStatements="false"><![CDATA[
+            CREATE FUNCTION landvault_tenant_is_active(p_tenant_id uuid)
+            RETURNS boolean
+            LANGUAGE sql
+            SECURITY DEFINER
+            STABLE
+            SET search_path = public, pg_temp
+            AS $$
+                SELECT EXISTS (
+                    SELECT 1 FROM organizations
+                    WHERE id = p_tenant_id
+                      AND status = 'ACTIVE'
+                      AND deleted = false
+                );
+            $$;
+        ]]></sql>
+        <rollback>
+            DROP FUNCTION landvault_tenant_is_active(uuid);
+        </rollback>
+    </changeSet>
+
+    <changeSet id="043-create-branch-belongs-to-tenant-function" author="landvault">
+        <sql splitStatements="false"><![CDATA[
+            CREATE FUNCTION landvault_branch_belongs_to_tenant(p_branch_id uuid, p_tenant_id uuid)
+            RETURNS boolean
+            LANGUAGE sql
+            SECURITY DEFINER
+            STABLE
+            SET search_path = public, pg_temp
+            AS $$
+                SELECT EXISTS (
+                    SELECT 1 FROM branches
+                    WHERE id = p_branch_id
+                      AND organization_id = p_tenant_id
+                      AND deleted = false
+                );
+            $$;
+        ]]></sql>
+        <rollback>
+            DROP FUNCTION landvault_branch_belongs_to_tenant(uuid, uuid);
+        </rollback>
+    </changeSet>
+
+    <!--
+        Least privilege: nobody gets these by default, the application role
+        gets EXECUTE and nothing else.
+    -->
+    <changeSet id="043-grant-execute-on-bootstrap-functions" author="landvault">
+        <sql>
+            REVOKE ALL ON FUNCTION landvault_tenant_is_active(uuid) FROM PUBLIC;
+            REVOKE ALL ON FUNCTION landvault_branch_belongs_to_tenant(uuid, uuid) FROM PUBLIC;
+            GRANT EXECUTE ON FUNCTION landvault_tenant_is_active(uuid) TO ${appDbUsername};
+            GRANT EXECUTE ON FUNCTION landvault_branch_belongs_to_tenant(uuid, uuid) TO ${appDbUsername};
+        </sql>
+        <rollback>
+            REVOKE EXECUTE ON FUNCTION landvault_tenant_is_active(uuid) FROM ${appDbUsername};
+            REVOKE EXECUTE ON FUNCTION landvault_branch_belongs_to_tenant(uuid, uuid) FROM ${appDbUsername};
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        portal.estates.manage — the FIRST portal.* permission in this schema.
+        Until now every slug was admin.* (Super Admin console) or client.*
+        (buyer). Slug shape follows the frontend's convention exactly
+        (lowercase, dotted): the nav renders off these strings.
+
+        Granted to executive_director (organization-wide oversight) and
+        surveyor_project_manager (whose seeded description is literally
+        "spatial inventory and construction tracking" — creating estates and
+        plots with boundaries is that role's job).
+
+        Deliberately NOT granted to branch_manager, sales_manager,
+        finance_officer or legal_officer. Sales sells what exists, finance
+        reconciles it, legal papers it; none of them define the inventory.
+        branch_manager is the arguable one and was left out on the same
+        reasoning used for platform_moderator and the audit log: the narrower
+        grant is the reversible one, since widening later is a one-line
+        changeset.
+    -->
+    <changeSet id="041-seed-portal-estates-permission" author="landvault">
+        <sql>
+            INSERT INTO permissions (id, created_at, created_by, deleted, code, description) VALUES
+                (gen_random_uuid(), now(), 'system', false, 'portal.estates.manage',
+                 'Create and manage estates, blocks, price tiers and plots for the owning tenant.');
+
+            INSERT INTO role_permissions (id, created_at, created_by, deleted, role_id, permission_id)
+            SELECT gen_random_uuid(), now(), 'system', false, r.id, p.id
+            FROM roles r, permissions p
+            WHERE r.code IN ('executive_director', 'surveyor_project_manager')
+              AND p.code = 'portal.estates.manage';
+        </sql>
+        <rollback>
+            DELETE FROM role_permissions WHERE permission_id IN (
+                SELECT id FROM permissions WHERE code = 'portal.estates.manage'
+            );
+            DELETE FROM permissions WHERE code = 'portal.estates.manage';
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

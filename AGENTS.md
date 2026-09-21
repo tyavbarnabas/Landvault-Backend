@@ -637,6 +637,69 @@ having a terminal state at all. Setting the same status a tenant already
 has is rejected too (not silently accepted) — it usually means the caller
 is acting on stale data.
 
+## `TenancyApi` reads through SECURITY DEFINER functions, and must keep doing so
+
+Both `TenancyApi` methods answer questions asked **before any tenant scope
+exists**, so neither can read its table through an ordinary repository — RLS
+fails closed and returns nothing:
+
+- **`isTenantActive`** runs inside `AuthService.login()`/`refresh()`. Login is
+  what *establishes* a scope, so it cannot presuppose one.
+- **`branchBelongsToTenant`** runs inside `TenantContextFilter` while it is
+  still *resolving* the scope, so `TenantContext` isn't populated yet.
+
+Both therefore call `SECURITY DEFINER` functions (changeset 043) —
+`landvault_tenant_is_active(uuid)` and
+`landvault_branch_belongs_to_tenant(uuid, uuid)` — which run as the table
+owner and so aren't subject to RLS. Each returns a **boolean, never a row**,
+so they answer exactly the question the caller is entitled to ask without
+reopening either table to unscoped reads. `EXECUTE` is revoked from `PUBLIC`
+and granted only to the application role, and each function pins
+`SET search_path = public, pg_temp` so a caller can't shadow `organizations`
+with a temp table and have the definer's privileges applied to it.
+
+**Do not "simplify" either back to a repository call.** It compiles, it passes
+every superuser-connected integration test, and it breaks every tenant-staff
+login in any environment where RLS is actually enforced.
+
+### The bug this fixed, and why nothing caught it for so long
+
+Shipped in tenancy slice B2 and only found when a human tried to log in as
+tenant staff for the first time. Under RLS, `organizations` returned zero rows
+to the unscoped lookup, `isTenantActive` returned false, and **every
+tenant-staff login was refused as `TENANT_NOT_ACTIVE`** — the
+session-revocation gate was blocking all tenant staff, not just suspended
+ones. The branch half was quieter but equally broken: `branches` returned zero
+rows, so the `X-Branch-Id` switcher silently never honoured a branch (it
+ignores failures by design).
+
+Verified against the app's own role rather than inferred:
+`SET ROLE landvault_app; SELECT count(*) FROM organizations WHERE id = '<an
+ACTIVE tenant>'` returns **0** with no GUCs set, and `branches` likewise;
+setting `landvault.tenant_id` first makes both visible.
+
+**Three independent reasons the suite couldn't see it**, which is the lesson
+worth carrying:
+
+1. Every login IT uses `@ServiceConnection` — the container superuser — so RLS
+   is bypassed entirely.
+2. The one IT that *does* use the restricted role only logs in as platform
+   staff, whose `tenantId` is null, so the check never runs.
+3. The only real tenant-staff accounts are created by
+   `TenantStaffAccountListener` with deliberately unrecoverable passwords, so
+   nobody had ever logged in as one.
+
+`TenantStaffLoginUnderRlsIT` exists to close that hole: it wires the app to the
+restricted role explicitly and logs in as tenant staff. **Do not convert it to
+`@ServiceConnection`** — that would make it pass with or without the fix,
+which is precisely how the bug survived. Proven to fail without the fix
+(`expected: 200 OK but was: 403 FORBIDDEN`) before being considered done.
+
+**The general rule this establishes**: any query on an RLS-policied table that
+runs during authentication or scope resolution needs this treatment. When
+adding one, ask first whether a scope exists yet at that point — and if the
+answer is "no, this is what creates it", a repository call is the wrong tool.
+
 ## Closing the session-revocation gap: a login/refresh-time check, not an event
 
 Tenancy slice B2 raised a real question: when a tenant is suspended, should
@@ -1072,6 +1135,108 @@ start or turn off 2FA on someone else's account. Only `/2fa/verify` stays
 public, because it completes a login and its caller holds no token yet.
 Adding a new public auth route means adding it to that list; forgetting makes
 it require authentication, which is the safe direction to fail.
+
+## Boundaries arrive as GeoJSON, and the wire is `[lng, lat]`
+
+`POST /api/portal/estates` takes a GeoJSON `Polygon` in the request body —
+not a file upload, not a shapefile. It's what surveyors' tools export, PostGIS
+parses it natively, and the frontend already models a boundary as a coordinate
+ring. File upload (`.geojson`, shapefile, CAD) is a follow-up, not built.
+
+**The API speaks GeoJSON order — `[longitude, latitude]` — and PostGIS stores
+SRID 4326. The frontend converts for Leaflet; the backend never does.**
+Leaflet uses `[latitude, longitude]`, the other way round, and getting it
+backwards produces no error at all: just a structurally valid polygon in the
+wrong place.
+
+`GeoJsonPolygonParser` rejects: a non-`Polygon` type, an unclosed ring, fewer
+than four positions, and coordinates outside Nigeria's box (longitude 2–15,
+latitude 4–14).
+
+### The bounds check does NOT catch every swap — know what it actually buys
+
+Nigeria's longitude range (2–15) and latitude range (4–14) **overlap across
+4–14**, so any interior point whose coordinates both sit in that band is
+swap-ambiguous. Verified case by case rather than assumed:
+
+| City | Original `[lng, lat]` | Transposed | Caught? |
+|---|---|---|---|
+| Lagos | `3.4, 6.5` | `6.5, 3.4` | yes — latitude 3.4 is offshore |
+| Abuja | `7.4, 9.05` | `9.05, 7.4` | **no** — lands in Taraba |
+| Kano | `8.5, 12.0` | `12.0, 8.5` | **no** |
+| Port Harcourt | `7.0, 4.8` | `4.8, 7.0` | **no** |
+
+No bounds check of any shape can reject transposed Abuja, because the result
+is genuinely inside the country. So the guard catches out-of-country
+boundaries and coastal/western swaps, and that is all it can catch. The real
+protections are the documented wire convention and the frontend owning the
+Leaflet conversion.
+
+**Concrete follow-up**: a per-state bounding-box check, cross-referenced
+against the estate's existing `state` column, would close most of the gap —
+FCT's box is small enough that transposed Abuja falls outside it.
+`PortalEstateCreationIT.swappedCoordinatesAreOnlyCaughtWhenTheyLeaveTheCountryBox`
+pins the current behaviour so the limitation stays visible instead of being
+rediscovered.
+
+## `actual_area_sqm` is computed on write, and must be recomputed on edit
+
+When a plot is created with a footprint, its surveyed area is computed as
+`ST_Area(footprint::geography)` — square metres — and stored. It is **never
+accepted from the request**.
+
+Computed on write rather than per read: simpler, and it matches the column
+that already exists. **The consequence is that editing a footprint must
+recompute it**, or the stored area silently describes the old boundary.
+Nothing edits footprints yet; whoever builds that owns this.
+
+No footprint means `actual_area_sqm` stays **null**, never the nominal figure.
+
+`GeometryCalculator` runs both this and the plot-within-estate containment
+check through the shared `EntityManager`, so they participate in the caller's
+transaction — the same reason `MeController` reads session variables that way
+rather than through a `JdbcTemplate` on a different connection.
+
+## A plot's nominal size comes from its tier, never the request
+
+`plots.nominal_size_sqm` is copied from the plot's `PriceTier` at creation.
+Accepting it from the request would let a caller supply a size contradicting
+the tier the plot is priced by, leaving the invoice and the deed disagreeing.
+
+**The `UNIT_TYPE` decision**: `nominal_size_sqm` was `NOT NULL`, which a
+built-unit tier cannot satisfy — a `UNIT_TYPE` tier has no size of its own.
+It is now **nullable**, because for a 4th-floor apartment there genuinely is
+no exclusive land area, only a share; writing a zero would fabricate a figure
+and requiring the caller to supply one forces them to invent it.
+
+A terrace on its own plot *does* have a real land area, so
+`nominalSizeSqmOverride` is accepted — **only for `UNIT_TYPE` tiers**, and
+ignored entirely for `LAND_SIZE` ones, where the tier is authoritative.
+
+The "a `LAND_SIZE` plot must have a size" half cannot be a CHECK constraint:
+it depends on the referenced tier's type, which a row-level constraint cannot
+see. The service enforces it instead.
+
+## Estate creation: tenant from context, plot containment, publication
+
+- **`tenantId` is never a request field.** It comes from `TenantContext`.
+  `branchId` is taken from the caller's scope when they have one, and when
+  they're organization-wide it must be supplied and is checked against their
+  own tenant via `TenancyApi.branchBelongsToTenant` — never trusted from the
+  request alone.
+- **`published` starts false, always.** Publication is a separate deliberate
+  action, never a creation-time flag, and remains one of the four conditions
+  in the marketplace gate above.
+- **A plot's boundary must sit within its estate's** (`ST_Within`), when both
+  exist. A plot outside its own estate is a data error worth catching at the
+  door. This is *not* plot-against-plot overlap — that's conflict detection,
+  which needs its own design.
+- **`portal.estates.manage`** is the first `portal.*` permission in the
+  schema, granted to `executive_director` and `surveyor_project_manager`
+  (whose seeded description is literally spatial inventory). Sales sells what
+  exists, finance reconciles it, legal papers it — none define the inventory.
+  `branch_manager` was the arguable exclusion, left out on the same
+  narrower-is-reversible reasoning as `platform_moderator` and the audit log.
 
 ## Built property and rentals: the hierarchy extends, it does not fork
 
