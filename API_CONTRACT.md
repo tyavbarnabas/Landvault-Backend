@@ -191,7 +191,11 @@ File storage: frontend notes it needs real S3/MinIO-backed URLs behind "download
 | POST | `/api/admin/tenants/{id}/status` | `{ status, reason? }` | `Tenant` (`reason` required for `suspended`/`offboarded`; no `actor` — see note below) |
 | POST | `/api/admin/tenants/{id}/support-access` | `{ reason, durationMinutes? }` (default 30) | `SupportAccessGrant` (no `actor` — grantee is the authenticated caller) |
 | GET | `/api/admin/tenants/{id}/support-access` | — | `SupportAccessGrant[]` (most recent first) |
-| GET | `/api/admin/audit-log?cursor&limit` | — | `Page<AuditLogEntry>` |
+| GET | `/api/admin/audit-log` | filters below, plus `cursor`/`limit` | `Page<AuditLogEntry>` — **built**, requires `admin.audit.view` |
+
+`/api/admin/audit-log` is implemented. Filters (all optional, combinable): `actorUserId`, `tenantId`, `targetType`, `targetId`, `action`, `privileged`, `occurredAfter`, `occurredBefore`. Ordering is always most-recent-first; page size defaults to 25 and is capped at 100. Each entry carries a resolved `actorName` (`"Unknown user"` when the account is gone — entries outlive accounts by design); `targetId` is **not** resolved to a name, so link on `targetType` + `targetId`.
+
+`privileged=true` isolates support-access entries — that filter is the point of the screen for a compliance reviewer, not a nicety. The endpoint is **read-only**: there is no write, update, delete or archive route, and the append-only schema is what guarantees that.
 
 `Tenant.verificationState`: `created → documents_submitted → under_review → verified` (or `rejected`, `suspended`). `Tenant` has `branches: TenantBranch[]` — real multi-branch support belongs here, not bolted on later.
 

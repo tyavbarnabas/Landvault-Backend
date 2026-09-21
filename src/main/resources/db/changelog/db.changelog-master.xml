@@ -37,6 +37,7 @@
     <include file="changes/029-add-two-fa-columns.xml" relativeToChangelogFile="true"/>
     <include file="changes/030-create-recovery-codes-table.xml" relativeToChangelogFile="true"/>
     <include file="changes/031-create-two-fa-challenges-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/032-seed-audit-view-permission.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

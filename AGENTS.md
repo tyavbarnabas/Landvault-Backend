@@ -1073,6 +1073,90 @@ public, because it completes a login and its caller holds no token yet.
 Adding a new public auth route means adding it to that list; forgetting makes
 it require authentication, which is the safe direction to fail.
 
+## The audit log is readable, and read-only by design
+
+`GET /api/admin/audit-log` is the audit module's only read surface, gated on
+**`admin.audit.view`**. An audit log nobody can read is a compliance artefact
+that satisfies nothing — the append-only invariant exists so someone can later
+*prove what happened*, which requires the entries to be retrievable and
+filterable.
+
+**There is no write, update, delete or archive route, and there must never be
+one.** `AuditLogEntry` extends `AbstractAppendOnlyEntity` (no `updatedAt`, no
+`deleted`) so the schema already makes revision impossible; the API surface
+must not reintroduce what the schema deliberately omits.
+`AuditLogEntryRepository` is read-and-append only for the same reason.
+
+**`privileged` is carried through verbatim and is filterable.** Support-access
+grants are flagged `privileged = true` precisely so a reviewer can see when a
+platform operator looked into a tenant's data and why. Isolating those entries
+is the single most likely reason someone opens this screen deliberately; if
+the read path flattened the flag, it would serve no purpose.
+
+### Who holds `admin.audit.view`, and why not everyone
+
+- **`super_admin`** — obviously.
+- **`compliance_officer`** — reviewing who did what *is* the role. An officer
+  who can't read the audit trail can't do the job.
+- **`platform_moderator` — deliberately not granted.** Moderation is about
+  marketplace content; the audit log is far wider, exposing every platform
+  operator's actions across every tenant, including the `privileged` entries
+  that reveal when the platform is investigating a tenant. That's compliance
+  reach, not moderation reach. The narrower grant is also the reversible one:
+  widening later is a one-line changeset, un-leaking an investigation is not.
+
+The slug follows the frontend's lowercase dotted convention exactly — the nav
+renders directly off these strings, so a renamed slug silently removes a menu
+item.
+
+### Actor names: a third module cycle, solved by inverting the dependency
+
+The read path resolves `actorUserId` to a display name, because raw UUIDs are
+unreadable in an activity stream. The obvious implementation — `audit` calling
+`IdentityApi` — is **impossible**: `identity` already depends on `audit` (both
+`AuthService` and `TwoFactorService` record entries), so the reverse edge is a
+cycle. Confirmed rather than assumed, the same way the earlier two were:
+adding `IdentityApi` to `AuditApiImpl` failed `ModularityTests` with
+`Cycle detected: Slice audit -> ...`.
+
+The fix is **dependency inversion**, not a new module and not a read model:
+`audit` declares the `ActorNameResolver` interface in its own public package,
+and `identity` implements it (`IdentityActorNameResolver`). Every arrow keeps
+pointing the way it already did — `identity → audit`, never back.
+
+This is now the **third** distinct cross-module-naming collision in this
+codebase (after `tenancy`'s `reviewerName`/`managerName`, and `tenancy`'s
+tenant-staff account creation). Worth recognising the shape early: when module
+A needs a label owned by module B and B already depends on A, inverting the
+interface is cheaper than either a read model or a new composition module.
+Note this does **not** retroactively fix `reviewerName`/`managerName` in
+tenancy — those remain null, and the same technique would work there if
+someone wants them.
+
+Resolution is **batched** by construction: the interface takes a collection,
+so a page resolves its actors in one `findAllById`, never one query per row.
+A missing actor renders as `"Unknown user"` rather than blank or a crash —
+audit entries outlive the accounts that created them, by design, so that is an
+ordinary case.
+
+`targetId` is deliberately **not** resolved to a name. Targets span
+organizations, users and documents across several modules, so doing it
+properly needs a lookup strategy per type; the frontend gets `targetType` and
+`targetId` and can link. A possible follow-up, not a gap being hidden.
+
+### Platform scope only — and the TODO that comes with it
+
+A Super Admin sees every entry across all tenants, via the existing
+platform-scope RLS bypass. **`audit_log_entries` carries no RLS policy**,
+which is fine while only platform staff can read it.
+
+**TODO:** it becomes a real gap the moment tenant staff need their own
+organization's trail through `/api/portal/*`. That view needs *both* a policy
+on this table *and* a decision about what a tenant may see — their own entries
+certainly, but almost certainly **not** `privileged` support-access entries,
+which would let a tenant watch the platform investigating them. Don't build
+the tenant-facing view without settling that second question first.
+
 ## Permission slugs are authorities; `tenant_id` is never client-supplied
 
 The `permissions` claim (flattened, deduplicated union of the user's roles'

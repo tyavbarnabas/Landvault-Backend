@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        admin.audit.view — reading the platform audit trail.
+
+        Slug shape matches the frontend's convention exactly (lowercase,
+        dotted): the nav renders directly off these strings, so a renamed
+        slug silently removes a menu item.
+
+        Granted to super_admin and compliance_officer. Reviewing who did what
+        is the core of the compliance role — an officer who cannot read the
+        audit trail cannot do the job.
+
+        Deliberately NOT granted to platform_moderator. Moderation is about
+        marketplace content, and the audit log is wider than that: it exposes
+        every platform operator's actions across every tenant, including
+        `privileged` support-access entries that reveal when the platform is
+        investigating a tenant. That is compliance reach, not moderation
+        reach, and the narrower grant is the reversible one — widening later
+        is a one-line changeset, un-leaking an investigation is not. See
+        AGENTS.md.
+    -->
+    <changeSet id="032-seed-audit-view-permission" author="landvault">
+        <sql>
+            INSERT INTO permissions (id, created_at, created_by, deleted, code, description) VALUES
+                (gen_random_uuid(), now(), 'system', false, 'admin.audit.view',
+                 'Read the platform audit trail, including privileged support-access entries.');
+
+            INSERT INTO role_permissions (id, created_at, created_by, deleted, role_id, permission_id)
+            SELECT gen_random_uuid(), now(), 'system', false, r.id, p.id
+            FROM roles r, permissions p
+            WHERE r.code IN ('super_admin', 'compliance_officer')
+              AND p.code = 'admin.audit.view';
+        </sql>
+        <rollback>
+            DELETE FROM role_permissions WHERE permission_id IN (
+                SELECT id FROM permissions WHERE code = 'admin.audit.view'
+            );
+            DELETE FROM permissions WHERE code = 'admin.audit.view';
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
