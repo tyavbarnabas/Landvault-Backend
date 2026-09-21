@@ -168,7 +168,7 @@ class PortalEstateCreationIT {
     @Test
     void rejectsAMultiPolygon() {
         String body = """
-                {"name":"Multi","branchId":"%s","footprint":{"type":"MultiPolygon","coordinates":[%s]}}"""
+                {"name":"Multi","branchId":"%s","state":"Lagos","footprint":{"type":"MultiPolygon","coordinates":[%s]}}"""
                 .formatted(branchId, LAGOS_ESTATE_RING);
 
         ResponseEntity<String> response = createEstateRaw(body);
@@ -184,6 +184,23 @@ class PortalEstateCreationIT {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody()).contains("INVALID_GEOMETRY");
+    }
+
+    /**
+     * Required for its own sake, and as the precondition for per-state
+     * boundary validation — that check can only be built once every estate
+     * carries a state. A live walkthrough created an estate with a
+     * transposed Abuja boundary and {@code state: null}, which is what
+     * showed the follow-up needed this first.
+     */
+    @Test
+    void anEstateWithoutAStateIsRejected() {
+        ResponseEntity<String> response = createEstateRaw(
+                """
+                {"name":"Stateless","branchId":"%s","city":"Abuja"}""".formatted(branchId));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).contains("state");
     }
 
     // --- the coordinate-order trap ---
@@ -236,7 +253,7 @@ class PortalEstateCreationIT {
     void aTenantIdInTheRequestBodyIsIgnored() {
         UUID someoneElse = UUID.randomUUID();
         String body = """
-                {"name":"Injected","branchId":"%s","tenantId":"%s"}""".formatted(branchId, someoneElse);
+                {"name":"Injected","branchId":"%s","state":"Lagos","tenantId":"%s"}""".formatted(branchId, someoneElse);
 
         ResponseEntity<EstateDto> response = restTemplate.exchange(
                 "/api/portal/estates", HttpMethod.POST, entity(portalToken, body), EstateDto.class);
@@ -257,7 +274,7 @@ class PortalEstateCreationIT {
 
         ResponseEntity<String> response = createEstateRaw(
                 """
-                {"name":"Cross Tenant","branchId":"%s"}""".formatted(foreignBranch));
+                {"name":"Cross Tenant","branchId":"%s","state":"Lagos"}""".formatted(foreignBranch));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody()).contains("does not belong to your organization");

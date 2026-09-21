@@ -1172,12 +1172,31 @@ boundaries and coastal/western swaps, and that is all it can catch. The real
 protections are the documented wire convention and the frontend owning the
 Leaflet conversion.
 
-**Concrete follow-up**: a per-state bounding-box check, cross-referenced
-against the estate's existing `state` column, would close most of the gap —
-FCT's box is small enough that transposed Abuja falls outside it.
+**The follow-up is two changes, not one.** A per-state bounding-box check
+would close most of the gap — FCT's box is small enough that transposed Abuja
+falls outside it — but it can only work if every estate actually carries a
+state. A live walkthrough created an estate with a transposed Abuja boundary
+and `state: null`, which is precisely the case a per-state check would have
+been unable to help with.
+
+So: **`state` is now required on estate creation** (`@NotBlank` on
+`CreateEstateRequest`), which is step one. Step two, still to build, is
+validating the boundary against that state's bounding box.
+
+Two things whoever builds step two should settle first:
+
+- **`state` is free text today.** "FCT", "Federal Capital Territory" and
+  "Abuja" would all be accepted, and a bbox lookup needs one canonical form.
+  The frontend already has the authoritative list in
+  `~/landvault/src/data/nigerianStates.ts` — constrain against that rather
+  than inventing a second list.
+- The column itself is still nullable in the database, deliberately: existing
+  rows predate the requirement, and a `NOT NULL` migration would need them
+  backfilled first. The API is the enforcement point for now.
+
 `PortalEstateCreationIT.swappedCoordinatesAreOnlyCaughtWhenTheyLeaveTheCountryBox`
-pins the current behaviour so the limitation stays visible instead of being
-rediscovered.
+pins the current limitation, and `anEstateWithoutAStateIsRejected` pins the
+precondition, so neither gets quietly undone.
 
 ## `actual_area_sqm` is computed on write, and must be recomputed on edit
 

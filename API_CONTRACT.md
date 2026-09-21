@@ -50,7 +50,7 @@ Creation lives under `/api/portal/estates` and requires `portal.estates.manage`.
 
 | Method | Path | Request |
 |---|---|---|
-| POST | `/api/portal/estates` | name, description, area, city, state, address, `cornerPremiumPct`, intent, amenities, `branchId`, optional `footprint` |
+| POST | `/api/portal/estates` | **`name` and `state` are required**; description, area, city, address, `cornerPremiumPct`, intent, amenities, `branchId`, optional `footprint` |
 | POST | `/api/portal/estates/{id}/blocks` | `{ name, label }` |
 | POST | `/api/portal/estates/{id}/price-tiers` | `{ tierType, sizeSqm?, price, currency, label }` |
 | POST | `/api/portal/estates/{id}/plots` | `{ plots: [...] }` — a **batch**, max 500 |
@@ -61,6 +61,7 @@ Four things the frontend must get right:
 
 - **`footprint` is GeoJSON with `[longitude, latitude]` coordinates** — *not* Leaflet's `[latitude, longitude]`. The frontend owns that conversion. A ring must be closed (first position repeated last) and have at least 4 positions. Coordinates outside Nigeria are rejected, but note that guard cannot catch every transposition — see AGENTS.md.
 - **Never send `tenantId`** — it's taken from the authenticated session and any value in the body is ignored. `branchId` is required only when the caller's role is organization-wide.
+- **`state` is required.** Beyond being location data, it's the precondition for validating a boundary against that state's bounding box — the only way to catch a transposed coordinate that still lands inside Nigeria. Send the canonical name from `nigerianStates.ts`.
 - **Don't send a plot's nominal size** — it comes from the plot's price tier. The one exception is `nominalSizeSqmOverride` on a `UNIT_TYPE` tier, which has no size of its own.
 - **`actualAreaSqm` is computed**, never sent: square metres derived from the footprint. Null means no boundary yet, never a fallback to the nominal size.
 

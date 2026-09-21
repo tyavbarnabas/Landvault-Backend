@@ -30,7 +30,17 @@ public record CreateEstateRequest(
         String description,
         String area,
         String city,
-        String state,
+        /**
+         * Required. Beyond being basic location data, this is the first half
+         * of the intended defence against a transposed boundary: Nigeria's
+         * longitude and latitude ranges overlap (4–14), so a country-level
+         * bounds check cannot reject a swapped interior point, but a
+         * per-state bounding box can — FCT's is small enough that transposed
+         * Abuja falls outside it. That check can only be built once every
+         * estate actually carries a state, which is why this is mandatory
+         * before the boundary work it enables. See AGENTS.md.
+         */
+        @NotBlank String state,
         String address,
         @PositiveOrZero BigDecimal cornerPremiumPct,
         String intent,
