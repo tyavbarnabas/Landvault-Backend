@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        portal.estates.view — reading a tenant's own inventory.
+
+        Deliberately a SEPARATE slug from portal.estates.manage rather than
+        letting manage imply view. Reading inventory is what most of a
+        developer's staff do all day; defining it is what two roles do. A
+        single slug would have forced every sales or finance user to hold
+        the permission that also lets them create and price plots.
+
+        Granted broadly across tenant staff — sales sells what exists,
+        finance reconciles against it, legal papers it, and a branch manager
+        runs the branch whose plots these are. Each of them needs to see the
+        inventory; none of them needs to define it. RLS still narrows what
+        any of them actually gets back: a branch manager's reads are walled
+        to their own branch by changeset 044's policies, not by this grant.
+
+        NOT granted to broker (an independent agent is not tenant staff and
+        has no tenant scope to read under) or to any platform-staff role
+        (Super Admin's view of a tenant's inventory belongs to an /api/admin
+        surface with its own permission, not to a portal one).
+    -->
+    <changeSet id="045-seed-portal-estates-view-permission" author="landvault">
+        <sql>
+            INSERT INTO permissions (id, created_at, created_by, deleted, code, description) VALUES
+                (gen_random_uuid(), now(), 'system', false, 'portal.estates.view',
+                 'Read the owning tenant''s estates, blocks, price tiers and plots.');
+
+            INSERT INTO role_permissions (id, created_at, created_by, deleted, role_id, permission_id)
+            SELECT gen_random_uuid(), now(), 'system', false, r.id, p.id
+            FROM roles r, permissions p
+            WHERE r.code IN ('executive_director', 'surveyor_project_manager', 'branch_manager',
+                             'sales_manager', 'finance_officer', 'legal_officer')
+              AND p.code = 'portal.estates.view';
+        </sql>
+        <rollback>
+            DELETE FROM role_permissions WHERE permission_id IN (
+                SELECT id FROM permissions WHERE code = 'portal.estates.view'
+            );
+            DELETE FROM permissions WHERE code = 'portal.estates.view';
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

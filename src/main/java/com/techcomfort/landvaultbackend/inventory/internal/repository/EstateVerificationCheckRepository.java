@@ -4,10 +4,13 @@ import com.techcomfort.landvaultbackend.inventory.internal.domain.EstateVerifica
 import com.techcomfort.landvaultbackend.inventory.internal.enums.VerificationCheckType;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 public interface EstateVerificationCheckRepository extends JpaRepository<EstateVerificationCheck, UUID> {
 
     Optional<EstateVerificationCheck> findByEstateIdAndCheckType(UUID estateId, VerificationCheckType checkType);
+
+    List<EstateVerificationCheck> findByEstateId(UUID estateId);
 }

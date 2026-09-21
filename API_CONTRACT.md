@@ -46,7 +46,7 @@ See AGENTS.md for the neutral-response rule and the honest scope of "sessions re
 
 ### Estate creation (tenant portal) — **built**
 
-Creation lives under `/api/portal/estates` and requires `portal.estates.manage`. The read endpoints above are still unbuilt.
+Creation lives under `/api/portal/estates` and requires `portal.estates.manage`. The *buyer-facing* read endpoints above are still unbuilt; the tenant portal's own reads are built — see the next section.
 
 | Method | Path | Request |
 |---|---|---|
@@ -63,6 +63,28 @@ Four things the frontend must get right:
 - **Never send `tenantId`** — it's taken from the authenticated session and any value in the body is ignored. `branchId` is required only when the caller's role is organization-wide.
 - **`state` is required.** Beyond being location data, it's the precondition for validating a boundary against that state's bounding box — the only way to catch a transposed coordinate that still lands inside Nigeria. Send the canonical name from `nigerianStates.ts`.
 - **Don't send a plot's nominal size** — it comes from the plot's price tier. The one exception is `nominalSizeSqmOverride` on a `UNIT_TYPE` tier, which has no size of its own.
+
+### Estate reads (tenant portal) — **built**
+
+Reads require `portal.estates.view`, a **separate** slug from `portal.estates.manage` — neither implies the other, so a sales or finance user can browse the inventory without being able to define it.
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/api/portal/estates` | `Page<EstateSummary>` — filters `state`, `published`, `intent`, `branchId`, `q`, plus `limit`/`cursor` |
+| GET | `/api/portal/estates/{id}` | `EstateDetail` — estate + blocks + price tiers + title + verification checks + plot counts |
+| GET | `/api/portal/estates/{id}/plots` | `Page<PlotDetail>` — filters `status`, `blockId`, `priceTierId`, `isCorner`, `propertyType`, `listingIntent` |
+| GET | `/api/portal/estates/{id}/plots/{plotId}` | `PlotDetail` |
+| GET | `/api/portal/estates/{id}/geojson` | GeoJSON `FeatureCollection` — the estate boundary and every plot boundary |
+
+What the frontend should know:
+
+- **Which rows come back is decided by the database, not a query parameter.** A branch manager sees only their own branch's estates and gets a **404** — not a 403 — for a sibling branch's estate id, because the row is removed before the query runs. Same for another tenant's estate. There is no parameter that widens this.
+- **A plot's price is computed, never stored.** `PlotDetail` returns `basePrice` (the tier's price), `cornerPremiumPct` (null unless this plot is a corner) and `price` (the result) together — render `price`, but `basePrice`/`cornerPremiumPct` are there so a corner plot's figure can be explained rather than appearing to match no tier on the price list.
+- **`pricePerSqm` is `null`, not `0`, for a `UNIT_TYPE` plot.** An apartment has no exclusive land area, so it has no rate. Don't fall back to `actualAreaSqm` to manufacture one.
+- **`plotCounts.byStatus` only contains statuses that actually occur.** An absent key means zero; render your own zero for a chip you always want shown. `total: 0` with an empty map is a real estate with no plots.
+- **GeoJSON coordinates come back as `[longitude, latitude]`** — the same order they were posted in, byte for byte. Convert for Leaflet on the frontend, as with input.
+- **Features with no boundary are omitted from the `FeatureCollection`**, never emitted with a null geometry (which most clients draw as a point at `[0, 0]`). A plot missing from the GeoJSON hasn't been surveyed yet; check `hasFootprint` on the plot list if you need to show that state.
+- `footprintAreaSqm` is genuine **square metres** (geography cast), and `null` when the estate has no boundary — never zero.
 - **`actualAreaSqm` is computed**, never sent: square metres derived from the footprint. Null means no boundary yet, never a fallback to the nominal size.
 
 A plot's `footprint` must sit inside its estate's. `published` always starts false.

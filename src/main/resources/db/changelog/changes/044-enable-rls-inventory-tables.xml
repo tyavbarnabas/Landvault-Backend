@@ -1,0 +1,269 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Row-level security for the inventory tables.
+
+        Slices 1 and 2 both listed this as out of scope, which was fine while
+        nothing could read these rows back: a write always stamps tenant_id
+        from TenantContext, so it cannot land in another tenant. Reads are
+        where the absence becomes a breach — the read slice's own spec
+        assumed "tenant and branch scoping is automatic, do not re-filter in
+        the repository", and without these policies that would have shipped
+        an endpoint where any authenticated tenant user lists every tenant's
+        estates.
+
+        Verified before writing this rather than assumed: pg_class showed
+        relrowsecurity = false for all seven tables, and
+        `SET ROLE landvault_app; SELECT count(*) FROM estates` returned rows
+        with no tenant context set at all.
+
+        Same two-permissive-policy shape as changeset 020 (platform staff see
+        everything; everyone else is scoped to tenant, and to branch when one
+        is set). Every inventory entity populates tenant_id AND branch_id —
+        estates from the caller's scope, everything beneath from its estate —
+        so unlike 020's corporate tables the branch clause is load-bearing
+        here: a branch manager sees only their branch's estates.
+
+        tenant_id::text = current_setting(...), never
+        current_setting(...)::uuid — see 020's note. Casting the setting
+        throws on '' because Postgres does not guarantee the guard to its
+        left is evaluated first.
+    -->
+    <changeSet id="044-enable-rls-inventory-tables" author="landvault">
+        <sql>
+            ALTER TABLE estates ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE estates FORCE ROW LEVEL SECURITY;
+            ALTER TABLE estate_amenities ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE estate_amenities FORCE ROW LEVEL SECURITY;
+            ALTER TABLE blocks ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE blocks FORCE ROW LEVEL SECURITY;
+            ALTER TABLE price_tiers ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE price_tiers FORCE ROW LEVEL SECURITY;
+            ALTER TABLE plots ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE plots FORCE ROW LEVEL SECURITY;
+            ALTER TABLE estate_titles ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE estate_titles FORCE ROW LEVEL SECURITY;
+            ALTER TABLE estate_verification_checks ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE estate_verification_checks FORCE ROW LEVEL SECURITY;
+
+            CREATE POLICY estates_platform ON estates FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY estates_tenant ON estates FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                );
+
+            CREATE POLICY estate_amenities_platform ON estate_amenities FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY estate_amenities_tenant ON estate_amenities FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                );
+
+            CREATE POLICY blocks_platform ON blocks FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY blocks_tenant ON blocks FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                );
+
+            CREATE POLICY price_tiers_platform ON price_tiers FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY price_tiers_tenant ON price_tiers FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                );
+
+            CREATE POLICY plots_platform ON plots FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY plots_tenant ON plots FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                );
+
+            CREATE POLICY estate_titles_platform ON estate_titles FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY estate_titles_tenant ON estate_titles FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                );
+
+            CREATE POLICY estate_verification_checks_platform ON estate_verification_checks FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY estate_verification_checks_tenant ON estate_verification_checks FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                );
+        </sql>
+        <rollback>
+            DROP POLICY estates_platform ON estates;
+            DROP POLICY estates_tenant ON estates;
+            DROP POLICY estate_amenities_platform ON estate_amenities;
+            DROP POLICY estate_amenities_tenant ON estate_amenities;
+            DROP POLICY blocks_platform ON blocks;
+            DROP POLICY blocks_tenant ON blocks;
+            DROP POLICY price_tiers_platform ON price_tiers;
+            DROP POLICY price_tiers_tenant ON price_tiers;
+            DROP POLICY plots_platform ON plots;
+            DROP POLICY plots_tenant ON plots;
+            DROP POLICY estate_titles_platform ON estate_titles;
+            DROP POLICY estate_titles_tenant ON estate_titles;
+            DROP POLICY estate_verification_checks_platform ON estate_verification_checks;
+            DROP POLICY estate_verification_checks_tenant ON estate_verification_checks;
+
+            ALTER TABLE estates DISABLE ROW LEVEL SECURITY;
+            ALTER TABLE estate_amenities DISABLE ROW LEVEL SECURITY;
+            ALTER TABLE blocks DISABLE ROW LEVEL SECURITY;
+            ALTER TABLE price_tiers DISABLE ROW LEVEL SECURITY;
+            ALTER TABLE plots DISABLE ROW LEVEL SECURITY;
+            ALTER TABLE estate_titles DISABLE ROW LEVEL SECURITY;
+            ALTER TABLE estate_verification_checks DISABLE ROW LEVEL SECURITY;
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

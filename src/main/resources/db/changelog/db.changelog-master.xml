@@ -49,6 +49,8 @@
     <include file="changes/041-seed-portal-estates-permission.xml" relativeToChangelogFile="true"/>
     <include file="changes/042-make-plot-nominal-size-nullable.xml" relativeToChangelogFile="true"/>
     <include file="changes/043-create-rls-bootstrap-functions.xml" relativeToChangelogFile="true"/>
+    <include file="changes/044-enable-rls-inventory-tables.xml" relativeToChangelogFile="true"/>
+    <include file="changes/045-seed-portal-estates-view-permission.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

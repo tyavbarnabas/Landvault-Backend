@@ -2088,3 +2088,157 @@ endpoints exactly as specified) — they're recorded here so a future
 frontend-integration pass knows exactly what to reconcile, the same reason
 slice B1's divergences were written down rather than fixed silently in
 either direction.
+
+## Inventory reads: RLS was missing, and the slice spec assumed otherwise
+
+Inventory slice 3 (`GET /api/portal/estates` and friends) was specified on
+the premise that "tenant and branch scoping is automatic — RLS already
+filters by `tenant_id`, do not re-filter in the repository."
+
+**That premise was false, and was checked rather than trusted.** Before a
+line of read code was written, `pg_class.relrowsecurity` showed `false` for
+all seven inventory tables, and `SET ROLE landvault_app; SELECT count(*)
+FROM estates` returned rows with no tenant context set at all. Slices 1 and
+2 had both listed RLS as out of scope, which was harmless while nothing
+could read these rows back — a write always stamps `tenant_id` from
+`TenantContext`, so it can't land in the wrong tenant. **Reads are where
+the absence becomes a breach**: following the spec literally would have
+shipped an endpoint where any authenticated tenant user lists every
+tenant's estates.
+
+Changeset **044** closes it: the same two-permissive-policy shape as 020
+(platform-scope policy plus tenant/branch policy) on `estates`,
+`estate_amenities`, `blocks`, `price_tiers`, `plots`, `estate_titles`,
+`estate_verification_checks`. Same `tenant_id::text = current_setting(...)`
+form, never `current_setting(...)::uuid` — see 020's note for why.
+
+**The branch clause is load-bearing here in a way it isn't on the corporate
+tables.** Every inventory entity populates `branch_id` (estates from the
+caller's scope, everything beneath from its estate), so unlike
+`organization_documents` et al. — where `branch_id` is usually null and the
+clause passes trivially — this is what actually walls a branch manager to
+their own branch. That wall is now pinned by
+`PortalEstateReadUnderRlsIT.aBranchManagerSeesOnlyTheirOwnBranchesEstates`,
+and **proven to fail red**: temporarily granting `landvault_app` `BYPASSRLS`
+turns it red, confirming the database is what enforces it and not something
+in the repository layer.
+
+`EstateSpecifications`/`PlotSpecifications` therefore carry **no tenant or
+branch predicate at all**, deliberately. A second, weaker copy of the
+isolation guarantee in application code is how the two eventually disagree,
+and the weaker one is the bug nobody looks for.
+
+### The testing blind spot this also revealed
+
+`PortalEstateCreationIT` uses `@ServiceConnection` — a superuser connection,
+where RLS is inert. So slice 2 proved the write path works, but never that
+it satisfies a `WITH CHECK` clause. Exactly the shape of the tenant-staff
+login bug. `PortalEstateReadUnderRlsIT` wires the restricted role explicitly
+via `@DynamicPropertySource` and creates its fixtures over real HTTP, so it
+covers both sides. **Don't convert it to `@ServiceConnection`** — every
+isolation assertion in it would then pass whether changeset 044 exists or
+not.
+
+## `portal.estates.view` and `portal.estates.manage` are two slugs, and neither implies the other
+
+Reading the inventory is what most of a developer's staff do all day;
+defining it is what two roles do. A single slug would have forced every
+sales or finance user to hold the permission that also lets them create and
+price plots. Changeset **045** grants `portal.estates.view` to
+`executive_director`, `surveyor_project_manager`, `branch_manager`,
+`sales_manager`, `finance_officer` and `legal_officer`; `portal.estates.manage`
+(changeset 041) stays with the first two only. RLS still narrows what any of
+them actually gets back — the grant says *what kind of thing* you may do,
+the policy says *whose rows*.
+
+`PortalEstateReadUnderRlsIT.readPermissionDoesNotGrantWriteAccess` pins the
+non-implication: a sales manager lists estates and gets 403 creating one.
+
+## A branch-scoped staff user with a leftover `buyer` role silently loses their wall
+
+Found by a test fixture failing, not by inspection, and worth knowing before
+the first admin "assign a role to this user" endpoint ships.
+
+`TenantContextFilter` resolves a user holding **both** an organization-wide
+role assignment and a branch-scoped one to **organization-wide** — correctly,
+per the rule in the tenant-context section above: such a user has legitimate
+reach beyond one branch, and narrowing would hide data they're entitled to.
+That rule was written about two *staff* roles. It does not distinguish a
+`buyer` assignment, which `POST /api/auth/register` grants to every account
+it creates and which carries no `scoped_branch_id` because a buyer is never
+tenant-scoped at all.
+
+The consequence: a branch manager whose user row still has the buyer
+assignment from registration is resolved organization-wide, and the hard
+wall quietly becomes full access across their tenant's branches.
+
+**Not reachable through any endpoint today** — a buyer has no `tenant_id`,
+and nothing exposes granting a staff role to an existing account over HTTP,
+so producing this takes direct SQL (which is exactly what a test fixture,
+and the manual-walkthrough setup in the memory notes, both do). It becomes
+reachable the moment a role-assignment endpoint exists. Fixing it means
+deciding whether the mixed-assignment rule should ignore non-staff roles, or
+whether granting a staff role should revoke the buyer one — a real decision,
+not a one-liner, and not made in this slice.
+
+`PortalEstateReadUnderRlsIT.branchScopeIsLostWhenAStaffUserAlsoHoldsAnOrganizationWideRole`
+asserts the **current** behaviour so it's recorded rather than hidden. If it
+starts failing because the wall now holds, that's the fix landing — delete
+the test, don't restore the behaviour.
+
+## Plot price is computed on read, and all three figures are returned
+
+Nothing stores a corner plot's price (see `Plot`/`Estate.cornerPremiumPct`),
+so every read has to compute it. `PlotPricing` is the one place that
+happens: `tierPrice × (1 + cornerPremiumPct/100)` for a corner plot, the
+tier's own price otherwise, `BigDecimal` throughout at the money scale of
+`price_tiers.price` (4), never `double`.
+
+`PlotDetailDto` returns `basePrice`, `cornerPremiumPct` and `price`
+together, not just the final figure — a UI showing only `price` on a corner
+plot shows a number matching no tier on the price list with nothing to
+explain the difference. `cornerPremiumPct` is **null on a non-corner plot**
+rather than echoing the estate's value, so a premium that wasn't applied
+never reads as though it was.
+
+`pricePerSqm` is **null, never zero**, whenever `nominalSizeSqm` is — a
+`UNIT_TYPE` tier (an apartment) has no exclusive land area and therefore no
+rate. Substituting `actualAreaSqm` there would quote a rate against a figure
+the plot isn't priced by; zero would render as a free plot. And the
+direction is fixed: the rate is derived *from* the price, never the reverse
+— larger plots are routinely discounted per square metre, so pricing off a
+rate would quietly overcharge every large plot.
+
+**`PlotCountsDto.byStatus` only carries statuses that actually occur.** A
+status with no plots is absent, not reported as zero, and an estate with no
+plots gets `total: 0` with an empty map. A caller rendering a fixed set of
+status chips supplies its own zero. It's a map rather than a field per
+status so that adding a `PlotStatus` constant needs no change here and can't
+silently go uncounted.
+
+## GeoJSON output does not use `ST_AsGeoJSON`, and that is deliberate
+
+`GET /api/portal/estates/{id}/geojson` returns a typed
+`GeoJsonFeatureCollectionDto` built by `GeoJsonPolygonWriter` from the JTS
+geometry Hibernate already materialised — the exact inverse of
+`GeoJsonPolygonParser`, so what was POSTed comes back coordinate for
+coordinate in the same `[longitude, latitude]` order. Two reasons it isn't
+the obvious `ST_AsGeoJSON`, both found rather than assumed:
+
+1. **It rounds.** `ST_AsGeoJSON` defaults to 9 decimal places, so its output
+   isn't necessarily the geometry that was stored. Reading JTS keeps full
+   `double` precision, which is what makes
+   `geoJsonRoundTripsTheExactBoundaryThatWasPosted` an actual equality
+   check instead of an approximate one.
+2. **Its output is a JSON string and the properties beside it are not.**
+   Embedding a pre-rendered fragment in a typed response means either
+   `@JsonRawValue` — whose behaviour under Boot 4.1's `tools.jackson` stack
+   this file already flags as unverified — or building the whole document in
+   SQL, which would put the enum wire-value mapping (`AVAILABLE_DEV` →
+   `"available-dev"`, not a mechanical lowercase) into a hand-written `CASE`
+   that a new enum constant would silently fall out of.
+
+Features with no boundary are **omitted, not emitted with a null geometry**:
+most mapping clients render a null geometry as a point at `[0, 0]`, in the
+Gulf of Guinea. The estate feature comes first so plots draw on top of the
+boundary rather than under it.
