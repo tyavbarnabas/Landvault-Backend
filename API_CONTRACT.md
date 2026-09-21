@@ -12,6 +12,11 @@ Base path convention below: `/api/...`. Auth: `Authorization: Bearer <token>` on
 | POST | `/api/auth/refresh` | (cookie or stored refresh token) | `{ token }` |
 | POST | `/api/auth/forgot-password` | `{ email }` | `{ message }` — always 200, always the same body |
 | POST | `/api/auth/reset-password` | `{ email, code, newPassword }` | `{ message }` |
+| POST | `/api/auth/2fa/setup` | — (authenticated) | `{ secret, otpAuthUri }` — does **not** enable 2FA |
+| POST | `/api/auth/2fa/confirm` | `{ code }` (authenticated) | `{ recoveryCodes }` — shown once, enables 2FA |
+| POST | `/api/auth/2fa/verify` | `{ challengeToken, code }` | `AuthResponse` — the second login step |
+| POST | `/api/auth/2fa/disable` | `{ code }` (authenticated) | `{ message }` |
+| POST | `/api/auth/2fa/recovery-codes/regenerate` | `{ code }` (authenticated) | `{ recoveryCodes }` |
 
 `AuthUser`: `{ name, email, phone, country, currency, kycStatus, kycType, twoFAEnabled, role: "client"|"super_admin", permissions: string[] }`
 
@@ -21,6 +26,10 @@ The two password-reset routes are **built** (unlike most of this document), and 
 - `reset-password` returns one generic `400 INVALID_OR_EXPIRED_CODE` for every failure (wrong code, expired, already used, attempt limit exhausted, no such account). Don't try to distinguish them in UI copy — the backend deliberately doesn't tell you which it was. Prompt the user to request a new code.
 
 See AGENTS.md for the neutral-response rule and the honest scope of "sessions revoked" on reset.
+
+**`/api/auth/login` now has two possible success shapes.** With 2FA off it returns `AuthResponse` exactly as before — no change. With 2FA on it returns `{ twoFactorRequired: true, challengeToken, expiresAt }` and **no tokens of any kind**; the client then posts that challenge plus a TOTP or recovery code to `/api/auth/2fa/verify` to get the real `AuthResponse`. The two shapes share no field names, so branch on `twoFactorRequired` rather than probing for `token`.
+
+`AuthUser` gains two fields: `mustSetUpTwoFa` (platform staff who haven't confirmed 2FA — route them to setup; login is deliberately not blocked, or the bootstrapped admin would be stranded) and `recoveryCodesRemaining` (0 when 2FA is off). Recovery codes are returned in plaintext only by `2fa/confirm` and `2fa/recovery-codes/regenerate`, once — show them and tell the user to store them, because they cannot be retrieved again.
 
 ## Estates — `estatesService.ts` (mockData.ts: `Estate`, `Plot`)
 | Method | Path | Response |

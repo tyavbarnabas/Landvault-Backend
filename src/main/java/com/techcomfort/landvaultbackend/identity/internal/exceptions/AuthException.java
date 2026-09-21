@@ -59,4 +59,37 @@ public abstract class AuthException extends RuntimeException {
      */
     public static class InvalidOrExpiredResetCode extends AuthException {
     }
+
+    /**
+     * One exception for every rejected second factor — wrong TOTP code,
+     * wrong recovery code, already-used recovery code. Same generic-by-design
+     * reasoning as {@link InvalidCredentials}: distinguishing them tells an
+     * attacker which kind of secret they're closer to.
+     */
+    public static class InvalidTwoFactorCode extends AuthException {
+    }
+
+    /** The pending-login handle is unknown, expired, or already exchanged. */
+    public static class InvalidOrExpiredChallenge extends AuthException {
+    }
+
+    /** Too many failed second-factor attempts; verification is refused until the lockout passes. */
+    public static class TwoFactorLockedOut extends AuthException {
+    }
+
+    /** {@code /2fa/confirm} called with no secret issued — {@code /2fa/setup} has to run first. */
+    public static class TwoFactorSetupRequired extends AuthException {
+    }
+
+    /** Disable/regenerate called on an account that hasn't confirmed 2FA. */
+    public static class TwoFactorNotEnabled extends AuthException {
+    }
+
+    /**
+     * Platform staff cannot turn 2FA off — they hold the platform-scope RLS
+     * bypass, the most sensitive credential in the system. Deliberately
+     * distinct from a generic 403 so the response can say why.
+     */
+    public static class TwoFactorMandatory extends AuthException {
+    }
 }

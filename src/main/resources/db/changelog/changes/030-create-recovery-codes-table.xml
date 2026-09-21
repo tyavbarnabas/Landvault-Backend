@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        identity.internal.domain.RecoveryCode — single-use codes that stand
+        in for a TOTP code when the user has lost their device.
+
+        Without these, TOTP is a one-way door: a lost or replaced phone means
+        an account only manual database intervention can reach. This is the
+        most commonly skipped part of a TOTP implementation and the one that
+        generates the most support burden when missing.
+
+        Stores only code_hash (SHA-256, same reasoning as otp_codes and
+        refresh_tokens). Returned in plaintext exactly once, at confirmation
+        or regeneration, and never retrievable afterwards.
+
+        Not RLS-policied, same as users/refresh_tokens/otp_codes: reached
+        during login, before any tenant scope exists.
+    -->
+    <changeSet id="030-create-recovery-codes-table" author="landvault">
+        <sql>
+            CREATE TABLE recovery_codes (
+                id          uuid NOT NULL,
+                tenant_id   uuid,
+                branch_id   uuid,
+                created_at  timestamp(6) with time zone NOT NULL,
+                updated_at  timestamp(6) with time zone,
+                created_by  varchar(255),
+                updated_by  varchar(255),
+                deleted     boolean NOT NULL,
+
+                user_id     uuid NOT NULL,
+                code_hash   varchar(255) NOT NULL,
+                consumed_at timestamp(6) with time zone,
+
+                PRIMARY KEY (id)
+            );
+
+            COMMENT ON COLUMN recovery_codes.code_hash IS
+                'SHA-256 of the code, never the code itself. Plaintext is shown to the user exactly once, at issue time, and cannot be recovered afterwards.';
+            COMMENT ON COLUMN recovery_codes.consumed_at IS
+                'Single use: set the moment the code is accepted, so it can never be presented again.';
+        </sql>
+        <rollback>
+            DROP TABLE recovery_codes;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="030-create-recovery-codes-fk-index" author="landvault">
+        <addForeignKeyConstraint
+                baseTableName="recovery_codes" baseColumnNames="user_id"
+                constraintName="fk_recovery_codes_user_id"
+                referencedTableName="users" referencedColumnNames="id"/>
+        <createIndex indexName="idx_recovery_codes_user_id" tableName="recovery_codes">
+            <column name="user_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

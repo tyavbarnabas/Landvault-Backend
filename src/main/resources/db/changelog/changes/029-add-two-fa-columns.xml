@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Two-factor authentication state on users.
+
+        two_fa_confirmed_at exists because two_fa_enabled alone cannot
+        represent "a secret has been issued but the pairing is unproven".
+        Enabling 2FA before the user's app demonstrably holds the secret
+        would permanently lock them out of their own account — recovery
+        codes are only issued at confirmation, so there would be nothing to
+        recover with. See AGENTS.md.
+
+        two_fa_failed_attempts / two_fa_locked_until throttle verification.
+        Unlike a password-reset code, a TOTP code is continuously valid, so
+        an unthrottled endpoint is a standing million-guess target.
+    -->
+    <changeSet id="029-add-two-fa-columns" author="landvault">
+        <sql>
+            ALTER TABLE users ADD COLUMN two_fa_confirmed_at timestamp(6) with time zone;
+            ALTER TABLE users ADD COLUMN two_fa_failed_attempts integer NOT NULL DEFAULT 0;
+            ALTER TABLE users ADD COLUMN two_fa_locked_until timestamp(6) with time zone;
+
+            COMMENT ON COLUMN users.two_fa_secret IS
+                'ENCRYPTED at rest (see TwoFaSecretConverter) — never plaintext. A readable secret here would let anyone with database access compute valid codes for this account.';
+            COMMENT ON COLUMN users.two_fa_confirmed_at IS
+                'Set only when the user proved their authenticator app holds the secret. two_fa_enabled must never be set without this.';
+            COMMENT ON COLUMN users.two_fa_locked_until IS
+                'Set when two_fa_failed_attempts hits the limit; verification is refused until it passes. Time-based, not permanent: a TOTP user cannot request a fresh code the way a password-reset user can.';
+        </sql>
+        <rollback>
+            ALTER TABLE users DROP COLUMN two_fa_confirmed_at;
+            ALTER TABLE users DROP COLUMN two_fa_failed_attempts;
+            ALTER TABLE users DROP COLUMN two_fa_locked_until;
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

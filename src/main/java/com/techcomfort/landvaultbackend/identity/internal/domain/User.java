@@ -3,6 +3,7 @@ package com.techcomfort.landvaultbackend.identity.internal.domain;
 import com.techcomfort.landvaultbackend.common.AbstractEntity;
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.identity.internal.enums.UserStatus;
+import com.techcomfort.landvaultbackend.identity.internal.security.TwoFaSecretConverter;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -73,11 +74,35 @@ public class User extends AbstractEntity {
     @Column(name = "phone_verified_at")
     private Instant phoneVerifiedAt;
 
+    // True only once the pairing has been CONFIRMED — never set at setup
+    // time. See twoFaConfirmedAt and AGENTS.md.
     @Column(name = "two_fa_enabled", nullable = false)
     private Boolean twoFaEnabled;
 
+    // Encrypted at rest by TwoFaSecretConverter — a readable secret here
+    // would let anyone with database access mint valid codes for this
+    // account. Never logged, never returned in any response.
+    @Convert(converter = TwoFaSecretConverter.class)
     @Column(name = "two_fa_secret")
     private String twoFaSecret;
+
+    /**
+     * Set only when the user proved their authenticator app holds the
+     * secret. Distinct from {@link #twoFaEnabled} on purpose: a secret can
+     * exist unconfirmed (setup started, pairing unproven), and enabling 2FA
+     * in that state would lock the user out permanently, since recovery
+     * codes are only issued at confirmation. See AGENTS.md.
+     */
+    @Column(name = "two_fa_confirmed_at")
+    private Instant twoFaConfirmedAt;
+
+    // Throttling for 2FA verification. Unlike a password-reset code, a TOTP
+    // code is continuously valid, so the endpoint is a standing target.
+    @Column(name = "two_fa_failed_attempts", nullable = false)
+    private Integer twoFaFailedAttempts;
+
+    @Column(name = "two_fa_locked_until")
+    private Instant twoFaLockedUntil;
 
     @Column(name = "last_login_at")
     private Instant lastLoginAt;
@@ -101,6 +126,9 @@ public class User extends AbstractEntity {
         super.prePersist();
         if (twoFaEnabled == null) {
             twoFaEnabled = false;
+        }
+        if (twoFaFailedAttempts == null) {
+            twoFaFailedAttempts = 0;
         }
         if (mustChangePassword == null) {
             mustChangePassword = false;

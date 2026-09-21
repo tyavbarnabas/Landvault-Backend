@@ -928,6 +928,151 @@ someone's inbox and run up delivery costs. Rate limiting counts codes
 *generated* in the window, so superseded and failed ones still count — otherwise
 requesting repeatedly would reset the limit each time.
 
+## TOTP for 2FA, deliberately not the `otp_codes` mechanism
+
+Password reset built an OTP mechanism that *sends a code over a channel*. 2FA
+does **not** reuse it, and the two must not be merged:
+
+- **No delivery cost or dependency.** TOTP codes are computed independently on
+  both sides from a shared secret and the current 30-second window. Nothing
+  travels over the network — no provider, no per-message cost, no delivery
+  failure mode.
+- **Immune to SIM swap.** SMS 2FA is defeated by porting a phone number, a
+  real and common attack in this market. TOTP isn't.
+- **Works offline**, which matters for a diaspora user on poor connectivity.
+
+`otp_codes` remains correct for password reset, where the point is proving
+control of a *contact channel*. TOTP proves possession of a *device*.
+Different guarantees, different mechanisms.
+
+**The algorithm is a library, not hand-rolled** — `dev.samstevens.totp`
+covers secret generation, the `otpauth://` URI, verification and drift.
+Implementing RFC 6238 by hand is an unnecessary source of subtle bugs.
+`TotpService` pins the parameters every authenticator app assumes (SHA-1, 6
+digits, 30s); changing one silently breaks pairing for apps that ignore the
+URI's parameters.
+
+### Setup and confirmation are separate states, and that is not optional
+
+`POST /2fa/setup` issues a secret and leaves `two_fa_enabled` **false**.
+`POST /2fa/confirm` verifies a real code and only then sets
+`two_fa_enabled = true`, `two_fa_confirmed_at = now`, and issues recovery
+codes.
+
+`two_fa_confirmed_at` exists as its own column precisely so "a secret has been
+issued" and "the pairing is proven" are distinguishable. Enabling 2FA at setup
+time, before the user's app demonstrably holds the secret, **permanently locks
+them out of their own account** if the pairing silently failed — a mis-scanned
+QR, a crashed app — because recovery codes are only issued at confirmation, so
+there is nothing to recover with. It is the single worst outcome this feature
+can produce. Every read that asks "is 2FA on?" checks **both** fields.
+
+### Tokens are never issued before the second factor verifies
+
+With 2FA confirmed, `POST /api/auth/login` returns a
+`TwoFactorChallengeResponse` — no access token, no refresh token, no user
+object — and `POST /api/auth/2fa/verify` exchanges that challenge plus a TOTP
+or recovery code for the real `AuthResponse`. The challenge shares no field
+name with `AuthResponse`, so a client cannot mistake one for the other.
+**Accounts without 2FA are completely unaffected**; that path is unchanged.
+
+The challenge lives in `two_fa_challenges` rather than being a self-contained
+signed token. This is a **deliberate third schema change beyond the slice's
+stated two**: the challenge must be single-use, and single use cannot be
+enforced by a signed token, which stays valid and replayable until it expires.
+Storing it gives a `consumed_at` to set, exactly like `refresh_tokens`.
+
+### Recovery codes are the part that must not be skipped
+
+8–10 single-use codes, generated at confirmation, stored hashed, returned in
+plaintext **exactly once** and never retrievable again. Without them TOTP is a
+one-way door: a lost or replaced phone means an account only manual database
+intervention can reach. This is the most commonly omitted part of a TOTP
+implementation and the one that generates the most support burden when it's
+missing.
+
+They're 64 bits of randomness, not six digits — unlike a TOTP code they never
+expire, so they must survive being guessable over a long period. Input is
+normalised (case, grouping dashes) because users retype them by hand, and
+formatting shouldn't decide whether someone gets back into their account.
+Regeneration requires a **TOTP code specifically**, never a recovery code —
+otherwise one stale code could mint a whole fresh set. Using a recovery code
+writes its own audit entry: it means the user lost device access, which is
+worth a record.
+
+### Disabling requires a code, and platform staff cannot disable at all
+
+`POST /2fa/disable` needs a valid TOTP or recovery code. **A session alone is
+deliberately not enough** — if a hijacked session could strip 2FA, the
+protection is defeated by the exact attack it exists to prevent.
+
+2FA is **mandatory for platform staff** (`super_admin`, `platform_moderator`,
+`compliance_officer`), who hold the platform-scope RLS bypass — the most
+sensitive credential in the system. Disable returns a specific
+`TWO_FACTOR_MANDATORY` rather than a generic 403, so the response can say why.
+That check runs *before* the code check, so staff aren't invited to keep
+guessing at a door that never opens.
+
+**Login is not blocked on it**, though. A platform-staff account without
+confirmed 2FA authenticates normally and gets `mustSetUpTwoFa: true` in the
+login response for the frontend to route on. Blocking would strand the
+bootstrapped Super Admin, who cannot set 2FA up without first signing in.
+
+**The bootstrapped Super Admin's intended first-login order is: change
+password, then set up 2FA, then normal access.** Both `mustChangePassword` and
+`mustSetUpTwoFa` can be true at once, and neither blocks login, precisely so
+that state is always escapable. Do not "harden" either into a login block
+without first making sure the other can still be completed — requiring both
+while neither can be satisfied is an unrecoverable account.
+
+### Encryption at rest, and the rotation gap
+
+`users.two_fa_secret` is encrypted by `TwoFaSecretConverter` (AES-256-GCM,
+random IV per value, `base64(iv || ciphertext)`). A readable secret would let
+anyone with database access mint valid second factors for any account —
+strictly worse than the `directors.id_number` exposure, since it yields
+account access rather than personal data.
+
+A converter rather than encrypt/decrypt calls in the service layer, for the
+same reason `@SQLRestriction` lives on the entity: it makes writing plaintext
+structurally impossible rather than merely discouraged. GCM is authenticated,
+so a tampered value fails loudly instead of decrypting to garbage.
+
+`TOTP_ENCRYPTION_KEY` has **no default** and must decode to exactly 32 bytes;
+a missing, malformed or wrong-sized key fails startup, same rule as
+`JWT_SECRET`.
+
+**TODO — key rotation is not implemented.** A single configured symmetric key
+is the accepted scope. There is no key id on stored values, so two keys cannot
+coexist; re-keying today means decrypting every secret with the old key and
+re-encrypting offline. Changing the key without that migration makes every
+existing secret undecryptable and forces every user to set 2FA up again.
+
+### Throttling, and the `noRollbackFor` trap for the third time
+
+Failed second factors are counted on the user (`two_fa_failed_attempts`), and
+five failures set `two_fa_locked_until`. The lockout is **time-based, not
+permanent**: a TOTP user cannot request a fresh code the way a password-reset
+user can, so a permanent lock would strand them.
+
+Every method in `TwoFactorService` that increments the counter carries
+`noRollbackFor` — same trap as `resetPassword` and `refresh`, now in a third
+place. Verified the same way: removing it from `verify()` turned
+`TwoFactorIT.fiveFailedVerificationsLockOutEvenACorrectCode` red with
+`expected: 1L but was: 0L`, meaning the lockout never persisted and the
+limiter was permanently inert.
+
+### `SecurityConfig` no longer wildcards `/api/auth/**`
+
+Public auth routes are now listed one at a time. The wildcard was correct
+while every auth route was public, but `/api/auth/2fa/setup|confirm|disable|
+recovery-codes/regenerate` require an authenticated session — under
+`/api/auth/**` they would have been reachable by anyone, letting a stranger
+start or turn off 2FA on someone else's account. Only `/2fa/verify` stays
+public, because it completes a login and its caller holds no token yet.
+Adding a new public auth route means adding it to that list; forgetting makes
+it require authentication, which is the safe direction to fail.
+
 ## Permission slugs are authorities; `tenant_id` is never client-supplied
 
 The `permissions` claim (flattened, deduplicated union of the user's roles'

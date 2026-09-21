@@ -82,6 +82,26 @@ landvault:
     rate-limit-max-requests: 3
     rate-limit-window: 15m
 
+  two-fa:
+    # No default: a missing key must fail startup, not silently store TOTP
+    # secrets in a form anyone with database access could use. Same rule as
+    # JWT_SECRET. Generate with `openssl rand -base64 32`.
+    encryption-key: ${TOTP_ENCRYPTION_KEY}
+    # ±1 30-second window, ~90 seconds of clock-drift tolerance. Widening
+    # this multiplies the codes valid at any instant — it is a security
+    # parameter, not a comfort setting.
+    allowed-drift-windows: 1
+    # A TOTP code is continuously valid, unlike a reset code, so an
+    # unthrottled endpoint is a standing million-guess target.
+    max-failed-attempts: 5
+    # Time-based, not permanent: a TOTP user can't request a fresh code the
+    # way a password-reset user can, so a permanent lock would strand them.
+    lockout-duration: 15m
+    # The pending-login handle's lifetime — long enough to open an
+    # authenticator app, short enough to limit a leaked challenge.
+    challenge-ttl: 5m
+    recovery-code-count: 10
+
 app:
   jwt:
     # No default: a missing JWT_SECRET must fail startup, not silently run

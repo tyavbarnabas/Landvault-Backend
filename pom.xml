@@ -70,6 +70,17 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-mail</artifactId>
         </dependency>
+        <!--
+            RFC 6238 TOTP: secret generation, otpauth:// URI construction,
+            verification and drift tolerance. Deliberately a library rather
+            than a hand-rolled implementation — the algorithm is an
+            unnecessary source of subtle bugs. See AGENTS.md.
+        -->
+        <dependency>
+            <groupId>dev.samstevens.totp</groupId>
+            <artifactId>totp</artifactId>
+            <version>1.7.1</version>
+        </dependency>
         <dependency>
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>

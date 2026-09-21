@@ -10,6 +10,8 @@ import com.techcomfort.landvaultbackend.identity.internal.enums.OtpChannel;
 import com.techcomfort.landvaultbackend.identity.internal.enums.OtpPurpose;
 import com.techcomfort.landvaultbackend.identity.internal.exceptions.AuthException;
 import com.techcomfort.landvaultbackend.identity.internal.repository.OtpCodeRepository;
+import com.techcomfort.landvaultbackend.identity.internal.repository.RecoveryCodeRepository;
+import com.techcomfort.landvaultbackend.identity.internal.repository.TwoFaChallengeRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.PermissionRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.RefreshTokenRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.RoleRepository;
@@ -17,6 +19,7 @@ import com.techcomfort.landvaultbackend.identity.internal.repository.UserReposit
 import com.techcomfort.landvaultbackend.identity.internal.repository.UserRoleRepository;
 import com.techcomfort.landvaultbackend.identity.internal.security.JwtProperties;
 import com.techcomfort.landvaultbackend.identity.internal.security.JwtService;
+import com.techcomfort.landvaultbackend.identity.internal.security.TwoFaProperties;
 import com.techcomfort.landvaultbackend.tenancy.TenancyApi;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -65,6 +68,12 @@ class AuthServicePasswordResetTest {
     @Mock private OtpCodeRepository otpCodeRepository;
     @Mock private OtpDeliveryService otpDeliveryService;
     @Mock private AuditApi auditApi;
+    @Mock private TwoFaChallengeRepository twoFaChallengeRepository;
+    @Mock private RecoveryCodeRepository recoveryCodeRepository;
+
+    // 2FA is off for every user in these tests; values are irrelevant but must exist.
+    private static final TwoFaProperties TWO_FA_PROPERTIES = new TwoFaProperties(
+            "bGFuZHZhdWx0LXRlc3Qtb25seS1rZXktMzJieXRlcyE=", 1, 5, Duration.ofMinutes(15), Duration.ofMinutes(5), 10);
 
     private AuthService authService;
 
@@ -76,7 +85,8 @@ class AuthServicePasswordResetTest {
         authService = new AuthService(
                 userRepository, roleRepository, permissionRepository, userRoleRepository,
                 refreshTokenRepository, passwordEncoder, jwtService, jwtProperties, tenancyApi,
-                otpCodeRepository, otpDeliveryService, otpProperties, auditApi);
+                otpCodeRepository, otpDeliveryService, otpProperties, auditApi,
+                twoFaChallengeRepository, recoveryCodeRepository, TWO_FA_PROPERTIES);
         authService.initDummyPasswordHash();
     }
 

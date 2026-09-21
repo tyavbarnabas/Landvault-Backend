@@ -19,16 +19,21 @@ import com.techcomfort.landvaultbackend.identity.internal.domain.RefreshToken;
 import com.techcomfort.landvaultbackend.identity.internal.domain.Role;
 import com.techcomfort.landvaultbackend.identity.internal.domain.User;
 import com.techcomfort.landvaultbackend.identity.internal.domain.UserRole;
+import com.techcomfort.landvaultbackend.identity.dto.TwoFactorChallengeResponse;
+import com.techcomfort.landvaultbackend.identity.internal.domain.TwoFaChallenge;
 import com.techcomfort.landvaultbackend.identity.internal.repository.OtpCodeRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.PermissionRepository;
+import com.techcomfort.landvaultbackend.identity.internal.repository.RecoveryCodeRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.RefreshTokenRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.RoleRepository;
+import com.techcomfort.landvaultbackend.identity.internal.repository.TwoFaChallengeRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.UserRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.UserRoleRepository;
 import com.techcomfort.landvaultbackend.identity.internal.security.AccessTokenIssue;
 import com.techcomfort.landvaultbackend.identity.internal.security.JwtProperties;
 import com.techcomfort.landvaultbackend.identity.internal.security.JwtService;
 import com.techcomfort.landvaultbackend.identity.internal.security.RoleClaim;
+import com.techcomfort.landvaultbackend.identity.internal.security.TwoFaProperties;
 import com.techcomfort.landvaultbackend.tenancy.TenancyApi;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -81,6 +86,9 @@ public class AuthService {
     private final OtpDeliveryService otpDeliveryService;
     private final OtpProperties otpProperties;
     private final AuditApi auditApi;
+    private final TwoFaChallengeRepository twoFaChallengeRepository;
+    private final RecoveryCodeRepository recoveryCodeRepository;
+    private final TwoFaProperties twoFaProperties;
 
     // Precomputed once at startup, not per login attempt — see login()'s
     // timing-safe-failure comment. Not `final`/constructor-assigned: it's
@@ -129,7 +137,7 @@ public class AuthService {
     }
 
     @Transactional
-    public AuthResponse login(LoginRequest request) {
+    public LoginResult login(LoginRequest request) {
         var maybeUser = userRepository.findByEmailIgnoreCase(request.email());
 
         // Timing-safe failure: always run exactly one BCrypt comparison,
@@ -158,9 +166,13 @@ public class AuthService {
             throw new AuthException.TenantNotActive();
         }
 
-        // TODO: the frontend's login is two-step (credentials, then OTP).
-        // This is the credential step only; the OTP step lands later
-        // without needing to change this endpoint's shape.
+        // Second factor, when the account has one CONFIRMED. Credentials
+        // alone stop here: no access token, no refresh token, nothing that
+        // can call a protected endpoint. A challenge that could be exchanged
+        // for access on its own would make 2FA decorative. See AGENTS.md.
+        if (Boolean.TRUE.equals(user.getTwoFaEnabled()) && user.getTwoFaConfirmedAt() != null) {
+            return LoginResult.pendingTwoFactor(issueTwoFactorChallenge(user));
+        }
 
         user.setLastLoginAt(Instant.now());
         // Explicit, not relying on dirty checking — matches register()'s
@@ -169,7 +181,31 @@ public class AuthService {
         userRepository.save(user);
 
         List<UserRole> assignments = userRoleRepository.findByUserId(user.getId());
-        return issueAuthResponse(user, assignments);
+        return LoginResult.completed(issueAuthResponse(user, assignments));
+    }
+
+    /**
+     * Mints the pending-login handle. Stored (hashed) rather than issued as a
+     * self-contained signed token, because it must be single-use and a signed
+     * token is replayable until it expires — see {@code TwoFaChallenge}.
+     */
+    private TwoFactorChallengeResponse issueTwoFactorChallenge(User user) {
+        byte[] randomBytes = new byte[32];
+        SECURE_RANDOM.nextBytes(randomBytes);
+        String rawToken = Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes);
+        Instant expiresAt = Instant.now().plus(twoFaProperties.challengeTtl());
+
+        // OtpCodes.hash, not hashRefreshToken: TwoFactorService looks the
+        // challenge up with the same helper, so both sides are guaranteed to
+        // agree rather than relying on two implementations staying identical.
+        twoFaChallengeRepository.save(TwoFaChallenge.builder()
+                .userId(user.getId())
+                .tokenHash(OtpCodes.hash(rawToken))
+                .expiresAt(expiresAt)
+                .build());
+
+        log.info("Login for user {} awaiting second factor", user.getId());
+        return TwoFactorChallengeResponse.of(rawToken, expiresAt);
     }
 
     // noRollbackFor is load-bearing: the theft-detection and lost-race
@@ -334,13 +370,23 @@ public class AuthService {
         log.info("Password reset completed for user {}; refresh tokens revoked", user.getId());
     }
 
-    private AuthResponse issueAuthResponse(User user, List<UserRole> assignments) {
+    // Package-private: TwoFactorService completes a two-step login by calling
+    // this once the second factor verifies. Not public — issuing tokens stays
+    // inside this module's service package.
+    AuthResponse issueAuthResponse(User user, List<UserRole> assignments) {
         RoleAssignmentContext ctx = loadContext(assignments);
         AccessTokenIssue accessToken = jwtService.issueAccessToken(
                 user.getId(), user.getEmail(), user.getTenantId(), ctx.platformStaff(), ctx.roleClaims(), ctx.permissions());
 
         RawRefreshToken refresh = issueRefreshToken(user.getId());
         refreshTokenRepository.save(refresh.entity());
+
+        boolean twoFaConfirmed = Boolean.TRUE.equals(user.getTwoFaEnabled()) && user.getTwoFaConfirmedAt() != null;
+        // Only query when 2FA is actually on — no extra round trip for the
+        // overwhelming majority of logins.
+        long recoveryCodesRemaining = twoFaConfirmed
+                ? recoveryCodeRepository.countByUserIdAndConsumedAtIsNull(user.getId())
+                : 0L;
 
         AuthUserResponse userResponse = new AuthUserResponse(
                 user.getFirstName() + " " + user.getLastName(),
@@ -350,8 +396,12 @@ public class AuthService {
                 user.getCurrency(),
                 "unsubmitted",
                 "NG".equalsIgnoreCase(user.getCountry()) ? "local" : "diaspora",
-                Boolean.TRUE.equals(user.getTwoFaEnabled()),
+                twoFaConfirmed,
                 Boolean.TRUE.equals(user.getMustChangePassword()),
+                // Mandatory for platform staff, surfaced rather than enforced
+                // at login — see AuthUserResponse and AGENTS.md.
+                ctx.platformStaff() && !twoFaConfirmed,
+                recoveryCodesRemaining,
                 ctx.superAdmin() ? "super_admin" : "client",
                 ctx.permissions());
 

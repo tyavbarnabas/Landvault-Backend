@@ -3,6 +3,7 @@ package com.techcomfort.landvaultbackend.identity.internal.exceptions;
 import com.techcomfort.landvaultbackend.common.ErrorResponse;
 import com.techcomfort.landvaultbackend.identity.internal.enums.UserStatus;
 import com.techcomfort.landvaultbackend.identity.internal.controllers.AuthController;
+import com.techcomfort.landvaultbackend.identity.internal.controllers.TwoFactorController;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -15,7 +16,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /** Turns AuthController's exceptions into AGENTS.md's {message, code, fieldErrors} error body. */
-@RestControllerAdvice(assignableTypes = AuthController.class)
+@RestControllerAdvice(assignableTypes = {AuthController.class, TwoFactorController.class})
 public class AuthExceptionHandler {
 
     @ExceptionHandler(AuthException.EmailAlreadyRegistered.class)
@@ -59,6 +60,45 @@ public class AuthExceptionHandler {
     public ResponseEntity<ErrorResponse> handleInvalidOrExpiredResetCode() {
         return ResponseEntity.badRequest()
                 .body(ErrorResponse.of("That reset code is invalid or has expired. Request a new one.", "INVALID_OR_EXPIRED_CODE"));
+    }
+
+    // One message for every rejected second factor — see the exception.
+    @ExceptionHandler(AuthException.InvalidTwoFactorCode.class)
+    public ResponseEntity<ErrorResponse> handleInvalidTwoFactorCode() {
+        return ResponseEntity.badRequest()
+                .body(ErrorResponse.of("That code is not valid. Try again, or use a recovery code.", "INVALID_TWO_FACTOR_CODE"));
+    }
+
+    @ExceptionHandler(AuthException.InvalidOrExpiredChallenge.class)
+    public ResponseEntity<ErrorResponse> handleInvalidOrExpiredChallenge() {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(ErrorResponse.of("This sign-in attempt is no longer valid. Start again.", "INVALID_TWO_FACTOR_CHALLENGE"));
+    }
+
+    @ExceptionHandler(AuthException.TwoFactorLockedOut.class)
+    public ResponseEntity<ErrorResponse> handleTwoFactorLockedOut() {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .body(ErrorResponse.of("Too many incorrect codes. Try again later.", "TWO_FACTOR_LOCKED_OUT"));
+    }
+
+    @ExceptionHandler(AuthException.TwoFactorSetupRequired.class)
+    public ResponseEntity<ErrorResponse> handleTwoFactorSetupRequired() {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of("Start two-factor setup before confirming it.", "TWO_FACTOR_SETUP_REQUIRED"));
+    }
+
+    @ExceptionHandler(AuthException.TwoFactorNotEnabled.class)
+    public ResponseEntity<ErrorResponse> handleTwoFactorNotEnabled() {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of("Two-factor authentication is not enabled on this account.", "TWO_FACTOR_NOT_ENABLED"));
+    }
+
+    @ExceptionHandler(AuthException.TwoFactorMandatory.class)
+    public ResponseEntity<ErrorResponse> handleTwoFactorMandatory() {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ErrorResponse.of(
+                        "Two-factor authentication is required for platform staff accounts and cannot be turned off.",
+                        "TWO_FACTOR_MANDATORY"));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

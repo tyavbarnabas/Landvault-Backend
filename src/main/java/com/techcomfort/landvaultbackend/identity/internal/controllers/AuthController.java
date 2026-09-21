@@ -9,6 +9,7 @@ import com.techcomfort.landvaultbackend.identity.dto.RefreshResponse;
 import com.techcomfort.landvaultbackend.identity.dto.RegisterRequest;
 import com.techcomfort.landvaultbackend.identity.dto.ResetPasswordRequest;
 import com.techcomfort.landvaultbackend.identity.internal.service.AuthService;
+import com.techcomfort.landvaultbackend.identity.internal.service.LoginResult;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -38,9 +39,17 @@ public class AuthController {
         return ResponseEntity.status(HttpStatus.CREATED).body(authService.register(request));
     }
 
+    /**
+     * Returns {@code AuthResponse} when 2FA is off, and a
+     * {@code TwoFactorChallengeResponse} — no tokens of any kind — when it's
+     * on. The two shapes share no field names, so a client can't mistake one
+     * for the other; see that DTO. Behaviour for accounts without 2FA is
+     * unchanged.
+     */
     @PostMapping("/login")
-    public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest request) {
-        return ResponseEntity.ok(authService.login(request));
+    public ResponseEntity<?> login(@Valid @RequestBody LoginRequest request) {
+        LoginResult result = authService.login(request);
+        return ResponseEntity.ok(result.requiresTwoFactor() ? result.challenge() : result.authResponse());
     }
 
     @PostMapping("/refresh")

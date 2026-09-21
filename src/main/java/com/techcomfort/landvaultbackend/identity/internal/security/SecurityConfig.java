@@ -49,8 +49,25 @@ import java.util.List;
 @EnableConfigurationProperties(CorsProperties.class)
 public class SecurityConfig {
 
+    /**
+     * Listed one route at a time, deliberately not as {@code /api/auth/**}.
+     * That wildcard was correct while every auth route was public, but
+     * {@code /api/auth/2fa/setup|confirm|disable|recovery-codes/regenerate}
+     * require an authenticated session — under the wildcard they would have
+     * been reachable by anyone, letting a stranger start (or turn off) 2FA on
+     * an account. Only {@code /2fa/verify} stays public, because it completes
+     * a login and its caller has no token yet.
+     * <p>
+     * Adding a new public auth route means adding it here; forgetting simply
+     * makes it require authentication, which is the safe direction to fail.
+     */
     private static final String[] ALWAYS_PUBLIC_PATHS = {
-            "/api/auth/**",
+            "/api/auth/login",
+            "/api/auth/register",
+            "/api/auth/refresh",
+            "/api/auth/forgot-password",
+            "/api/auth/reset-password",
+            "/api/auth/2fa/verify",
             "/actuator/health",
             // A hand-rolled SecurityFilterChain doesn't get Boot's default
             // exemption for the error-view path — without this, any
