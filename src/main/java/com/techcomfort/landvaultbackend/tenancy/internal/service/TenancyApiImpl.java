@@ -1,12 +1,17 @@
 package com.techcomfort.landvaultbackend.tenancy.internal.service;
 
 import com.techcomfort.landvaultbackend.tenancy.TenancyApi;
+import com.techcomfort.landvaultbackend.tenancy.internal.domain.Organization;
+import com.techcomfort.landvaultbackend.tenancy.internal.repository.OrganizationRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Collection;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Both methods here answer questions asked <strong>before any tenant scope
@@ -32,6 +37,12 @@ import java.util.UUID;
  */
 @Service
 public class TenancyApiImpl implements TenancyApi {
+
+    private final OrganizationRepository organizationRepository;
+
+    public TenancyApiImpl(OrganizationRepository organizationRepository) {
+        this.organizationRepository = organizationRepository;
+    }
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -61,5 +72,32 @@ public class TenancyApiImpl implements TenancyApi {
                 .setParameter("tenantId", tenantId)
                 .getSingleResult();
         return Boolean.TRUE.equals(result);
+    }
+
+    /**
+     * Unlike the two above, an ordinary repository read on purpose — see
+     * the interface for why RLS applying here is the point rather than a
+     * problem.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public Map<UUID, String> organizationNamesFor(Collection<UUID> tenantIds) {
+        if (tenantIds == null || tenantIds.isEmpty()) {
+            return Map.of();
+        }
+        return organizationRepository.findAllById(tenantIds).stream()
+                .collect(Collectors.toMap(Organization::getId, TenancyApiImpl::displayName));
+    }
+
+    /**
+     * The trading name is what a company is actually known as; the
+     * registered name is the legal one on the CAC certificate. Prefer the
+     * former when set, exactly as the frontend's {@code tenantDisplayName}
+     * does, so one company doesn't read as two different names across the
+     * two surfaces.
+     */
+    private static String displayName(Organization organization) {
+        String trading = organization.getTradingName();
+        return trading == null || trading.isBlank() ? organization.getRegisteredName() : trading;
     }
 }

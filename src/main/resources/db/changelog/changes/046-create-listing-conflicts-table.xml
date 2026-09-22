@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        listing_conflicts — a detected overlap between two estates, or between
+        two plots inside one estate. Persisted rather than recomputed per
+        request (CD-8): a Super Admin halfway through an investigation must
+        not lose that work to a re-scan, and a recomputed conflict would get a
+        new identity every page load.
+
+        PLATFORM-OWNED, NOT TENANT-OWNED. A conflict belongs to neither
+        company — it is a statement about two of them. The inherited
+        tenant_id/branch_id columns therefore stay NULL on every row (same
+        deliberate non-use as branches, for a different reason), and the RLS
+        policy below is platform-scope only. Applying the standard tenant
+        policy would have made each conflict visible to exactly one side, or
+        with the branch clause, to neither.
+
+        The consequence — and it is not optional to handle: a tenant-scoped
+        request reading this table sees NOTHING. The tenant-facing view
+        (CD-11) therefore cannot read it through an ordinary repository
+        either, and goes through a SECURITY DEFINER function in changeset
+        047 instead. That turns out to strengthen CD-11 rather than weaken
+        it: the function selects only the narrowed columns, so the other
+        company's identity is never in the result set at all, not merely
+        absent from a DTO.
+    -->
+    <changeSet id="046-create-listing-conflicts-table" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE listing_conflicts (
+                id                  uuid PRIMARY KEY,
+                tenant_id           uuid,
+                branch_id           uuid,
+                created_at          timestamptz NOT NULL,
+                created_by          varchar(255),
+                updated_at          timestamptz,
+                updated_by          varchar(255),
+                deleted             boolean NOT NULL DEFAULT false,
+
+                conflict_type       varchar(16) NOT NULL,
+                left_entity_id      uuid NOT NULL,
+                right_entity_id     uuid NOT NULL,
+                left_tenant_id      uuid NOT NULL,
+                right_tenant_id     uuid NOT NULL,
+
+                -- The estate both plots belong to, for a PLOT_OVERLAP; null
+                -- for an ESTATE_OVERLAP, where the two entities ARE estates.
+                -- Not in the slice spec's column list, but the tenant-facing
+                -- route is GET /api/portal/estates/{id}/conflicts, which
+                -- needs to find plot conflicts by their containing estate
+                -- without joining back into inventory's tables.
+                estate_id           uuid,
+
+                overlap_area_sqm    numeric(14,2) NOT NULL,
+                left_overlap_pct    numeric(5,2) NOT NULL,
+                right_overlap_pct   numeric(5,2) NOT NULL,
+
+                severity            varchar(8) NOT NULL,
+                status              varchar(24) NOT NULL,
+
+                resolution_reason   text,
+                resolved_by_user_id uuid,
+                resolved_at         timestamptz,
+                detected_at         timestamptz NOT NULL,
+
+                -- Set by detection when a HIGH conflict's (or any confirmed
+                -- duplicate's) overlap drops away, WITHOUT touching status.
+                -- Deliberately does not by itself resolve the conflict or
+                -- lift the publication block — see the long comment on
+                -- changeset 047's detection functions for why: geometry no
+                -- longer overlapping is not proof a genuine cross-company
+                -- dispute was fixed rather than gamed (a boundary can be
+                -- nudged just enough to duck the sliver threshold while
+                -- keeping almost all of the disputed ground). This column
+                -- is the signal a Super Admin uses to find conflicts that
+                -- need a decision; only a human dismissing the conflict
+                -- actually lifts the block. Null again if the geometry goes
+                -- back to overlapping on a later re-scan.
+                geometry_cleared_at timestamptz,
+
+                -- Deterministic pair ordering, enforced by the database
+                -- rather than trusted of the service. Detecting A-vs-B and
+                -- B-vs-A must produce one row, not two, and the unique index
+                -- below can only do its job if the ordering is guaranteed.
+                CONSTRAINT ck_listing_conflicts_pair_order
+                    CHECK (left_entity_id < right_entity_id),
+
+                -- No fabricated conflicts: a row exists only where geometry
+                -- genuinely overlaps beyond the sliver threshold.
+                CONSTRAINT ck_listing_conflicts_overlap_positive
+                    CHECK (overlap_area_sqm > 0),
+
+                CONSTRAINT ck_listing_conflicts_type
+                    CHECK (conflict_type IN ('ESTATE_OVERLAP', 'PLOT_OVERLAP')),
+                CONSTRAINT ck_listing_conflicts_severity
+                    CHECK (severity IN ('HIGH', 'MEDIUM')),
+                CONSTRAINT ck_listing_conflicts_status
+                    CHECK (status IN ('OPEN', 'INVESTIGATING', 'CONFIRMED_DUPLICATE',
+                                      'DISMISSED', 'AUTO_RESOLVED'))
+            );
+
+            -- One live conflict per pair. CONFIRMED_DUPLICATE counts as live:
+            -- a confirmed duplicate still blocks publication, so it is a
+            -- standing consequence, not a closed case. DISMISSED and
+            -- AUTO_RESOLVED are excluded so that geometry which is corrected
+            -- and later broken again can raise a fresh conflict rather than
+            -- colliding with the historical record, which is kept.
+            CREATE UNIQUE INDEX uq_listing_conflicts_live_pair
+                ON listing_conflicts (conflict_type, left_entity_id, right_entity_id)
+                WHERE deleted = false
+                  AND status IN ('OPEN', 'INVESTIGATING', 'CONFIRMED_DUPLICATE');
+
+            CREATE INDEX idx_listing_conflicts_status ON listing_conflicts (status);
+            CREATE INDEX idx_listing_conflicts_severity ON listing_conflicts (severity);
+            CREATE INDEX idx_listing_conflicts_left_entity ON listing_conflicts (left_entity_id);
+            CREATE INDEX idx_listing_conflicts_right_entity ON listing_conflicts (right_entity_id);
+            CREATE INDEX idx_listing_conflicts_estate ON listing_conflicts (estate_id);
+            CREATE INDEX idx_listing_conflicts_left_tenant ON listing_conflicts (left_tenant_id);
+            CREATE INDEX idx_listing_conflicts_right_tenant ON listing_conflicts (right_tenant_id);
+
+            COMMENT ON TABLE listing_conflicts IS
+                'Detected geometric overlaps between two estates or two plots. Platform-owned: a conflict '
+                'belongs to neither company, so tenant_id/branch_id stay null and RLS is platform-scope '
+                'only. Tenant-facing reads go through landvault_tenant_estate_conflicts() instead, which '
+                'never selects the counterparty''s identity. See AGENTS.md.';
+            COMMENT ON COLUMN listing_conflicts.overlap_area_sqm IS
+                'Square metres via ST_Area(ST_Intersection(a,b)::geography). Raw 4326 would give square '
+                'degrees - a plausible-looking meaningless number.';
+            COMMENT ON COLUMN listing_conflicts.severity IS
+                'HIGH = the two entities belong to different tenants (two companies claim the same ground; '
+                'a buyer could pay the wrong one). MEDIUM = same tenant, almost certainly a survey error.';
+            COMMENT ON COLUMN listing_conflicts.status IS
+                'AUTO_RESOLVED is set by detection only, never by a Super Admin - it means the geometry was '
+                'corrected and the overlap no longer exists. The record is kept, never deleted.';
+
+            ALTER TABLE listing_conflicts ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE listing_conflicts FORCE ROW LEVEL SECURITY;
+
+            CREATE POLICY listing_conflicts_platform ON listing_conflicts FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+        ]]></sql>
+        <rollback>
+            DROP POLICY listing_conflicts_platform ON listing_conflicts;
+            DROP TABLE listing_conflicts;
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

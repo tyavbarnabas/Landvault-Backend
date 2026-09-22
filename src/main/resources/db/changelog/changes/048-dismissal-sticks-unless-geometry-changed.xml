@@ -1,0 +1,584 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        A reviewer's dismissal sticks unless the geometry changed.
+
+        The unique index in 046 deliberately ignores DISMISSED rows so that a
+        corrected boundary that is later broken again raises a fresh
+        conflict. Side effect, found while walking the review flow live: a
+        Super Admin who looks at two estates sharing a strip along a road,
+        decides it is fine, and dismisses it WITHOUT anyone touching the
+        boundaries, has that decision silently undone on the very next
+        re-scan — the overlap is still there, there is no live conflict for
+        the pair, so detection raises a new one. Forever, every re-scan.
+        Dormant today (nothing re-detects an existing estate yet) and live
+        the day a footprint-update endpoint ships.
+
+        The rule, in the INSERT's WHERE clause: a fresh conflict is NOT
+        raised when the pair's dismissal was made against a still-overlapping
+        boundary (geometry_cleared_at IS NULL — the reviewer judged THAT
+        overlap acceptable) AND the overlap area is unchanged within the
+        sliver threshold. geometry_cleared_at doing double duty here is the
+        point: a dismissal made after a correction accepted the correction,
+        not any overlap, so putting the boundary back is a new conflict —
+        which keeps the revert-after-clearance attack closed.
+
+        A NEW changeset, not an edit to 047: 047 is applied to a real
+        database and is no longer edited in place. CREATE OR REPLACE keeps
+        the functions' existing EXECUTE grants, so no re-grant is needed.
+        The rollback restores 047's bodies verbatim, the same way.
+    -->
+    <changeSet id="048-dismissal-sticks-unless-geometry-changed-estates" author="landvault">
+        <sql splitStatements="false"><![CDATA[
+            CREATE OR REPLACE FUNCTION landvault_detect_estate_conflicts(
+                p_estate_id uuid,
+                p_min_overlap_sqm numeric
+            )
+            RETURNS integer
+            LANGUAGE sql
+            SECURITY DEFINER
+            SET search_path = public, pg_temp
+            AS $$
+                WITH candidate AS (
+                    SELECT
+                        LEAST(s.id, e.id)    AS left_id,
+                        GREATEST(s.id, e.id) AS right_id,
+                        CASE WHEN s.id < e.id THEN s.tenant_id ELSE e.tenant_id END AS left_tenant,
+                        CASE WHEN s.id < e.id THEN e.tenant_id ELSE s.tenant_id END AS right_tenant,
+                        ST_Area(ST_Intersection(s.footprint, e.footprint)::geography)::numeric AS overlap_sqm,
+                        CASE WHEN s.id < e.id
+                             THEN ST_Area(s.footprint::geography)::numeric
+                             ELSE ST_Area(e.footprint::geography)::numeric END AS left_sqm,
+                        CASE WHEN s.id < e.id
+                             THEN ST_Area(e.footprint::geography)::numeric
+                             ELSE ST_Area(s.footprint::geography)::numeric END AS right_sqm,
+                        (s.tenant_id IS DISTINCT FROM e.tenant_id) AS cross_tenant
+                    FROM estates s
+                    JOIN estates e
+                      ON e.id <> s.id
+                     AND e.deleted = false
+                     AND e.footprint IS NOT NULL
+                     -- Index-backed candidate narrowing ONLY. Not the decision.
+                     AND ST_Intersects(s.footprint, e.footprint)
+                    WHERE s.id = p_estate_id
+                      AND s.deleted = false
+                      AND s.footprint IS NOT NULL
+                ),
+                -- The decision: real shared area in square metres, above the
+                -- sliver threshold. Two estates meeting along a boundary
+                -- produce an intersection of zero area and never reach here.
+                real_overlap AS (
+                    SELECT * FROM candidate WHERE overlap_sqm > p_min_overlap_sqm
+                ),
+                upserted AS (
+                    INSERT INTO listing_conflicts (
+                        id, created_at, created_by, deleted,
+                        conflict_type, left_entity_id, right_entity_id,
+                        left_tenant_id, right_tenant_id, estate_id,
+                        overlap_area_sqm, left_overlap_pct, right_overlap_pct,
+                        severity, status, detected_at
+                    )
+                    SELECT
+                        gen_random_uuid(), now(), 'detection', false,
+                        'ESTATE_OVERLAP', left_id, right_id,
+                        left_tenant, right_tenant, NULL,
+                        round(overlap_sqm, 2),
+                        round(LEAST(overlap_sqm / NULLIF(left_sqm, 0) * 100, 100), 2),
+                        round(LEAST(overlap_sqm / NULLIF(right_sqm, 0) * 100, 100), 2),
+                        CASE WHEN cross_tenant THEN 'HIGH' ELSE 'MEDIUM' END,
+                        'OPEN', now()
+                    FROM real_overlap r
+                    -- A reviewer's dismissal stands while the overlap it was
+                    -- made against is unchanged. Two things must BOTH be
+                    -- true for a dismissal to suppress a fresh conflict:
+                    --   1. it was a dismissal of a STILL-OVERLAPPING pair
+                    --      (geometry_cleared_at IS NULL) — the reviewer
+                    --      judged that overlap acceptable. A dismissal made
+                    --      after the boundary was corrected accepted a
+                    --      correction, not an overlap, so it blesses
+                    --      nothing: if the boundary is put back, that is a
+                    --      new conflict (the revert-after-clearance case).
+                    --   2. the overlap area is unchanged within the sliver
+                    --      threshold — a materially different overlap is a
+                    --      different situation and gets looked at again.
+                    -- A pair with a live conflict always passes through, so
+                    -- the ON CONFLICT DO UPDATE branch keeps refreshing it.
+                    -- AUTO_RESOLVED never suppresses: nobody decided anything.
+                    WHERE EXISTS (
+                            SELECT 1 FROM listing_conflicts live
+                            WHERE live.conflict_type = 'ESTATE_OVERLAP'
+                              AND live.left_entity_id = r.left_id
+                              AND live.right_entity_id = r.right_id
+                              AND live.deleted = false
+                              AND live.status IN ('OPEN', 'INVESTIGATING', 'CONFIRMED_DUPLICATE')
+                          )
+                       OR NOT EXISTS (
+                            SELECT 1 FROM listing_conflicts d
+                            WHERE d.conflict_type = 'ESTATE_OVERLAP'
+                              AND d.left_entity_id = r.left_id
+                              AND d.right_entity_id = r.right_id
+                              AND d.deleted = false
+                              AND d.status = 'DISMISSED'
+                              AND d.geometry_cleared_at IS NULL
+                              AND abs(d.overlap_area_sqm - round(r.overlap_sqm, 2)) <= p_min_overlap_sqm
+                          )
+                    ON CONFLICT (conflict_type, left_entity_id, right_entity_id)
+                        WHERE deleted = false
+                          AND status IN ('OPEN', 'INVESTIGATING', 'CONFIRMED_DUPLICATE')
+                    DO UPDATE SET
+                        overlap_area_sqm    = EXCLUDED.overlap_area_sqm,
+                        left_overlap_pct    = EXCLUDED.left_overlap_pct,
+                        right_overlap_pct   = EXCLUDED.right_overlap_pct,
+                        severity            = EXCLUDED.severity,
+                        -- A genuine re-overlap after a previous clearance
+                        -- means that clearance was stale (or reversed) —
+                        -- withdraw the signal rather than leave a false
+                        -- "this looked fixed" mark on an actively
+                        -- overlapping conflict.
+                        geometry_cleared_at = NULL,
+                        updated_at          = now()
+                    -- status is deliberately absent: CD-8. A Super Admin
+                    -- halfway through an investigation keeps it through a
+                    -- re-scan.
+                    RETURNING 1
+                ),
+                -- CD-9, MEDIUM only. Same tenant, nobody at risk of paying
+                -- the wrong party — the geometry signal is trusted alone,
+                -- same as the plain reading of CD-9 intended. The record is
+                -- kept and marked, never deleted.
+                auto_resolved_medium AS (
+                    UPDATE listing_conflicts c
+                    SET status            = 'AUTO_RESOLVED',
+                        resolved_at       = now(),
+                        updated_at        = now(),
+                        resolution_reason = 'Boundary geometry no longer overlaps. '
+                                         || 'Resolved automatically when detection re-ran.'
+                    WHERE c.conflict_type = 'ESTATE_OVERLAP'
+                      AND c.deleted = false
+                      AND c.severity = 'MEDIUM'
+                      AND c.status IN ('OPEN', 'INVESTIGATING')
+                      AND (c.left_entity_id = p_estate_id OR c.right_entity_id = p_estate_id)
+                      AND NOT EXISTS (
+                            SELECT 1 FROM real_overlap r
+                            WHERE r.left_id = c.left_entity_id
+                              AND r.right_id = c.right_entity_id
+                      )
+                    RETURNING 1
+                ),
+                -- HIGH, or anything a human has confirmed a duplicate at
+                -- any severity: geometry alone must never lift the block.
+                -- Record the clearance; leave status untouched, so the
+                -- publication summary function (which counts by status,
+                -- not by this column) is completely unaffected until a
+                -- Super Admin reviews and dismisses it.
+                geometry_cleared AS (
+                    UPDATE listing_conflicts c
+                    SET geometry_cleared_at = now(),
+                        updated_at          = now()
+                    WHERE c.conflict_type = 'ESTATE_OVERLAP'
+                      AND c.deleted = false
+                      AND (c.severity = 'HIGH' OR c.status = 'CONFIRMED_DUPLICATE')
+                      AND c.status IN ('OPEN', 'INVESTIGATING', 'CONFIRMED_DUPLICATE')
+                      AND c.geometry_cleared_at IS NULL
+                      AND (c.left_entity_id = p_estate_id OR c.right_entity_id = p_estate_id)
+                      AND NOT EXISTS (
+                            SELECT 1 FROM real_overlap r
+                            WHERE r.left_id = c.left_entity_id
+                              AND r.right_id = c.right_entity_id
+                      )
+                    RETURNING 1
+                )
+                SELECT (SELECT count(*) FROM upserted)::integer;
+            $$;
+        
+        ]]></sql>
+        <rollback>
+            <sql splitStatements="false"><![CDATA[
+            CREATE OR REPLACE FUNCTION landvault_detect_estate_conflicts(
+                p_estate_id uuid,
+                p_min_overlap_sqm numeric
+            )
+            RETURNS integer
+            LANGUAGE sql
+            SECURITY DEFINER
+            SET search_path = public, pg_temp
+            AS $$
+                WITH candidate AS (
+                    SELECT
+                        LEAST(s.id, e.id)    AS left_id,
+                        GREATEST(s.id, e.id) AS right_id,
+                        CASE WHEN s.id < e.id THEN s.tenant_id ELSE e.tenant_id END AS left_tenant,
+                        CASE WHEN s.id < e.id THEN e.tenant_id ELSE s.tenant_id END AS right_tenant,
+                        ST_Area(ST_Intersection(s.footprint, e.footprint)::geography)::numeric AS overlap_sqm,
+                        CASE WHEN s.id < e.id
+                             THEN ST_Area(s.footprint::geography)::numeric
+                             ELSE ST_Area(e.footprint::geography)::numeric END AS left_sqm,
+                        CASE WHEN s.id < e.id
+                             THEN ST_Area(e.footprint::geography)::numeric
+                             ELSE ST_Area(s.footprint::geography)::numeric END AS right_sqm,
+                        (s.tenant_id IS DISTINCT FROM e.tenant_id) AS cross_tenant
+                    FROM estates s
+                    JOIN estates e
+                      ON e.id <> s.id
+                     AND e.deleted = false
+                     AND e.footprint IS NOT NULL
+                     -- Index-backed candidate narrowing ONLY. Not the decision.
+                     AND ST_Intersects(s.footprint, e.footprint)
+                    WHERE s.id = p_estate_id
+                      AND s.deleted = false
+                      AND s.footprint IS NOT NULL
+                ),
+                -- The decision: real shared area in square metres, above the
+                -- sliver threshold. Two estates meeting along a boundary
+                -- produce an intersection of zero area and never reach here.
+                real_overlap AS (
+                    SELECT * FROM candidate WHERE overlap_sqm > p_min_overlap_sqm
+                ),
+                upserted AS (
+                    INSERT INTO listing_conflicts (
+                        id, created_at, created_by, deleted,
+                        conflict_type, left_entity_id, right_entity_id,
+                        left_tenant_id, right_tenant_id, estate_id,
+                        overlap_area_sqm, left_overlap_pct, right_overlap_pct,
+                        severity, status, detected_at
+                    )
+                    SELECT
+                        gen_random_uuid(), now(), 'detection', false,
+                        'ESTATE_OVERLAP', left_id, right_id,
+                        left_tenant, right_tenant, NULL,
+                        round(overlap_sqm, 2),
+                        round(LEAST(overlap_sqm / NULLIF(left_sqm, 0) * 100, 100), 2),
+                        round(LEAST(overlap_sqm / NULLIF(right_sqm, 0) * 100, 100), 2),
+                        CASE WHEN cross_tenant THEN 'HIGH' ELSE 'MEDIUM' END,
+                        'OPEN', now()
+                    FROM real_overlap
+                    ON CONFLICT (conflict_type, left_entity_id, right_entity_id)
+                        WHERE deleted = false
+                          AND status IN ('OPEN', 'INVESTIGATING', 'CONFIRMED_DUPLICATE')
+                    DO UPDATE SET
+                        overlap_area_sqm    = EXCLUDED.overlap_area_sqm,
+                        left_overlap_pct    = EXCLUDED.left_overlap_pct,
+                        right_overlap_pct   = EXCLUDED.right_overlap_pct,
+                        severity            = EXCLUDED.severity,
+                        -- A genuine re-overlap after a previous clearance
+                        -- means that clearance was stale (or reversed) —
+                        -- withdraw the signal rather than leave a false
+                        -- "this looked fixed" mark on an actively
+                        -- overlapping conflict.
+                        geometry_cleared_at = NULL,
+                        updated_at          = now()
+                    -- status is deliberately absent: CD-8. A Super Admin
+                    -- halfway through an investigation keeps it through a
+                    -- re-scan.
+                    RETURNING 1
+                ),
+                -- CD-9, MEDIUM only. Same tenant, nobody at risk of paying
+                -- the wrong party — the geometry signal is trusted alone,
+                -- same as the plain reading of CD-9 intended. The record is
+                -- kept and marked, never deleted.
+                auto_resolved_medium AS (
+                    UPDATE listing_conflicts c
+                    SET status            = 'AUTO_RESOLVED',
+                        resolved_at       = now(),
+                        updated_at        = now(),
+                        resolution_reason = 'Boundary geometry no longer overlaps. '
+                                         || 'Resolved automatically when detection re-ran.'
+                    WHERE c.conflict_type = 'ESTATE_OVERLAP'
+                      AND c.deleted = false
+                      AND c.severity = 'MEDIUM'
+                      AND c.status IN ('OPEN', 'INVESTIGATING')
+                      AND (c.left_entity_id = p_estate_id OR c.right_entity_id = p_estate_id)
+                      AND NOT EXISTS (
+                            SELECT 1 FROM real_overlap r
+                            WHERE r.left_id = c.left_entity_id
+                              AND r.right_id = c.right_entity_id
+                      )
+                    RETURNING 1
+                ),
+                -- HIGH, or anything a human has confirmed a duplicate at
+                -- any severity: geometry alone must never lift the block.
+                -- Record the clearance; leave status untouched, so the
+                -- publication summary function (which counts by status,
+                -- not by this column) is completely unaffected until a
+                -- Super Admin reviews and dismisses it.
+                geometry_cleared AS (
+                    UPDATE listing_conflicts c
+                    SET geometry_cleared_at = now(),
+                        updated_at          = now()
+                    WHERE c.conflict_type = 'ESTATE_OVERLAP'
+                      AND c.deleted = false
+                      AND (c.severity = 'HIGH' OR c.status = 'CONFIRMED_DUPLICATE')
+                      AND c.status IN ('OPEN', 'INVESTIGATING', 'CONFIRMED_DUPLICATE')
+                      AND c.geometry_cleared_at IS NULL
+                      AND (c.left_entity_id = p_estate_id OR c.right_entity_id = p_estate_id)
+                      AND NOT EXISTS (
+                            SELECT 1 FROM real_overlap r
+                            WHERE r.left_id = c.left_entity_id
+                              AND r.right_id = c.right_entity_id
+                      )
+                    RETURNING 1
+                )
+                SELECT (SELECT count(*) FROM upserted)::integer;
+            $$;
+        
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="048-dismissal-sticks-unless-geometry-changed-plots" author="landvault">
+        <sql splitStatements="false"><![CDATA[
+            CREATE OR REPLACE FUNCTION landvault_detect_plot_conflicts(
+                p_estate_id uuid,
+                p_min_overlap_sqm numeric
+            )
+            RETURNS integer
+            LANGUAGE sql
+            SECURITY DEFINER
+            SET search_path = public, pg_temp
+            AS $$
+                WITH candidate AS (
+                    SELECT
+                        p1.id AS left_id,
+                        p2.id AS right_id,
+                        p1.tenant_id AS left_tenant,
+                        p2.tenant_id AS right_tenant,
+                        ST_Area(ST_Intersection(p1.footprint, p2.footprint)::geography)::numeric AS overlap_sqm,
+                        ST_Area(p1.footprint::geography)::numeric AS left_sqm,
+                        ST_Area(p2.footprint::geography)::numeric AS right_sqm
+                    FROM plots p1
+                    JOIN plots p2
+                      ON p1.id < p2.id
+                     AND p2.estate_id = p_estate_id
+                     AND p2.deleted = false
+                     AND p2.footprint IS NOT NULL
+                     -- Index-backed narrowing only; the threshold decides.
+                     AND ST_Intersects(p1.footprint, p2.footprint)
+                    WHERE p1.estate_id = p_estate_id
+                      AND p1.deleted = false
+                      AND p1.footprint IS NOT NULL
+                ),
+                real_overlap AS (
+                    SELECT * FROM candidate WHERE overlap_sqm > p_min_overlap_sqm
+                ),
+                upserted AS (
+                    INSERT INTO listing_conflicts (
+                        id, created_at, created_by, deleted,
+                        conflict_type, left_entity_id, right_entity_id,
+                        left_tenant_id, right_tenant_id, estate_id,
+                        overlap_area_sqm, left_overlap_pct, right_overlap_pct,
+                        severity, status, detected_at
+                    )
+                    SELECT
+                        gen_random_uuid(), now(), 'detection', false,
+                        'PLOT_OVERLAP', left_id, right_id,
+                        left_tenant, right_tenant, p_estate_id,
+                        round(overlap_sqm, 2),
+                        round(LEAST(overlap_sqm / NULLIF(left_sqm, 0) * 100, 100), 2),
+                        round(LEAST(overlap_sqm / NULLIF(right_sqm, 0) * 100, 100), 2),
+                        'MEDIUM', 'OPEN', now()
+                    FROM real_overlap r
+                    -- A reviewer's dismissal stands while the overlap it was
+                    -- made against is unchanged. Two things must BOTH be
+                    -- true for a dismissal to suppress a fresh conflict:
+                    --   1. it was a dismissal of a STILL-OVERLAPPING pair
+                    --      (geometry_cleared_at IS NULL) — the reviewer
+                    --      judged that overlap acceptable. A dismissal made
+                    --      after the boundary was corrected accepted a
+                    --      correction, not an overlap, so it blesses
+                    --      nothing: if the boundary is put back, that is a
+                    --      new conflict (the revert-after-clearance case).
+                    --   2. the overlap area is unchanged within the sliver
+                    --      threshold — a materially different overlap is a
+                    --      different situation and gets looked at again.
+                    -- A pair with a live conflict always passes through, so
+                    -- the ON CONFLICT DO UPDATE branch keeps refreshing it.
+                    -- AUTO_RESOLVED never suppresses: nobody decided anything.
+                    WHERE EXISTS (
+                            SELECT 1 FROM listing_conflicts live
+                            WHERE live.conflict_type = 'PLOT_OVERLAP'
+                              AND live.left_entity_id = r.left_id
+                              AND live.right_entity_id = r.right_id
+                              AND live.deleted = false
+                              AND live.status IN ('OPEN', 'INVESTIGATING', 'CONFIRMED_DUPLICATE')
+                          )
+                       OR NOT EXISTS (
+                            SELECT 1 FROM listing_conflicts d
+                            WHERE d.conflict_type = 'PLOT_OVERLAP'
+                              AND d.left_entity_id = r.left_id
+                              AND d.right_entity_id = r.right_id
+                              AND d.deleted = false
+                              AND d.status = 'DISMISSED'
+                              AND d.geometry_cleared_at IS NULL
+                              AND abs(d.overlap_area_sqm - round(r.overlap_sqm, 2)) <= p_min_overlap_sqm
+                          )
+                    ON CONFLICT (conflict_type, left_entity_id, right_entity_id)
+                        WHERE deleted = false
+                          AND status IN ('OPEN', 'INVESTIGATING', 'CONFIRMED_DUPLICATE')
+                    DO UPDATE SET
+                        overlap_area_sqm    = EXCLUDED.overlap_area_sqm,
+                        left_overlap_pct    = EXCLUDED.left_overlap_pct,
+                        right_overlap_pct   = EXCLUDED.right_overlap_pct,
+                        geometry_cleared_at = NULL,
+                        updated_at          = now()
+                    RETURNING 1
+                ),
+                -- Plot conflicts are always same-tenant by construction, so
+                -- always MEDIUM — the geometry signal is trusted alone here,
+                -- UNLESS a human has separately confirmed one a duplicate,
+                -- which is the one way a plot conflict can still need a
+                -- human to release it. See the estate function's header
+                -- comment for the full reasoning.
+                auto_resolved_medium AS (
+                    UPDATE listing_conflicts c
+                    SET status            = 'AUTO_RESOLVED',
+                        resolved_at       = now(),
+                        updated_at        = now(),
+                        resolution_reason = 'Plot geometry no longer overlaps. '
+                                         || 'Resolved automatically when detection re-ran.'
+                    WHERE c.conflict_type = 'PLOT_OVERLAP'
+                      AND c.deleted = false
+                      AND c.estate_id = p_estate_id
+                      AND c.status IN ('OPEN', 'INVESTIGATING')
+                      AND NOT EXISTS (
+                            SELECT 1 FROM real_overlap r
+                            WHERE r.left_id = c.left_entity_id
+                              AND r.right_id = c.right_entity_id
+                      )
+                    RETURNING 1
+                ),
+                geometry_cleared AS (
+                    UPDATE listing_conflicts c
+                    SET geometry_cleared_at = now(),
+                        updated_at          = now()
+                    WHERE c.conflict_type = 'PLOT_OVERLAP'
+                      AND c.deleted = false
+                      AND c.estate_id = p_estate_id
+                      AND c.status = 'CONFIRMED_DUPLICATE'
+                      AND c.geometry_cleared_at IS NULL
+                      AND NOT EXISTS (
+                            SELECT 1 FROM real_overlap r
+                            WHERE r.left_id = c.left_entity_id
+                              AND r.right_id = c.right_entity_id
+                      )
+                    RETURNING 1
+                )
+                SELECT (SELECT count(*) FROM upserted)::integer;
+            $$;
+        
+        ]]></sql>
+        <rollback>
+            <sql splitStatements="false"><![CDATA[
+            CREATE OR REPLACE FUNCTION landvault_detect_plot_conflicts(
+                p_estate_id uuid,
+                p_min_overlap_sqm numeric
+            )
+            RETURNS integer
+            LANGUAGE sql
+            SECURITY DEFINER
+            SET search_path = public, pg_temp
+            AS $$
+                WITH candidate AS (
+                    SELECT
+                        p1.id AS left_id,
+                        p2.id AS right_id,
+                        p1.tenant_id AS left_tenant,
+                        p2.tenant_id AS right_tenant,
+                        ST_Area(ST_Intersection(p1.footprint, p2.footprint)::geography)::numeric AS overlap_sqm,
+                        ST_Area(p1.footprint::geography)::numeric AS left_sqm,
+                        ST_Area(p2.footprint::geography)::numeric AS right_sqm
+                    FROM plots p1
+                    JOIN plots p2
+                      ON p1.id < p2.id
+                     AND p2.estate_id = p_estate_id
+                     AND p2.deleted = false
+                     AND p2.footprint IS NOT NULL
+                     -- Index-backed narrowing only; the threshold decides.
+                     AND ST_Intersects(p1.footprint, p2.footprint)
+                    WHERE p1.estate_id = p_estate_id
+                      AND p1.deleted = false
+                      AND p1.footprint IS NOT NULL
+                ),
+                real_overlap AS (
+                    SELECT * FROM candidate WHERE overlap_sqm > p_min_overlap_sqm
+                ),
+                upserted AS (
+                    INSERT INTO listing_conflicts (
+                        id, created_at, created_by, deleted,
+                        conflict_type, left_entity_id, right_entity_id,
+                        left_tenant_id, right_tenant_id, estate_id,
+                        overlap_area_sqm, left_overlap_pct, right_overlap_pct,
+                        severity, status, detected_at
+                    )
+                    SELECT
+                        gen_random_uuid(), now(), 'detection', false,
+                        'PLOT_OVERLAP', left_id, right_id,
+                        left_tenant, right_tenant, p_estate_id,
+                        round(overlap_sqm, 2),
+                        round(LEAST(overlap_sqm / NULLIF(left_sqm, 0) * 100, 100), 2),
+                        round(LEAST(overlap_sqm / NULLIF(right_sqm, 0) * 100, 100), 2),
+                        'MEDIUM', 'OPEN', now()
+                    FROM real_overlap
+                    ON CONFLICT (conflict_type, left_entity_id, right_entity_id)
+                        WHERE deleted = false
+                          AND status IN ('OPEN', 'INVESTIGATING', 'CONFIRMED_DUPLICATE')
+                    DO UPDATE SET
+                        overlap_area_sqm    = EXCLUDED.overlap_area_sqm,
+                        left_overlap_pct    = EXCLUDED.left_overlap_pct,
+                        right_overlap_pct   = EXCLUDED.right_overlap_pct,
+                        geometry_cleared_at = NULL,
+                        updated_at          = now()
+                    RETURNING 1
+                ),
+                -- Plot conflicts are always same-tenant by construction, so
+                -- always MEDIUM — the geometry signal is trusted alone here,
+                -- UNLESS a human has separately confirmed one a duplicate,
+                -- which is the one way a plot conflict can still need a
+                -- human to release it. See the estate function's header
+                -- comment for the full reasoning.
+                auto_resolved_medium AS (
+                    UPDATE listing_conflicts c
+                    SET status            = 'AUTO_RESOLVED',
+                        resolved_at       = now(),
+                        updated_at        = now(),
+                        resolution_reason = 'Plot geometry no longer overlaps. '
+                                         || 'Resolved automatically when detection re-ran.'
+                    WHERE c.conflict_type = 'PLOT_OVERLAP'
+                      AND c.deleted = false
+                      AND c.estate_id = p_estate_id
+                      AND c.status IN ('OPEN', 'INVESTIGATING')
+                      AND NOT EXISTS (
+                            SELECT 1 FROM real_overlap r
+                            WHERE r.left_id = c.left_entity_id
+                              AND r.right_id = c.right_entity_id
+                      )
+                    RETURNING 1
+                ),
+                geometry_cleared AS (
+                    UPDATE listing_conflicts c
+                    SET geometry_cleared_at = now(),
+                        updated_at          = now()
+                    WHERE c.conflict_type = 'PLOT_OVERLAP'
+                      AND c.deleted = false
+                      AND c.estate_id = p_estate_id
+                      AND c.status = 'CONFIRMED_DUPLICATE'
+                      AND c.geometry_cleared_at IS NULL
+                      AND NOT EXISTS (
+                            SELECT 1 FROM real_overlap r
+                            WHERE r.left_id = c.left_entity_id
+                              AND r.right_id = c.right_entity_id
+                      )
+                    RETURNING 1
+                )
+                SELECT (SELECT count(*) FROM upserted)::integer;
+            $$;
+        
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

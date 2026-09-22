@@ -1,0 +1,497 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        The RLS escape for conflict detection, and WHY SECURITY DEFINER was
+        chosen over the other option the slice spec offered.
+
+        The spec allowed either: set `platform_scope = on` for the detection
+        path, or use a SECURITY DEFINER function. SECURITY DEFINER, because
+        the elevation has to be strictly narrower than the alternative:
+
+          SET LOCAL landvault.platform_scope = 'on' cannot be scoped to one
+          statement. It applies for the REST OF THE TRANSACTION, which here
+          is the rest of a tenant's estate-creation request — every
+          subsequent read and write in that request would bypass tenant
+          isolation entirely, including ones that have nothing to do with
+          detection. If an exception fires before it is set back, it stays
+          elevated to the end of the transaction. That is a much larger hole
+          than one cross-tenant query needs, and it opens inside the one
+          request path where a tenant is actively writing.
+
+        A SECURITY DEFINER function's privileges apply only inside the
+        function body. Same precedent as changeset 043 (the RLS bootstrap
+        functions), for the same reason, and this is the second deliberate
+        escape in the codebase — the reasoning for both now sits together in
+        AGENTS.md.
+
+        THREE things these functions must do that a plain query could not:
+
+        1. READ across tenants. This is the query @TenantId and Hibernate
+           filters would have silently returned empty for, which is why both
+           were rejected in the foundation work.
+        2. WRITE to listing_conflicts. Changeset 046's policy is
+           platform-scope only, and detection runs inside a TENANT-scoped
+           request, so the INSERT's WITH CHECK would fail. This was not in
+           the slice spec and is a direct consequence of its own Part 1
+           instruction to make the table platform-owned.
+        3. Preserve an in-flight investigation (CD-8). The upsert refreshes
+           the overlap figures but deliberately never touches `status`, so a
+           re-scan cannot knock an INVESTIGATING conflict back to OPEN.
+
+        ST_Intersects sits in the JOIN so the GiST index can eliminate almost
+        every candidate before exact geometry runs; the ACTUAL DECISION is
+        the area threshold below it. That split matters: ST_Intersects alone
+        is true for boundary contact, and every adjacent plot in a subdivided
+        estate shares an edge — deciding on ST_Intersects would flag every
+        correctly-surveyed neighbour and make the queue useless.
+
+        WHY A CLEARED HIGH CONFLICT DOES NOT AUTO-RESOLVE ITSELF
+
+        Raised directly, not found later: the sliver threshold that stops
+        adjacent plots being flagged (above) is the same mechanism that
+        makes gaming auto-resolution cheap. A party does not need to move a
+        disputed boundary off the other party's land — they only need to
+        shave enough off to drop the shared area under the threshold, a few
+        square metres, while keeping almost all of the disputed ground. If
+        that alone lifted the publication block, "correct the boundary"
+        and "make the detector stop looking" would be indistinguishable
+        from the outside, and a genuine cross-company dispute could be
+        cleared with nobody ever reviewing it — exactly the platform's own
+        core anti-fraud promise being defeated by the mechanism built to
+        keep it. Geometry no longer overlapping proves the shapes changed;
+        it does not prove which of "fixed" or "gamed" happened.
+
+        Same reasoning this codebase already applies to money: "never
+        auto-confirm a payment" — a signal arriving is not proof, a human
+        confirms. Applied here: for a MEDIUM conflict (same tenant, no
+        buyer at risk) the geometry signal is trusted alone, same as
+        before. For a HIGH conflict, or anything a human has explicitly
+        marked CONFIRMED_DUPLICATE at any severity, the geometry signal
+        only sets `geometry_cleared_at` — status, and therefore the
+        publication block, is left exactly where it was. A Super Admin has
+        to look and dismiss it (see changeset 046's column comment, and
+        `ConflictReviewService`, which now allows CONFIRMED_DUPLICATE to
+        move to DISMISSED specifically for this). `geometry_cleared_at` is
+        reset back to null if the pair overlaps again on a later scan —
+        the upsert branch handles that, since a live overlap always
+        matches the unique index and re-enters the DO UPDATE path.
+    -->
+    <changeSet id="047-create-estate-conflict-detection-function" author="landvault">
+        <sql splitStatements="false"><![CDATA[
+            CREATE FUNCTION landvault_detect_estate_conflicts(
+                p_estate_id uuid,
+                p_min_overlap_sqm numeric
+            )
+            RETURNS integer
+            LANGUAGE sql
+            SECURITY DEFINER
+            SET search_path = public, pg_temp
+            AS $$
+                WITH candidate AS (
+                    SELECT
+                        LEAST(s.id, e.id)    AS left_id,
+                        GREATEST(s.id, e.id) AS right_id,
+                        CASE WHEN s.id < e.id THEN s.tenant_id ELSE e.tenant_id END AS left_tenant,
+                        CASE WHEN s.id < e.id THEN e.tenant_id ELSE s.tenant_id END AS right_tenant,
+                        ST_Area(ST_Intersection(s.footprint, e.footprint)::geography)::numeric AS overlap_sqm,
+                        CASE WHEN s.id < e.id
+                             THEN ST_Area(s.footprint::geography)::numeric
+                             ELSE ST_Area(e.footprint::geography)::numeric END AS left_sqm,
+                        CASE WHEN s.id < e.id
+                             THEN ST_Area(e.footprint::geography)::numeric
+                             ELSE ST_Area(s.footprint::geography)::numeric END AS right_sqm,
+                        (s.tenant_id IS DISTINCT FROM e.tenant_id) AS cross_tenant
+                    FROM estates s
+                    JOIN estates e
+                      ON e.id <> s.id
+                     AND e.deleted = false
+                     AND e.footprint IS NOT NULL
+                     -- Index-backed candidate narrowing ONLY. Not the decision.
+                     AND ST_Intersects(s.footprint, e.footprint)
+                    WHERE s.id = p_estate_id
+                      AND s.deleted = false
+                      AND s.footprint IS NOT NULL
+                ),
+                -- The decision: real shared area in square metres, above the
+                -- sliver threshold. Two estates meeting along a boundary
+                -- produce an intersection of zero area and never reach here.
+                real_overlap AS (
+                    SELECT * FROM candidate WHERE overlap_sqm > p_min_overlap_sqm
+                ),
+                upserted AS (
+                    INSERT INTO listing_conflicts (
+                        id, created_at, created_by, deleted,
+                        conflict_type, left_entity_id, right_entity_id,
+                        left_tenant_id, right_tenant_id, estate_id,
+                        overlap_area_sqm, left_overlap_pct, right_overlap_pct,
+                        severity, status, detected_at
+                    )
+                    SELECT
+                        gen_random_uuid(), now(), 'detection', false,
+                        'ESTATE_OVERLAP', left_id, right_id,
+                        left_tenant, right_tenant, NULL,
+                        round(overlap_sqm, 2),
+                        round(LEAST(overlap_sqm / NULLIF(left_sqm, 0) * 100, 100), 2),
+                        round(LEAST(overlap_sqm / NULLIF(right_sqm, 0) * 100, 100), 2),
+                        CASE WHEN cross_tenant THEN 'HIGH' ELSE 'MEDIUM' END,
+                        'OPEN', now()
+                    FROM real_overlap
+                    ON CONFLICT (conflict_type, left_entity_id, right_entity_id)
+                        WHERE deleted = false
+                          AND status IN ('OPEN', 'INVESTIGATING', 'CONFIRMED_DUPLICATE')
+                    DO UPDATE SET
+                        overlap_area_sqm    = EXCLUDED.overlap_area_sqm,
+                        left_overlap_pct    = EXCLUDED.left_overlap_pct,
+                        right_overlap_pct   = EXCLUDED.right_overlap_pct,
+                        severity            = EXCLUDED.severity,
+                        -- A genuine re-overlap after a previous clearance
+                        -- means that clearance was stale (or reversed) —
+                        -- withdraw the signal rather than leave a false
+                        -- "this looked fixed" mark on an actively
+                        -- overlapping conflict.
+                        geometry_cleared_at = NULL,
+                        updated_at          = now()
+                    -- status is deliberately absent: CD-8. A Super Admin
+                    -- halfway through an investigation keeps it through a
+                    -- re-scan.
+                    RETURNING 1
+                ),
+                -- CD-9, MEDIUM only. Same tenant, nobody at risk of paying
+                -- the wrong party — the geometry signal is trusted alone,
+                -- same as the plain reading of CD-9 intended. The record is
+                -- kept and marked, never deleted.
+                auto_resolved_medium AS (
+                    UPDATE listing_conflicts c
+                    SET status            = 'AUTO_RESOLVED',
+                        resolved_at       = now(),
+                        updated_at        = now(),
+                        resolution_reason = 'Boundary geometry no longer overlaps. '
+                                         || 'Resolved automatically when detection re-ran.'
+                    WHERE c.conflict_type = 'ESTATE_OVERLAP'
+                      AND c.deleted = false
+                      AND c.severity = 'MEDIUM'
+                      AND c.status IN ('OPEN', 'INVESTIGATING')
+                      AND (c.left_entity_id = p_estate_id OR c.right_entity_id = p_estate_id)
+                      AND NOT EXISTS (
+                            SELECT 1 FROM real_overlap r
+                            WHERE r.left_id = c.left_entity_id
+                              AND r.right_id = c.right_entity_id
+                      )
+                    RETURNING 1
+                ),
+                -- HIGH, or anything a human has confirmed a duplicate at
+                -- any severity: geometry alone must never lift the block.
+                -- Record the clearance; leave status untouched, so the
+                -- publication summary function (which counts by status,
+                -- not by this column) is completely unaffected until a
+                -- Super Admin reviews and dismisses it.
+                geometry_cleared AS (
+                    UPDATE listing_conflicts c
+                    SET geometry_cleared_at = now(),
+                        updated_at          = now()
+                    WHERE c.conflict_type = 'ESTATE_OVERLAP'
+                      AND c.deleted = false
+                      AND (c.severity = 'HIGH' OR c.status = 'CONFIRMED_DUPLICATE')
+                      AND c.status IN ('OPEN', 'INVESTIGATING', 'CONFIRMED_DUPLICATE')
+                      AND c.geometry_cleared_at IS NULL
+                      AND (c.left_entity_id = p_estate_id OR c.right_entity_id = p_estate_id)
+                      AND NOT EXISTS (
+                            SELECT 1 FROM real_overlap r
+                            WHERE r.left_id = c.left_entity_id
+                              AND r.right_id = c.right_entity_id
+                      )
+                    RETURNING 1
+                )
+                SELECT (SELECT count(*) FROM upserted)::integer;
+            $$;
+        ]]></sql>
+        <rollback>
+            DROP FUNCTION landvault_detect_estate_conflicts(uuid, numeric);
+        </rollback>
+    </changeSet>
+
+    <!--
+        CD-2 — the within-estate case AGENTS.md records as the MORE COMMON
+        scam, undetectable until plots carried geometry.
+
+        p1.id < p2.id does double duty: it produces the canonical pair
+        ordering the table's CHECK constraint requires, and it halves the
+        work by considering each unordered pair once.
+
+        Always same-tenant by construction (both plots belong to one estate),
+        so severity is always MEDIUM — a company's own two plots overlapping
+        is a survey error, not a buyer-facing scam.
+    -->
+    <changeSet id="047-create-plot-conflict-detection-function" author="landvault">
+        <sql splitStatements="false"><![CDATA[
+            CREATE FUNCTION landvault_detect_plot_conflicts(
+                p_estate_id uuid,
+                p_min_overlap_sqm numeric
+            )
+            RETURNS integer
+            LANGUAGE sql
+            SECURITY DEFINER
+            SET search_path = public, pg_temp
+            AS $$
+                WITH candidate AS (
+                    SELECT
+                        p1.id AS left_id,
+                        p2.id AS right_id,
+                        p1.tenant_id AS left_tenant,
+                        p2.tenant_id AS right_tenant,
+                        ST_Area(ST_Intersection(p1.footprint, p2.footprint)::geography)::numeric AS overlap_sqm,
+                        ST_Area(p1.footprint::geography)::numeric AS left_sqm,
+                        ST_Area(p2.footprint::geography)::numeric AS right_sqm
+                    FROM plots p1
+                    JOIN plots p2
+                      ON p1.id < p2.id
+                     AND p2.estate_id = p_estate_id
+                     AND p2.deleted = false
+                     AND p2.footprint IS NOT NULL
+                     -- Index-backed narrowing only; the threshold decides.
+                     AND ST_Intersects(p1.footprint, p2.footprint)
+                    WHERE p1.estate_id = p_estate_id
+                      AND p1.deleted = false
+                      AND p1.footprint IS NOT NULL
+                ),
+                real_overlap AS (
+                    SELECT * FROM candidate WHERE overlap_sqm > p_min_overlap_sqm
+                ),
+                upserted AS (
+                    INSERT INTO listing_conflicts (
+                        id, created_at, created_by, deleted,
+                        conflict_type, left_entity_id, right_entity_id,
+                        left_tenant_id, right_tenant_id, estate_id,
+                        overlap_area_sqm, left_overlap_pct, right_overlap_pct,
+                        severity, status, detected_at
+                    )
+                    SELECT
+                        gen_random_uuid(), now(), 'detection', false,
+                        'PLOT_OVERLAP', left_id, right_id,
+                        left_tenant, right_tenant, p_estate_id,
+                        round(overlap_sqm, 2),
+                        round(LEAST(overlap_sqm / NULLIF(left_sqm, 0) * 100, 100), 2),
+                        round(LEAST(overlap_sqm / NULLIF(right_sqm, 0) * 100, 100), 2),
+                        'MEDIUM', 'OPEN', now()
+                    FROM real_overlap
+                    ON CONFLICT (conflict_type, left_entity_id, right_entity_id)
+                        WHERE deleted = false
+                          AND status IN ('OPEN', 'INVESTIGATING', 'CONFIRMED_DUPLICATE')
+                    DO UPDATE SET
+                        overlap_area_sqm    = EXCLUDED.overlap_area_sqm,
+                        left_overlap_pct    = EXCLUDED.left_overlap_pct,
+                        right_overlap_pct   = EXCLUDED.right_overlap_pct,
+                        geometry_cleared_at = NULL,
+                        updated_at          = now()
+                    RETURNING 1
+                ),
+                -- Plot conflicts are always same-tenant by construction, so
+                -- always MEDIUM — the geometry signal is trusted alone here,
+                -- UNLESS a human has separately confirmed one a duplicate,
+                -- which is the one way a plot conflict can still need a
+                -- human to release it. See the estate function's header
+                -- comment for the full reasoning.
+                auto_resolved_medium AS (
+                    UPDATE listing_conflicts c
+                    SET status            = 'AUTO_RESOLVED',
+                        resolved_at       = now(),
+                        updated_at        = now(),
+                        resolution_reason = 'Plot geometry no longer overlaps. '
+                                         || 'Resolved automatically when detection re-ran.'
+                    WHERE c.conflict_type = 'PLOT_OVERLAP'
+                      AND c.deleted = false
+                      AND c.estate_id = p_estate_id
+                      AND c.status IN ('OPEN', 'INVESTIGATING')
+                      AND NOT EXISTS (
+                            SELECT 1 FROM real_overlap r
+                            WHERE r.left_id = c.left_entity_id
+                              AND r.right_id = c.right_entity_id
+                      )
+                    RETURNING 1
+                ),
+                geometry_cleared AS (
+                    UPDATE listing_conflicts c
+                    SET geometry_cleared_at = now(),
+                        updated_at          = now()
+                    WHERE c.conflict_type = 'PLOT_OVERLAP'
+                      AND c.deleted = false
+                      AND c.estate_id = p_estate_id
+                      AND c.status = 'CONFIRMED_DUPLICATE'
+                      AND c.geometry_cleared_at IS NULL
+                      AND NOT EXISTS (
+                            SELECT 1 FROM real_overlap r
+                            WHERE r.left_id = c.left_entity_id
+                              AND r.right_id = c.right_entity_id
+                      )
+                    RETURNING 1
+                )
+                SELECT (SELECT count(*) FROM upserted)::integer;
+            $$;
+        ]]></sql>
+        <rollback>
+            DROP FUNCTION landvault_detect_plot_conflicts(uuid, numeric);
+        </rollback>
+    </changeSet>
+
+    <!--
+        CD-11 — the tenant's own view, and the reason it is a function rather
+        than a repository query.
+
+        listing_conflicts is platform-scope only (changeset 046), so a
+        tenant-scoped request reads zero rows from it. This function is that
+        escape, and it is deliberately the NARROWEST possible one:
+
+          it returns the caller's OWN entity id and their OWN side's overlap
+          percentage, and nothing whatsoever about the other party. No
+          counterparty entity id, no counterparty tenant id, no name.
+
+        That is stronger than filtering fields in a DTO. The other company's
+        identity is never in the result set, so it cannot leak through a
+        later refactor, a debug log, a serialization change, or a DTO that
+        someone widens without thinking about this rule. Both defences are
+        kept — narrow function AND narrow DTO — but this is the load-bearing
+        one.
+
+        p_tenant_id is checked against the estate's own tenant, so a caller
+        cannot read another tenant's estate by guessing an id.
+    -->
+    <changeSet id="047-create-tenant-conflict-projection-function" author="landvault">
+        <sql splitStatements="false"><![CDATA[
+            CREATE FUNCTION landvault_tenant_estate_conflicts(
+                p_estate_id uuid,
+                p_tenant_id uuid
+            )
+            RETURNS TABLE (
+                conflict_id         uuid,
+                conflict_type       varchar,
+                own_entity_id       uuid,
+                overlap_area_sqm    numeric,
+                own_overlap_pct     numeric,
+                severity            varchar,
+                status              varchar,
+                -- Non-null once a correction has been detected but not yet
+                -- reviewed. Lets the tenant see "we noticed" without this
+                -- function ever selecting anything about the other party —
+                -- see changeset 046's column comment.
+                geometry_cleared_at timestamptz,
+                detected_at         timestamptz
+            )
+            LANGUAGE sql
+            SECURITY DEFINER
+            STABLE
+            SET search_path = public, pg_temp
+            AS $$
+                SELECT
+                    c.id,
+                    c.conflict_type,
+                    CASE WHEN c.left_tenant_id = p_tenant_id
+                         THEN c.left_entity_id ELSE c.right_entity_id END,
+                    c.overlap_area_sqm,
+                    CASE WHEN c.left_tenant_id = p_tenant_id
+                         THEN c.left_overlap_pct ELSE c.right_overlap_pct END,
+                    c.severity,
+                    c.status,
+                    c.geometry_cleared_at,
+                    c.detected_at
+                FROM listing_conflicts c
+                WHERE c.deleted = false
+                  -- The estate must actually be this tenant's, checked here
+                  -- rather than trusted of the caller.
+                  AND EXISTS (
+                        SELECT 1 FROM estates e
+                        WHERE e.id = p_estate_id
+                          AND e.tenant_id = p_tenant_id
+                          AND e.deleted = false
+                  )
+                  AND (
+                        -- an estate-level conflict involving this estate
+                        (c.conflict_type = 'ESTATE_OVERLAP'
+                         AND (c.left_entity_id = p_estate_id OR c.right_entity_id = p_estate_id))
+                        -- or a plot-level conflict inside it
+                     OR (c.conflict_type = 'PLOT_OVERLAP' AND c.estate_id = p_estate_id)
+                  )
+                  -- Belt and braces: one side must be this tenant regardless.
+                  AND (c.left_tenant_id = p_tenant_id OR c.right_tenant_id = p_tenant_id)
+                ORDER BY
+                    CASE c.severity WHEN 'HIGH' THEN 0 ELSE 1 END,
+                    c.overlap_area_sqm DESC;
+            $$;
+        ]]></sql>
+        <rollback>
+            DROP FUNCTION landvault_tenant_estate_conflicts(uuid, uuid);
+        </rollback>
+    </changeSet>
+
+    <!--
+        CD-10's publication check, and the third place the platform-scope
+        policy gets in the way.
+
+        The publication gate runs on a tenant's own request to publish their
+        own estate, so it reads listing_conflicts under TENANT scope and
+        would see nothing — silently concluding "no conflicts, publish
+        away", which is the exact failure this feature exists to prevent.
+
+        Returns COUNTS ONLY: how many live conflicts on this estate block
+        publication (HIGH severity, or confirmed a duplicate at any
+        severity) and how many merely warn (MEDIUM). No ids, no names, no
+        counterparty — so it is safe to call from a tenant-facing path
+        without reopening anything, and CD-11's non-disclosure rule holds
+        without the caller having to remember it.
+    -->
+    <changeSet id="047-create-estate-conflict-summary-function" author="landvault">
+        <sql splitStatements="false"><![CDATA[
+            CREATE FUNCTION landvault_estate_conflict_summary(p_estate_id uuid)
+            RETURNS TABLE (blocking_count integer, warning_count integer)
+            LANGUAGE sql
+            SECURITY DEFINER
+            STABLE
+            SET search_path = public, pg_temp
+            AS $$
+                SELECT
+                    COUNT(*) FILTER (
+                        WHERE c.severity = 'HIGH' OR c.status = 'CONFIRMED_DUPLICATE'
+                    )::integer,
+                    COUNT(*) FILTER (
+                        WHERE c.severity = 'MEDIUM' AND c.status <> 'CONFIRMED_DUPLICATE'
+                    )::integer
+                FROM listing_conflicts c
+                WHERE c.deleted = false
+                  AND c.status IN ('OPEN', 'INVESTIGATING', 'CONFIRMED_DUPLICATE')
+                  AND (
+                        (c.conflict_type = 'ESTATE_OVERLAP'
+                         AND (c.left_entity_id = p_estate_id OR c.right_entity_id = p_estate_id))
+                     OR (c.conflict_type = 'PLOT_OVERLAP' AND c.estate_id = p_estate_id)
+                  );
+            $$;
+        ]]></sql>
+        <rollback>
+            DROP FUNCTION landvault_estate_conflict_summary(uuid);
+        </rollback>
+    </changeSet>
+
+    <!-- Least privilege: nobody by default, the application role gets EXECUTE. -->
+    <changeSet id="047-grant-execute-on-conflict-functions" author="landvault">
+        <sql>
+            REVOKE ALL ON FUNCTION landvault_detect_estate_conflicts(uuid, numeric) FROM PUBLIC;
+            REVOKE ALL ON FUNCTION landvault_detect_plot_conflicts(uuid, numeric) FROM PUBLIC;
+            REVOKE ALL ON FUNCTION landvault_tenant_estate_conflicts(uuid, uuid) FROM PUBLIC;
+            REVOKE ALL ON FUNCTION landvault_estate_conflict_summary(uuid) FROM PUBLIC;
+            GRANT EXECUTE ON FUNCTION landvault_detect_estate_conflicts(uuid, numeric) TO ${appDbUsername};
+            GRANT EXECUTE ON FUNCTION landvault_detect_plot_conflicts(uuid, numeric) TO ${appDbUsername};
+            GRANT EXECUTE ON FUNCTION landvault_tenant_estate_conflicts(uuid, uuid) TO ${appDbUsername};
+            GRANT EXECUTE ON FUNCTION landvault_estate_conflict_summary(uuid) TO ${appDbUsername};
+        </sql>
+        <rollback>
+            REVOKE EXECUTE ON FUNCTION landvault_detect_estate_conflicts(uuid, numeric) FROM ${appDbUsername};
+            REVOKE EXECUTE ON FUNCTION landvault_detect_plot_conflicts(uuid, numeric) FROM ${appDbUsername};
+            REVOKE EXECUTE ON FUNCTION landvault_tenant_estate_conflicts(uuid, uuid) FROM ${appDbUsername};
+            REVOKE EXECUTE ON FUNCTION landvault_estate_conflict_summary(uuid) FROM ${appDbUsername};
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

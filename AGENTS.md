@@ -1415,12 +1415,15 @@ and title verification. Two columns carry the weight:
 
 ## The marketplace publication gate: four conditions, recorded here, enforced there
 
-An estate is publicly listable only when **all four** hold:
+An estate is publicly listable only when **all five** hold:
 
 1. `estates.published` is true (the developer's own opt-in switch)
 2. the owning tenant's `verificationState` is `VERIFIED`
 3. that tenant holds the `marketplacePublishing` entitlement
 4. the tenant's `status` is not `SUSPENDED`
+5. **no conflict blocks it** — `ConflictDetectionApi.publicationCheckFor(estateId)`
+   returns `blocked == false` (added by inventory slice 4; see the conflict
+   detection sections below for why HIGH blocks and MEDIUM only warns)
 
 **The gate belongs to the `marketplace` projection, not to the inventory
 schema** — which is why `estates.published` is only condition 1 and carries a
@@ -2242,3 +2245,473 @@ Features with no boundary are **omitted, not emitted with a null geometry**:
 most mapping clients render a null geometry as a point at `[0, 0]`, in the
 Gulf of Guinea. The estate feature comes first so plots draw on top of the
 boundary rather than under it.
+
+## Conflict detection: the second deliberate RLS escape, and why it is a function
+
+This is the feature the PostGIS work existed for — detecting when two
+parties claim overlapping land — and it runs headlong into row-level
+security three separate times. The reasoning sits here beside the first
+escape (`TenancyApi`'s bootstrap functions, changeset 043) because the two
+are the same shape and should be read together.
+
+The slice spec allowed either approach: `SET LOCAL landvault.platform_scope
+= 'on'` for the detection path, or a `SECURITY DEFINER` function.
+**`SECURITY DEFINER` was chosen, and the reason is the size of the hole.**
+`SET LOCAL` cannot be scoped to one statement — it applies for the rest of
+the transaction, which here is the rest of a tenant's estate-creation
+request. Every later read and write in that request would bypass tenant
+isolation, including ones with nothing to do with detection, and an
+exception thrown before it was set back would leave it elevated to the end
+of the transaction. A definer function's privileges stop at the function
+body.
+
+### Three places the policy gets in the way, not one
+
+Changeset 046 makes `listing_conflicts` **platform-scope only** — a
+conflict belongs to neither company, so the standard tenant policy would
+have made each one visible to exactly one side, or (with the branch clause)
+neither. That single decision has three consequences, and only the first
+was in the slice spec:
+
+1. **Reading estates across tenants.** The advertised problem. This is
+   literally the query `@TenantId` and Hibernate filters would have
+   silently returned empty for — the third of the three reasons both were
+   rejected in the foundation work, now actually built.
+2. **Writing the conflict rows.** Detection runs inside a *tenant-scoped*
+   request (CD-4 puts it at footprint submission), so the INSERT's
+   `WITH CHECK` fails against a platform-scope-only policy. Not mentioned
+   in the spec; a direct consequence of its own Part 1 instruction.
+3. **The tenant's own view of their conflicts.** Same table, same policy —
+   a tenant-scoped repository read returns nothing. Handled by a *fourth*
+   function, `landvault_tenant_estate_conflicts()`, which turns out to
+   strengthen CD-11 rather than complicate it (below).
+
+Four functions in changeset 047, all `SECURITY DEFINER` with
+`SET search_path = public, pg_temp`, `EXECUTE` revoked from `PUBLIC` and
+granted only to the app role:
+`landvault_detect_estate_conflicts`, `landvault_detect_plot_conflicts`,
+`landvault_tenant_estate_conflicts`, `landvault_estate_conflict_summary`.
+
+**Do not "simplify" any of these into a repository call.** Same warning as
+the 043 functions, same outcome: it compiles, it passes under a superuser
+connection, and it silently detects nothing in any environment where RLS is
+actually on.
+
+## `ST_Intersects` narrows; the area threshold decides
+
+The single most important line in this feature, and the one the slice spec
+originally got wrong (it framed `ST_Intersects` as deciding the answer,
+which would have made CD-2 unusable):
+
+**Adjacent plots share edges by design.** `ST_Intersects` is true for
+boundary contact, so a detector that decides on it flags every correctly
+surveyed neighbour in a subdivided estate. The queue fills with false
+positives and stops being read — worse than no queue, because it hides the
+real ones.
+
+So the detection SQL puts `ST_Intersects` in the JOIN, where the GiST index
+can use it, and decides on
+`ST_Area(ST_Intersection(a, b)::geography) > threshold`. Geography cast, so
+square metres; raw 4326 would give square degrees.
+
+`estatesSharingOnlyABoundaryLineRaiseNoConflict` pins this, and asserts
+first that the two estates genuinely *do* intersect — otherwise it would be
+a test that passes because nothing touched.
+
+### The sliver threshold: 1.0 m², and why
+
+`landvault.conflicts.min-overlap-sqm`, default `1.0`. Two correctly
+surveyed adjacent parcels meet along a line, which has zero area in exact
+arithmetic — but real coordinates carry precision limits and floating-point
+geometry produces a sliver. On a typical 250 m² plot (about 15.8 m a side),
+1 m² is a strip roughly 6 cm wide along one edge: comfortably inside survey
+tolerance, and orders of magnitude below any overlap representing a real
+claim. Raise it if real survey data proves noisier; **never** raise it to
+silence conflicts that are genuinely real.
+
+### The EXPLAIN finding — the index narrows, exact geometry decides, visibly
+
+Verified against 3,000 estates (on a handful of rows the planner correctly
+prefers a sequential scan and the plan would prove nothing). The actual
+plan:
+
+```
+Aggregate
+  ->  Nested Loop
+        ->  Index Scan using estates_pkey on estates s
+              Index Cond: (id = '...'::uuid)
+        ->  Index Scan using idx_estates_footprint on estates e
+              Index Cond: (footprint && s.footprint)
+              Filter: ((id <> s.id) AND st_intersects(s.footprint, footprint))
+```
+
+That is the whole design visible in the planner's own output: the GiST
+index is used via the `&&` **bounding-box** operator as `Index Cond` to
+eliminate almost everything, and exact `st_intersects` runs as a `Filter`
+on the survivors. The bounding box is doing candidate narrowing — which is
+what AGENTS.md always permitted — and is never the answer.
+`detectionUsesTheGistIndexRatherThanASequentialScan` asserts the index name
+appears and that `estates e` is not sequentially scanned; it was confirmed
+able to fail by asserting on a string the plan cannot contain.
+
+## Counterparty identity never leaves the database
+
+CD-11's rule is that a tenant is told **that** a conflict exists, the
+overlap, the severity and the consequence — and **never who the other
+company is**. Both parties will believe they are right; handing each the
+other's identity invites direct confrontation over disputed land, with the
+platform having created the introduction.
+
+Enforced twice, and the ordering matters:
+
+- **`landvault_tenant_estate_conflicts()` never selects the counterparty's
+  columns.** This is the load-bearing defence. The other side's entity id,
+  tenant id and name are not fetched-then-dropped; they never leave
+  Postgres, so they cannot leak through a later refactor, a debug log, a
+  serialization change, or a DTO somebody widens without thinking.
+- **`TenantConflictDto` has no field capable of holding one.** A narrow
+  type cannot accidentally widen the way a controller stripping fields from
+  a wide DTO can — adding disclosure would mean adding a field and meaning
+  it.
+
+`TenancyApi.organizationNamesFor` is a third, accidental layer: it is a
+plain repository read rather than a definer function, so RLS applies and a
+tenant-scoped caller cannot resolve another company's name even if
+something did ask. That is why it was left as an ordinary query.
+
+`theTenantViewNeverRevealsTheOtherCompany` asserts against the **raw
+serialized body**, not the DTO's accessors — a field leaking through a
+custom serializer or an unexpected getter would pass a shape-level check
+and fail this one.
+
+**Tone is part of the contract, not decoration.** Most conflicts are survey
+errors. The `guidance` string states what was found, what it means for the
+listing, and the one action that clears it; nothing reads as an accusation.
+Same discipline as arrears messaging.
+
+## HIGH blocks publication, MEDIUM warns — and that asymmetry is the decision
+
+The slice spec required a decision on MEDIUM and here it is: **MEDIUM warns,
+it does not block.**
+
+A MEDIUM conflict is one company's own two estates or plots overlapping.
+Nobody is about to pay the wrong party; it is an internal survey problem.
+Blocking a company's trade over their own data-entry error would be
+disproportionate, and it punishes the honest case — a developer who
+uploaded two boundaries carefully and got one slightly wrong — exactly as
+hard as the dishonest one.
+
+A HIGH conflict is two different companies claiming the same ground. One of
+them is wrong and a buyer could pay the wrong one, which is the entire
+scam this platform exists to kill. That blocks.
+
+A `CONFIRMED_DUPLICATE` blocks at **any** severity: once a human has looked
+and said it is a real duplicate, the survey-error assumption behind MEDIUM
+no longer applies.
+
+`ConflictPublicationCheck` keeps `blocked` and `warningConflictCount` as
+separate fields rather than one boolean, so whoever builds the publication
+gate inherits the distinction instead of re-deciding it (probably
+differently).
+
+## `AUTO_RESOLVED` is set by detection, never by a reviewer
+
+CD-9: when a footprint is corrected and the overlap no longer exists, the
+conflict resolves itself and **the record is kept**, never deleted — a
+queue full of conflicts that were fixed weeks ago stops being trustworthy.
+
+The status is rejected as a manual transition. A reviewer marking a
+conflict "resolved itself" while the land still overlaps would be asserting
+a fact about the world they are not in a position to assert; `dismissed` is
+the judgement they *are* entitled to make.
+
+**This path is built but currently unreachable through HTTP**, and that is
+a real gap rather than a finished feature: nothing updates a footprint yet
+(creation only), so re-detection never fires on a corrected boundary. The
+same gap AGENTS.md already records for recomputing `actual_area_sqm` on
+edit — whoever builds footprint correction closes both at once, and should
+call `ConflictDetectionApi.detectForEstateBoundary` from it.
+`correctingTheGeometryAutoResolvesTheConflictAndKeepsTheRecord` exercises
+it by mutating geometry in SQL and invoking the API directly, so the logic
+is genuinely tested rather than shipped on a promise.
+
+### CD-8: a re-scan must not destroy work in progress
+
+The upsert refreshes `overlap_area_sqm`/percentages/severity and
+**deliberately never touches `status`**, so a Super Admin halfway through
+an investigation keeps it. Identity is preserved by a deterministic pair
+ordering — `left_entity_id < right_entity_id`, enforced by a database CHECK
+rather than trusted of the service — plus a partial unique index over the
+live statuses. Without the ordering, detecting A-vs-B and B-vs-A would
+create two rows for one conflict and no unique index could prevent it.
+
+The unique index deliberately **excludes** `DISMISSED` and `AUTO_RESOLVED`,
+so geometry that is corrected and later broken again raises a fresh
+conflict rather than colliding with the historical record. That is also why
+re-deciding a closed conflict is refused: the new conflict is a new row,
+and the original decision stays intact as history.
+
+## Conflicts: what diverges from `listingConflictsService.ts`
+
+Recorded, as with every earlier slice, rather than reconciled silently in
+either direction:
+
+- **The review route is `POST /api/admin/listing-conflicts/{id}/status`**
+  taking `{ status, reason }`. The frontend calls `.../{id}/review` with
+  `{ decision, note }`. Followed the task spec, which was specific enough
+  to read as deliberate.
+- **`AUTO_RESOLVED` is not in the frontend's `ConflictStatus` union** —
+  a backend-only fifth state. The frontend would render it as an unknown
+  status today.
+- **`PLOT_OVERLAP` has no frontend concept at all.** The frontend models
+  estate conflicts only. `ListingConflictDto.conflictType` distinguishes
+  them, and for a plot conflict `estateAId`/`estateBId` carry *plot* ids
+  with `estateId` carrying the containing estate — a real wart, kept
+  because renaming the fields would break the estate case the page already
+  renders.
+- **`estateAFootprint`/`estateBFootprint` are not returned.** The frontend
+  denormalizes those purely for map rendering. Nothing here fabricates
+  them, and serving them would mean this module reaching into inventory's
+  geometry for a field the queue does not need to decide anything.
+
+The permission is `admin.marketplace.conflicts`, seeded back in changeset
+014 for exactly this feature (SA-3.4) and granted to `super_admin` in 016 —
+**verified present before writing anything, not re-created.** The
+tenant-facing route reuses `portal.estates.view` rather than inventing a
+slug: it is a read about an estate, by the same people who read the estate.
+
+`EstateLabelResolver` is the **fourth** use of the inverted-interface
+pattern (after `ActorNameResolver` and tenancy's two). `inventory` already
+depends on `conflicts` — it triggers detection when a footprint is written
+— so `conflicts` calling an `InventoryApi` back would close a cycle.
+Declaring the interface in `conflicts` and implementing it in `inventory`
+keeps every arrow pointing the way it already did.
+
+### `EntityManager.flush()` in a service bypasses Spring's exception translation
+
+A regression this slice introduced and a pre-existing test caught, worth
+recording because it will recur the next time something is wired in *after*
+a save.
+
+Detection needs the row it is about to check to be visible to a native
+query, so `ConflictDetectionService` calls `entityManager.flush()`. Wiring
+that into plot creation turned
+`PortalEstateCreationIT.aDuplicatePlotNumberIsAConflictNotAServerError`
+red: a duplicate plot number started escaping as a **500** instead of the
+**409** it had been returning since inventory slice 2.
+
+The cause is not the flush itself but *where* it happens. Spring's
+persistence-exception translation is applied by the Spring Data repository
+proxy — so a constraint violation raised by `repository.saveAndFlush(...)`
+arrives as `DataIntegrityViolationException`, which
+`InventoryExceptionHandler` maps to 409. The same violation raised by a
+bare `EntityManager.flush()` inside a `@Service` is **not** translated: it
+comes out as a raw `PersistenceException` that no handler matches, and
+Spring Boot's default error path turns it into a 500.
+
+Previously the flush happened implicitly at commit, inside the repository's
+own machinery. Moving it earlier moved it outside that machinery.
+
+**The rule: flush through the repository (`saveAndFlush`/`saveAllAndFlush`),
+not through the `EntityManager`, whenever the flush might surface a
+constraint violation a handler is supposed to catch.** `PortalEstateService`
+now does exactly that, and detection's own flush is kept only as a safety
+net for a caller that did not.
+
+### A build trap that made a passing test look broken
+
+Also worth knowing, because it wasted a full-suite run: reverting a
+temporary test edit with `mv file.java.bak file.java` **preserves the
+backup's original mtime**, which can leave the restored source *older* than
+the `.class` compiled from the edited version. `maven-compiler-plugin` then
+considers it up to date and skips it, and the suite silently runs the stale
+class — in this case one still asserting on a deliberately impossible
+string. The plan under test was correct the whole time. `touch` the file
+after restoring it, or revert with an editor rather than `mv`.
+
+## Auto-resolution does not clear a HIGH conflict, and the reason is an attack, not a nicety
+
+Found live, not in review: CD-9 as originally built let a HIGH conflict
+clear itself the instant its overlap dropped below the sliver threshold —
+same mechanism as MEDIUM. That is exploitable, and the exploit is cheaper
+than it sounds: nothing requires moving off the disputed ground. Shaving a
+few square metres off one edge — comfortably inside the sliver threshold —
+drops the intersection area under the noise floor while keeping almost all
+of the contested parcel. Detection would then silently clear the
+conflict and lift the publication block, with no human ever looking at it,
+and a buyer would have no way to know a HIGH-severity dispute had ever been
+raised on that listing.
+
+Geometry no longer overlapping proves the shapes changed. It does not prove
+whether that change was an honest correction or a deliberate dodge — and a
+detector that treats the two as the same signal can be defeated by anyone
+who understands the threshold, which is public knowledge the moment the
+API responds to a probing request.
+
+**The fix mirrors a rule this codebase already has for money**:
+*"never auto-confirm a payment"* — a signal arriving is not proof; a human
+confirms. Applied here:
+
+- **MEDIUM** (same tenant, nobody at risk of paying the wrong party) keeps
+  auto-resolving exactly as CD-9 originally specified — full auto-clear,
+  `status → AUTO_RESOLVED`, publication (never blocked to begin with)
+  unaffected.
+- **HIGH, or anything a human has explicitly marked `CONFIRMED_DUPLICATE`
+  at any severity**, does not. Detection instead sets a new column,
+  `listing_conflicts.geometry_cleared_at`, and leaves `status` — and
+  therefore the publication block — exactly where it was. A Super Admin has
+  to look at it and dismiss it. `geometryClearedAt` resets to null if the
+  pair overlaps again on a later scan (the upsert's `ON CONFLICT DO UPDATE`
+  branch handles this, since a live overlap always re-enters that path).
+
+**The one transition rule that had to loosen to make this usable**: a
+decision was previously fully terminal — `CONFIRMED_DUPLICATE` could never
+move again. That is still true for every target except one:
+`CONFIRMED_DUPLICATE → DISMISSED` is now allowed, specifically so a human
+reviewing a correction has a way to stand down. Nothing else escapes a
+confirmed duplicate — not `INVESTIGATING`, not re-confirming — because once
+a human has decided, the only remaining question is whether that decision
+still stands, and dismissal is how they say no.
+
+**`ConflictPublicationCheck`'s blocking message no longer claims a
+correction clears anything automatically.** The pre-fix wording ("updating
+[coordinates] clears this automatically") was actively teaching a bad actor
+the exploit. `TenantConflictDto.guidance` follows the same discipline:
+whether the geometry has cleared is now surfaced as its own field
+(`underReview`), and the copy is honest in every state —
+`clears automatically` is only ever said for the cases where it's actually
+true (an unconfirmed MEDIUM conflict, an unconfirmed plot conflict).
+
+**History is kept either way** — nothing here has ever hard-deleted a row,
+resolved or not. What changed is that a HIGH resolution now requires a
+human act to reach, so the record includes *who* decided and *why*, not
+just that the geometry happened to change. Surfacing this to a future
+buyer-facing marketplace listing (so a buyer can see "a boundary conflict
+was raised on this estate and how it was resolved") is explicitly future
+work — no buyer-facing surface exists anywhere in this codebase yet. The
+data already supports it; nothing here builds toward it prematurely.
+
+### A real bug this surfaced: `Set.of()` throws on same-tenant conflicts
+
+`ConflictQueryService.getForAdmin` built `Set.of(leftTenantId, rightTenantId)`
+to batch-resolve company names for a single conflict. For a MEDIUM
+(same-tenant) conflict those two values are identical, and `Set.of()`
+throws `IllegalArgumentException: duplicate element` on a repeated
+argument — every admin GET-by-id on a same-tenant conflict returned a
+**400**, not the conflict. Nothing caught this earlier because every
+existing test's admin-GET-by-id calls happened to use cross-tenant pairs;
+the new MEDIUM auto-resolution test was the first thing to exercise that
+path for a same-tenant conflict, and it failed immediately once run rather
+than being caught by inspection. Fixed with `new HashSet<>(List.of(a, b))`
+— `List.of` allows duplicates, `HashSet` then dedups. Swept the rest of the
+codebase for the same shape (`Set.of(<two runtime values>)`); the two other
+occurrences are safe — one is guarded by an explicit `isCrossTenant()`
+branch already, the other pairs entity ids that a CHECK constraint
+guarantees can never be equal.
+
+### Editing an already-applied changeset requires reconciling every database that ran it — not just git
+
+Editing 046/047 in place (rather than layering new changesets on top) was
+fine from git's perspective — nothing had been committed. It was **not**
+fine from Liquibase's perspective: the local dev database had already
+executed the pre-edit version when the app was restarted earlier in this
+slice, and Liquibase's own `validate` step compares each changeset's
+recorded checksum against the current file content on every startup.
+"Uncommitted" and "unapplied" are different facts, and only one of them is
+what Liquibase tracks.
+
+**Two ways to reconcile a database that already ran the old version, and
+why the second is the right one**:
+
+1. Hand-run the new `ALTER`/`CREATE OR REPLACE` SQL directly, then null the
+   changeset's recorded `md5sum` so Liquibase recomputes and accepts it.
+   Works, but risks transcription drift between what gets pasted and what
+   the file actually says — and doesn't even apply cleanly here, since
+   Postgres refuses `CREATE OR REPLACE FUNCTION` when a function's
+   `RETURNS TABLE` columns change (`landvault_tenant_estate_conflicts`
+   gained a column), forcing a drop-and-recreate anyway.
+2. **Drop the objects the changeset created, delete its row from
+   `databasechangelog`, restart.** Liquibase then treats the changeset as
+   never having run and executes the *actual current file* itself —
+   zero transcription risk, and it computes the correct checksum as a
+   normal side effect of really running the SQL, rather than the checksum
+   being asserted and hoped correct.
+
+**The gotcha that would have silently broken permissions**: dropping a
+function drops every grant on it too — grants belong to the object, not to
+whichever changeset issued them. `047-grant-execute-on-conflict-functions`
+wasn't itself edited, so its checksum still matched and Liquibase would
+have skipped re-running it, leaving the *recreated* functions with no
+`EXECUTE` grant for the app role at all — a silent permission-denied
+failure on the very next call, not caught until runtime. Fixed by deleting
+that changeset's row too, purely so it re-grants against the new function
+objects, even though its own SQL never changed.
+
+**The consequence for future changes here**: this reconciliation is what
+makes 046/047 genuinely applied — not just to a disposable Testcontainers
+instance, but to the one real database anyone is using. From this point on
+they follow the same rule as every other changeset in this project: never
+edited in place again. Any further change to conflict detection is a new
+changeset (048+).
+
+## A dismissal sticks unless the geometry changed — and `geometry_cleared_at` is what tells the two kinds of dismissal apart
+
+Found walking the review flow live, right after the auto-resolution fix.
+The unique index in changeset 046 deliberately ignores `DISMISSED` rows, so
+a corrected boundary that is later broken again raises a fresh conflict.
+Side effect: a Super Admin who looks at two estates sharing a strip along a
+road, decides it's fine, and dismisses it **without anyone touching a
+boundary** would have that decision silently undone on the very next
+re-scan — the overlap is still there, there's no live conflict for the
+pair, so detection raises a new one. Every re-scan, forever. Dormant today
+(nothing re-detects an existing estate yet), live the day a
+footprint-update endpoint ships. Fixed in changeset **048**.
+
+**The rule**: detection does not raise a fresh conflict for a pair when its
+dismissal was made against a *still-overlapping* boundary
+(`geometry_cleared_at IS NULL`) **and** the overlap area is unchanged
+within the sliver threshold. Everything else raises a new one.
+`AUTO_RESOLVED` never suppresses — nobody decided anything.
+
+**Why the `geometry_cleared_at` condition is load-bearing, not a detail.**
+The obvious rule — "same overlap area → dismissal stands" — reopens the
+hole the auto-resolution fix just closed. Walk it: a HIGH conflict's
+boundary is corrected, a reviewer dismisses it (accepting the correction),
+and the boundary is then put back. The dismissed record's stored area is
+the last real overlap, which equals the current one. A naive rule would
+suppress the new conflict. That is the revert-after-clearance attack, and
+the live walkthrough (4d) would have quietly produced nothing. So
+`geometry_cleared_at` does double duty: set, the dismissal accepted a
+*correction* and blesses no overlap at all; null, the reviewer looked at
+*that overlap* and judged it acceptable. Only the second kind stands.
+`aDismissalOfAnUnchangedOverlapStandsAcrossReScans` and
+`aLiveConflictIsListedAboveAClosedRecordForTheSamePair` pin the two cases
+against each other.
+
+**The threshold is reused, not a second knob.** "Unchanged" means within
+`landvault.conflicts.min-overlap-sqm` — the same 1 m² that already defines
+what counts as a real overlap. A pair whose overlap grew or shrank by more
+than that is a different situation and gets looked at again
+(`aDismissedOverlapThatChangesRaisesAFreshConflict`).
+
+**Why a new changeset.** 047 is applied to a real database and is no longer
+edited in place (see the reconciliation note above). 048 is
+`CREATE OR REPLACE` for the two detection functions — same signature, so
+the existing `EXECUTE` grants survive and no re-grant is needed, unlike
+the drop-and-recreate that 047's own reconciliation required. Its rollback
+restores 047's bodies verbatim the same way.
+
+### Two smaller things the same walkthrough caught
+
+- **The dismissed-conflict guidance said "closed as a false positive".** A
+  confirmed duplicate dismissed after a correction is not a false
+  positive, and "false positive" is a verdict the owner's copy never
+  needed to assert. Now: "closed after the boundary was corrected and our
+  team reviewed the update" when `geometry_cleared_at` is set, a neutral
+  "our team reviewed this and closed it" otherwise.
+- **Closed records outranked live conflicts.** Both views sorted by
+  severity then area; a dismissed HIGH and a fresh open HIGH for the same
+  pair tie on both, so the order was arbitrary, and the tenant saw history
+  above the conflict actually pausing their listing. Live now sorts before
+  closed in both the tenant view (a stable sort in Java — 047's `ORDER BY`
+  is not edited) and the admin queue (a `CASE` in the specification).

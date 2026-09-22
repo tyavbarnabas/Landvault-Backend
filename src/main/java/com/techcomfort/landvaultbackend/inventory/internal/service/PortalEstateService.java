@@ -4,6 +4,7 @@ import com.techcomfort.landvaultbackend.audit.AuditApi;
 import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
 import com.techcomfort.landvaultbackend.common.TenantContext;
 import com.techcomfort.landvaultbackend.common.TenantScope;
+import com.techcomfort.landvaultbackend.conflicts.ConflictDetectionApi;
 import com.techcomfort.landvaultbackend.inventory.dto.BlockDto;
 import com.techcomfort.landvaultbackend.inventory.dto.CreateBlockRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreateEstateRequest;
@@ -60,13 +61,15 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Creating estates and everything under them. Creation only — reads are
- * slice 3, conflict detection is slice 4.
+ * Creating estates and everything under them. Reads live in
+ * {@code PortalEstateQueryService}.
  * <p>
- * Two rules run through every method here and are worth stating once:
+ * Three rules run through every method here and are worth stating once:
  * <strong>tenant comes from {@link TenantContext}, never the request body</strong>
- * (accepting one would be a cross-tenant breach), and every write records
- * through {@link AuditApi}.
+ * (accepting one would be a cross-tenant breach), every write records
+ * through {@link AuditApi}, and <strong>every footprint written triggers
+ * conflict detection in the same transaction</strong> (CD-4) — so an estate
+ * and the overlaps it raises commit or roll back together.
  */
 @Slf4j
 @Service
@@ -84,6 +87,7 @@ public class PortalEstateService {
     private final GeometryCalculator geometry;
     private final TenancyApi tenancyApi;
     private final AuditApi auditApi;
+    private final ConflictDetectionApi conflictDetection;
 
     // --- estate ---
 
@@ -118,9 +122,25 @@ public class PortalEstateService {
                 .build();
         estate.setTenantId(tenantId);
         estate.setBranchId(branchId);
-        estate = estateRepository.save(estate);
+        // saveAndFlush, not save: detection runs next and needs this row
+        // visible. Flushing through the repository rather than letting
+        // detection's own EntityManager.flush() do it keeps Spring's
+        // persistence-exception translation in play, so a constraint
+        // violation still arrives as DataIntegrityViolationException (409)
+        // rather than a raw PersistenceException (500).
+        estate = estateRepository.saveAndFlush(estate);
 
         List<String> amenities = saveAmenities(estate, request.amenities());
+
+        // CD-4: detect at the point the boundary is submitted, not at
+        // publication. Catching an overlap later would mean unwinding work
+        // already done — plots priced, listings prepared, possibly deposits
+        // taken. Runs in this same transaction, so an estate and the
+        // conflicts it raises commit or roll back together.
+        int conflicts = conflictDetection.detectForEstateBoundary(estate.getId());
+        if (conflicts > 0) {
+            log.info("Estate {} raised {} boundary conflict(s) on creation", estate.getId(), conflicts);
+        }
 
         auditApi.record(AuditEntryRequest.of(
                 scope.userId(), "estate.created", "estate", estate.getId(), tenantId,
@@ -209,7 +229,19 @@ public class PortalEstateService {
         List<Plot> plots = request.plots().stream()
                 .map(plotRequest -> buildPlot(estate, plotRequest))
                 .toList();
-        List<Plot> saved = plotRepository.saveAll(plots);
+        // saveAllAndFlush for the same reason as createEstate: a duplicate
+        // plot number must surface here, translated, before detection runs.
+        List<Plot> saved = plotRepository.saveAllAndFlush(plots);
+
+        // CD-2: within-estate plot overlap — the more common version of the
+        // scam, and undetectable before plots carried geometry. Runs across
+        // the whole estate rather than only the new batch, since a new plot
+        // can overlap one added months ago.
+        int conflicts = conflictDetection.detectForEstatePlots(estateId);
+        if (conflicts > 0) {
+            log.info("Estate {} has {} live plot conflict(s) after adding {} plot(s)",
+                    estateId, conflicts, saved.size());
+        }
 
         auditApi.record(AuditEntryRequest.of(
                 scope.userId(), "estate.plots_added", "estate", estateId, estate.getTenantId(),

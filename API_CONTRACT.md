@@ -85,6 +85,42 @@ What the frontend should know:
 - **GeoJSON coordinates come back as `[longitude, latitude]`** — the same order they were posted in, byte for byte. Convert for Leaflet on the frontend, as with input.
 - **Features with no boundary are omitted from the `FeatureCollection`**, never emitted with a null geometry (which most clients draw as a point at `[0, 0]`). A plot missing from the GeoJSON hasn't been surveyed yet; check `hasFootprint` on the plot list if you need to show that state.
 - `footprintAreaSqm` is genuine **square metres** (geography cast), and `null` when the estate has no boundary — never zero.
+
+### Listing conflicts (Super Admin) — **built**
+
+Requires `admin.marketplace.conflicts` (seeded since changeset 014, granted to `super_admin`).
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/api/admin/listing-conflicts` | `Page<ListingConflict>` — filters `severity`, `status`, `conflictType` (comma-separated for the first two), plus `limit`/`cursor` |
+| GET | `/api/admin/listing-conflicts/{id}` | `ListingConflict` |
+| POST | `/api/admin/listing-conflicts/{id}/status` | `{ status, reason }` → the updated `ListingConflict` |
+
+- **Sorted worst-first and not re-sortable** — severity (`high` before `medium`), then largest overlap. A queue whose job is "look at genuine fraud risk first" should not be sortable into an order that buries it.
+- **`status` transitions**: `open` → `investigating` → `confirmed_duplicate` | `dismissed`. A decision (the last two) **requires `reason`**; `investigating` does not. `auto_resolved` is rejected as a manual transition — the system sets it when geometry stops overlapping. Closed conflicts cannot be re-decided.
+- **`severity`**: `high` = two different companies claim the same ground. `medium` = one company's own boundaries overlap (a survey error).
+- Every transition writes an audit entry **against each company involved** — two for a cross-tenant conflict, one for a same-tenant one.
+
+Four differences from the frontend's current `listingConflictsService.ts`, all recorded in AGENTS.md:
+
+- The review call is `POST .../{id}/status` with `{ status, reason }`; the frontend currently sends `POST .../{id}/review` with `{ decision, note }`.
+- `auto_resolved` is a **fifth** `ConflictStatus` the frontend's union doesn't have yet.
+- `conflictType` is new: `estate_overlap` | `plot_overlap`. The frontend models estate conflicts only. **For a plot conflict, `estateAId`/`estateBId` hold plot ids** and `estateId` holds the containing estate — check `conflictType` before labelling them.
+- `estateAFootprint`/`estateBFootprint` are **not** returned. Fetch geometry from the estate's own `/geojson` route if the map needs it.
+
+### Estate conflicts (tenant portal) — **built**
+
+`GET /api/portal/estates/{id}/conflicts` → `TenantConflict[]` (a plain array; one estate's conflicts are a bounded list). Requires `portal.estates.view`.
+
+**This response deliberately cannot identify the other party.** It carries `yourEntityId`, `yourEntityLabel`, `overlapAreaSqm`, `overlapPctOfYours`, `severity`, `status`, `blocksPublication`, `guidance` and `detectedAt` — and no field for the counterparty's estate, company or id, because both sides believe they are right and the platform stays the intermediary. Don't build UI that implies the other company can be looked up; it can't.
+
+- `guidance` is ready-to-display copy, written to be factual rather than accusatory — most conflicts are survey errors. Render it as-is rather than composing your own warning.
+- `blocksPublication` is `true` for a `high` conflict or a `confirmed_duplicate`. A `medium` conflict warns and does not block.
+- Another tenant's estate id returns `[]`, not a 403 — same non-disclosure reasoning as the 404s elsewhere.
+
+### Publication now has five conditions, not four
+
+An estate is publicly listable only when: `published` is true, the tenant is `verified`, the tenant holds `marketplacePublishing`, the tenant isn't `suspended`, **and no conflict blocks it**. The fifth is new; see the two sections above.
 - **`actualAreaSqm` is computed**, never sent: square metres derived from the footprint. Null means no boundary yet, never a fallback to the nominal size.
 
 A plot's `footprint` must sit inside its estate's. `published` always starts false.

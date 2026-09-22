@@ -51,6 +51,9 @@
     <include file="changes/043-create-rls-bootstrap-functions.xml" relativeToChangelogFile="true"/>
     <include file="changes/044-enable-rls-inventory-tables.xml" relativeToChangelogFile="true"/>
     <include file="changes/045-seed-portal-estates-view-permission.xml" relativeToChangelogFile="true"/>
+    <include file="changes/046-create-listing-conflicts-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/047-create-conflict-detection-functions.xml" relativeToChangelogFile="true"/>
+    <include file="changes/048-dismissal-sticks-unless-geometry-changed.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>
