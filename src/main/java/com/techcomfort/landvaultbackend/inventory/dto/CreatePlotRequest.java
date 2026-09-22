@@ -1,5 +1,6 @@
 package com.techcomfort.landvaultbackend.inventory.dto;
 
+import com.techcomfort.landvaultbackend.common.geojson.GeoJsonPolygonDto;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;

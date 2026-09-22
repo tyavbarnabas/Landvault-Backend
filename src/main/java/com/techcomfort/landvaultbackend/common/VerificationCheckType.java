@@ -1,4 +1,4 @@
-package com.techcomfort.landvaultbackend.inventory.internal.enums;
+package com.techcomfort.landvaultbackend.common;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;

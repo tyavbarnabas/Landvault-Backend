@@ -1,4 +1,4 @@
-package com.techcomfort.landvaultbackend.inventory.dto;
+package com.techcomfort.landvaultbackend.common.geojson;
 
 import java.util.List;
 

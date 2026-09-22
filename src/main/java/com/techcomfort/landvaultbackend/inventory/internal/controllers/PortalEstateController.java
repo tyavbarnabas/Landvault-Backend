@@ -13,10 +13,11 @@ import com.techcomfort.landvaultbackend.inventory.dto.EstateDetailDto;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateDto;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateSummaryDto;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateTitleDto;
-import com.techcomfort.landvaultbackend.inventory.dto.GeoJsonFeatureCollectionDto;
+import com.techcomfort.landvaultbackend.common.geojson.GeoJsonFeatureCollectionDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PlotDetailDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PlotDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PriceTierDto;
+import com.techcomfort.landvaultbackend.inventory.dto.PublicationDto;
 import com.techcomfort.landvaultbackend.inventory.dto.VerificationCheckDto;
 import com.techcomfort.landvaultbackend.inventory.internal.service.PortalEstateQueryService;
 import com.techcomfort.landvaultbackend.inventory.internal.service.PortalEstateService;
@@ -144,6 +145,20 @@ public class PortalEstateController {
     @PreAuthorize("hasAuthority('portal.estates.manage')")
     public ResponseEntity<EstateDto> createEstate(@Valid @RequestBody CreateEstateRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED).body(service.createEstate(request));
+    }
+
+    /** PB-1..PB-3. Refused with the specific failing condition(s) named. */
+    @PostMapping("/{id}/publish")
+    @PreAuthorize("hasAuthority('portal.estates.manage')")
+    public ResponseEntity<PublicationDto> publish(@PathVariable UUID id) {
+        return ResponseEntity.ok(service.publish(id));
+    }
+
+    /** PB-4. Pulls one listing; estate, plots and tenant status untouched. */
+    @PostMapping("/{id}/unpublish")
+    @PreAuthorize("hasAuthority('portal.estates.manage')")
+    public ResponseEntity<PublicationDto> unpublish(@PathVariable UUID id) {
+        return ResponseEntity.ok(service.unpublish(id));
     }
 
     @PostMapping("/{id}/blocks")

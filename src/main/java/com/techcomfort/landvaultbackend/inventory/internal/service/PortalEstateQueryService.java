@@ -1,5 +1,6 @@
 package com.techcomfort.landvaultbackend.inventory.internal.service;
 
+import com.techcomfort.landvaultbackend.common.geojson.GeoJsonPolygonWriter;
 import com.techcomfort.landvaultbackend.common.PageResponse;
 import com.techcomfort.landvaultbackend.common.PageResponses;
 import com.techcomfort.landvaultbackend.common.TenantContext;
@@ -8,8 +9,8 @@ import com.techcomfort.landvaultbackend.inventory.dto.BlockDto;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateDetailDto;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateSummaryDto;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateTitleDto;
-import com.techcomfort.landvaultbackend.inventory.dto.GeoJsonFeatureCollectionDto;
-import com.techcomfort.landvaultbackend.inventory.dto.GeoJsonFeatureDto;
+import com.techcomfort.landvaultbackend.common.geojson.GeoJsonFeatureCollectionDto;
+import com.techcomfort.landvaultbackend.common.geojson.GeoJsonFeatureDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PlotCountsDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PlotDetailDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PriceTierDto;

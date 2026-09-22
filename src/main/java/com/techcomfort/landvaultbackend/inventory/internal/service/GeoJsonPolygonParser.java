@@ -1,6 +1,6 @@
 package com.techcomfort.landvaultbackend.inventory.internal.service;
 
-import com.techcomfort.landvaultbackend.inventory.dto.GeoJsonPolygonDto;
+import com.techcomfort.landvaultbackend.common.geojson.GeoJsonPolygonDto;
 import com.techcomfort.landvaultbackend.inventory.internal.exceptions.InventoryException;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;

@@ -5,6 +5,9 @@ import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
 import com.techcomfort.landvaultbackend.common.TenantContext;
 import com.techcomfort.landvaultbackend.common.TenantScope;
 import com.techcomfort.landvaultbackend.conflicts.ConflictDetectionApi;
+import com.techcomfort.landvaultbackend.conflicts.ConflictPublicationCheck;
+import com.techcomfort.landvaultbackend.marketplace.EstateEligibility;
+import com.techcomfort.landvaultbackend.marketplace.MarketplaceApi;
 import com.techcomfort.landvaultbackend.inventory.dto.BlockDto;
 import com.techcomfort.landvaultbackend.inventory.dto.CreateBlockRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreateEstateRequest;
@@ -17,6 +20,7 @@ import com.techcomfort.landvaultbackend.inventory.dto.EstateDto;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateTitleDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PlotDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PriceTierDto;
+import com.techcomfort.landvaultbackend.inventory.dto.PublicationDto;
 import com.techcomfort.landvaultbackend.inventory.dto.VerificationCheckDto;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.Block;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.Estate;
@@ -25,17 +29,17 @@ import com.techcomfort.landvaultbackend.inventory.internal.domain.EstateTitle;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.EstateVerificationCheck;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.Plot;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.PriceTier;
-import com.techcomfort.landvaultbackend.inventory.internal.enums.EstateIntent;
+import com.techcomfort.landvaultbackend.common.EstateIntent;
 import com.techcomfort.landvaultbackend.inventory.internal.enums.ListingIntent;
 import com.techcomfort.landvaultbackend.inventory.internal.enums.PlotIntent;
 import com.techcomfort.landvaultbackend.inventory.internal.enums.PlotOrientation;
 import com.techcomfort.landvaultbackend.inventory.internal.enums.PlotStatus;
 import com.techcomfort.landvaultbackend.inventory.internal.enums.PropertyType;
 import com.techcomfort.landvaultbackend.inventory.internal.enums.TierType;
-import com.techcomfort.landvaultbackend.inventory.internal.enums.TitleType;
-import com.techcomfort.landvaultbackend.inventory.internal.enums.VerificationCheckStatus;
-import com.techcomfort.landvaultbackend.inventory.internal.enums.VerificationCheckType;
-import com.techcomfort.landvaultbackend.inventory.internal.enums.VerificationSource;
+import com.techcomfort.landvaultbackend.common.TitleType;
+import com.techcomfort.landvaultbackend.common.VerificationCheckStatus;
+import com.techcomfort.landvaultbackend.common.VerificationCheckType;
+import com.techcomfort.landvaultbackend.common.VerificationSource;
 import com.techcomfort.landvaultbackend.inventory.internal.exceptions.InventoryException;
 import com.techcomfort.landvaultbackend.inventory.internal.repository.BlockRepository;
 import com.techcomfort.landvaultbackend.inventory.internal.repository.EstateAmenityRepository;
@@ -54,6 +58,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -88,6 +93,7 @@ public class PortalEstateService {
     private final TenancyApi tenancyApi;
     private final AuditApi auditApi;
     private final ConflictDetectionApi conflictDetection;
+    private final MarketplaceApi marketplace;
 
     // --- estate ---
 
@@ -412,6 +418,111 @@ public class PortalEstateService {
                         + (source == null ? "" : " (" + source.getValue() + ")")));
         return new VerificationCheckDto(check.getId(), estateId, checkType.getValue(), status.getValue(),
                 source == null ? null : source.getValue(), check.getLastVerifiedAt(), check.getNotes());
+    }
+
+    // --- publication (PB-1..PB-4) ---
+
+    /**
+     * Puts an estate on the marketplace: a deliberate action, never a side
+     * effect of creating or editing one (PB-1).
+     * <p>
+     * All five conditions are checked, and every failing one is named
+     * (PB-3). The tenant conditions come from {@code MarketplaceApi}, which
+     * reads the same view the public feed filters on; the conflict condition
+     * from {@code ConflictDetectionApi}, which calls the same SQL function
+     * that view does. So "refused here" and "missing from the feed" are the
+     * same answer, not two implementations that could drift.
+     * <p>
+     * Conditions are checked even when the estate is already published. A
+     * published estate can be off the marketplace (its tenant was suspended,
+     * a conflict arrived since), and publishing again is exactly how a
+     * developer finds out why.
+     */
+    @Transactional
+    public PublicationDto publish(UUID estateId) {
+        TenantScope scope = currentScope();
+        Estate estate = requireOwnedEstate(estateId, requireTenant(scope));
+        EstateEligibility eligibility = marketplace.eligibilityOf(estateId)
+                .orElseThrow(InventoryException.EstateNotFound::new);
+        ConflictPublicationCheck conflicts = conflictDetection.publicationCheckFor(estateId);
+
+        requirePublishable(eligibility, conflicts);
+
+        if (!Boolean.TRUE.equals(estate.getPublished())) {
+            estate.setPublished(true);
+            estate.setPublishedAt(Instant.now());
+            estate = estateRepository.save(estate);
+            auditApi.record(AuditEntryRequest.of(
+                    scope.userId(), "estate.published", "estate", estateId, estate.getTenantId(),
+                    "Estate '" + estate.getName() + "' published to the marketplace"
+                            + (conflicts.warningConflictCount() > 0
+                            ? " with " + conflicts.warningConflictCount() + " unresolved same-company overlap(s)."
+                            : ".")));
+            log.info("Estate published: {} by actor {}", estateId, scope.userId());
+        }
+        // An already-published estate that passes is a no-op: nothing
+        // happened, so nothing is audited.
+
+        return new PublicationDto(estateId, true, estate.getPublishedAt(),
+                conflicts.warningConflictCount(),
+                conflicts.warningConflictCount() > 0
+                        ? "Some of this company's own boundaries overlap each other. That doesn't stop "
+                        + "publication, but correcting the survey coordinates is worth doing."
+                        : null);
+    }
+
+    /**
+     * Pulls one listing without involving the platform or touching tenant
+     * status (PB-4). The estate and its plots are untouched; only the
+     * developer's intent changes. Already unpublished is a no-op.
+     */
+    @Transactional
+    public PublicationDto unpublish(UUID estateId) {
+        TenantScope scope = currentScope();
+        Estate estate = requireOwnedEstate(estateId, requireTenant(scope));
+
+        if (Boolean.TRUE.equals(estate.getPublished())) {
+            estate.setPublished(false);
+            // published_at means "live since"; it is not a history. The audit
+            // log holds when this estate was published and pulled.
+            estate.setPublishedAt(null);
+            estateRepository.save(estate);
+            auditApi.record(AuditEntryRequest.of(
+                    scope.userId(), "estate.unpublished", "estate", estateId, estate.getTenantId(),
+                    "Estate '" + estate.getName() + "' taken off the marketplace."));
+            log.info("Estate unpublished: {} by actor {}", estateId, scope.userId());
+        }
+        return new PublicationDto(estateId, false, null, 0, null);
+    }
+
+    /**
+     * Factual, never accusatory: a conflict is usually a survey error, and
+     * its message comes from {@code ConflictPublicationCheck}, which carries
+     * no counterparty identity by design (CD-11).
+     */
+    private static void requirePublishable(EstateEligibility eligibility, ConflictPublicationCheck conflicts) {
+        List<String> codes = new ArrayList<>();
+        List<String> reasons = new ArrayList<>();
+        if (!eligibility.tenantVerified()) {
+            codes.add("PUBLICATION_VERIFICATION_PENDING");
+            reasons.add("Your company's verification isn't complete yet; estates can go on the marketplace "
+                    + "once it's approved.");
+        }
+        if (!eligibility.tenantEntitled()) {
+            codes.add("PUBLICATION_ENTITLEMENT_MISSING");
+            reasons.add("Your plan doesn't include marketplace publishing.");
+        }
+        if (!eligibility.tenantActive()) {
+            codes.add("PUBLICATION_TENANT_NOT_ACTIVE");
+            reasons.add("Your company's account isn't active, so listings can't be published right now.");
+        }
+        if (conflicts.blocked()) {
+            codes.add("PUBLICATION_CONFLICT_OUTSTANDING");
+            reasons.add(conflicts.blockReason());
+        }
+        if (!codes.isEmpty()) {
+            throw new InventoryException.PublicationRefused(codes.getFirst(), String.join(" ", reasons));
+        }
     }
 
     // --- shared ---

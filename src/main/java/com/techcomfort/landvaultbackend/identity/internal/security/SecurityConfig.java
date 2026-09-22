@@ -79,6 +79,22 @@ public class SecurityConfig {
             "/error"
     };
 
+    /**
+     * The public marketplace: the only routes an anonymous caller can read
+     * data from. Listed one by one, never as {@code /api/marketplace/**}:
+     * wishlist, enquiries and reservations will live under that prefix and
+     * must require a login, and a wildcard would make them public silently
+     * the day they ship. Permitted for GET only, a step stricter than the
+     * auth routes above, so a future write under one of these exact paths
+     * (a "save" on {@code /api/marketplace/estates/{id}}, say) doesn't
+     * inherit anonymous access either.
+     */
+    private static final String[] PUBLIC_GET_PATHS = {
+            "/api/marketplace/estates",
+            "/api/marketplace/estates/*",
+            "/api/marketplace/estates/*/geojson"
+    };
+
     // A publicly readable OpenAPI document hands an attacker the complete
     // API surface — every endpoint, parameter, response shape — before
     // they've authenticated at all. Free reconnaissance once this is
@@ -132,6 +148,7 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(publicPaths.toArray(new String[0])).permitAll()
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, PUBLIC_GET_PATHS).permitAll()
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions
                         .authenticationEntryPoint((request, response, ex) -> writeError(response, 401,

@@ -16,9 +16,9 @@ import com.techcomfort.landvaultbackend.inventory.dto.CreateVerificationCheckReq
 import com.techcomfort.landvaultbackend.inventory.dto.EstateDetailDto;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateDto;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateSummaryDto;
-import com.techcomfort.landvaultbackend.inventory.dto.GeoJsonFeatureCollectionDto;
-import com.techcomfort.landvaultbackend.inventory.dto.GeoJsonFeatureDto;
-import com.techcomfort.landvaultbackend.inventory.dto.GeoJsonPolygonDto;
+import com.techcomfort.landvaultbackend.common.geojson.GeoJsonFeatureCollectionDto;
+import com.techcomfort.landvaultbackend.common.geojson.GeoJsonFeatureDto;
+import com.techcomfort.landvaultbackend.common.geojson.GeoJsonPolygonDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PlotDetailDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PlotDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PriceTierDto;

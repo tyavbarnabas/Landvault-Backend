@@ -1,4 +1,4 @@
-package com.techcomfort.landvaultbackend.inventory.dto;
+package com.techcomfort.landvaultbackend.common.geojson;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;

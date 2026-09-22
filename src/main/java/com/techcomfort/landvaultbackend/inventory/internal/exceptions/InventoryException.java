@@ -82,6 +82,32 @@ public abstract class InventoryException extends RuntimeException {
     }
 
     /**
+     * Publication refused because the estate doesn't meet the marketplace
+     * conditions (PB-2). {@code code} names the first failing condition;
+     * the message names every one that failed, so the developer can act on
+     * all of them at once (PB-3). Never names a conflict's counterparty.
+     */
+    public static class PublicationRefused extends InventoryException {
+
+        private final String code;
+        private final String detail;
+
+        public PublicationRefused(String code, String detail) {
+            this.code = code;
+            this.detail = detail;
+        }
+
+        public String code() {
+            return code;
+        }
+
+        @Override
+        public String getMessage() {
+            return detail;
+        }
+    }
+
+    /**
      * A request that contradicts the tier/plot rules — a {@code LAND_SIZE}
      * tier with no size, a branch that isn't the caller's, a title recorded
      * twice. Surfaced as a clean 400 rather than letting a database

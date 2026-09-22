@@ -1,7 +1,7 @@
 package com.techcomfort.landvaultbackend.inventory.internal.repository;
 
 import com.techcomfort.landvaultbackend.inventory.internal.domain.EstateVerificationCheck;
-import com.techcomfort.landvaultbackend.inventory.internal.enums.VerificationCheckType;
+import com.techcomfort.landvaultbackend.common.VerificationCheckType;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.List;

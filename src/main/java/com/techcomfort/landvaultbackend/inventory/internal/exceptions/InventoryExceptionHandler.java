@@ -27,6 +27,11 @@ public class InventoryExceptionHandler {
                 .body(ErrorResponse.of("Estate not found.", "ESTATE_NOT_FOUND"));
     }
 
+    @ExceptionHandler(InventoryException.PublicationRefused.class)
+    public ResponseEntity<ErrorResponse> handlePublicationRefused(InventoryException.PublicationRefused ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ErrorResponse.of(ex.getMessage(), ex.code()));
+    }
+
     @ExceptionHandler(InventoryException.RelatedRecordNotFound.class)
     public ResponseEntity<ErrorResponse> handleRelatedRecordNotFound(InventoryException.RelatedRecordNotFound ex) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)

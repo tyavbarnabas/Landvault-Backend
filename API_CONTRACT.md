@@ -118,9 +118,41 @@ Four differences from the frontend's current `listingConflictsService.ts`, all r
 - `blocksPublication` is `true` for a `high` conflict or a `confirmed_duplicate`. A `medium` conflict warns and does not block.
 - Another tenant's estate id returns `[]`, not a 403 — same non-disclosure reasoning as the 404s elsewhere.
 
+### Publishing (tenant portal) — **built**
+
+Requires `portal.estates.manage`.
+
+| Method | Path | Returns |
+|---|---|---|
+| POST | `/api/portal/estates/{id}/publish` | `{ estateId, published, publishedAt, warningConflictCount, warning }` |
+| POST | `/api/portal/estates/{id}/unpublish` | same shape, `published: false` |
+
+- **Refusal is a 409** naming every failing condition in `message`; `code` is the first of `PUBLICATION_VERIFICATION_PENDING`, `PUBLICATION_ENTITLEMENT_MISSING`, `PUBLICATION_TENANT_NOT_ACTIVE`, `PUBLICATION_CONFLICT_OUTSTANDING`. A conflict refusal never identifies the other company.
+- **A MEDIUM conflict doesn't refuse** — publishing succeeds with `warningConflictCount > 0` and a `warning` to show.
+- Publishing an estate that's already published re-checks everything. That's the way to learn why a published estate isn't on the marketplace (tenant suspended, a conflict arrived since).
+- **`published` is the developer's intent and is never cleared by the platform.** If the company stops qualifying, its listings disappear from the marketplace and return on reinstatement, with no republishing.
+
+### Public marketplace — **built, no authentication**
+
+No `Authorization` header needed (or sent). Rate-limited: 429 with `Retry-After` beyond the limit.
+
+| Method | Path | Returns |
+|---|---|---|
+| GET | `/api/marketplace/estates` | `Page<Listing>` — filters `q`, `state`, `city`, `minPrice`, `maxPrice`, `currency` (default `NGN`), `minSize`, `maxSize`, `titleType`, `intent`; `sort` = `newest` (default) \| `price_low` \| `price_per_sqm` \| `plots_remaining`; `limit`/`cursor` |
+| GET | `/api/marketplace/estates/{id}` | `Listing` |
+| GET | `/api/marketplace/estates/{id}/geojson` | GeoJSON `FeatureCollection`, same shape as the portal's |
+
+- Only estates passing all five conditions appear. Anything else, including an id that exists but isn't eligible, is a plain **404**, with no hint that it exists.
+- `Listing` follows the frontend's shape: `priceTiers` (each with `price`, `pricePerSqm` — null for a unit-type tier — `plotsRemaining`, `availability`), `cornerPremiumPct`, `seller: { branchName, companyName }`, `verified: true`, plus `fromPrice`/`fromPriceCurrency`, `plotsRemaining`, `hasMap`, and `verificationChecks`.
+- **`verificationChecks` carry their `verificationSource`** — `manual_review` versus a registry is a real difference in front of a buyer. A check type that isn't listed was **never checked**: render it as unchecked, never as verified.
+- **Plot `availability` on the map is only `AVAILABLE` or `UNAVAILABLE`.** Reserved and sold are deliberately indistinguishable. Plots carry `priceTierId` and `isCorner` but no price: compute it from the tier and `cornerPremiumPct`, as `priceForPlot()` already does.
+- **A price filter only matches listings priced in the requested `currency`.**
+
+Differences from the frontend's current services, all in AGENTS.md: the path is `/api/marketplace/estates`, not `/listings`; plots come from `/geojson`, not a paginated `/listings/{id}/plots`; plot status is collapsed; `paymentPlans` is absent (nothing stores it yet), so the frontend's `paymentPlans.includes(...)` filter needs guarding.
+
 ### Publication now has five conditions, not four
 
-An estate is publicly listable only when: `published` is true, the tenant is `verified`, the tenant holds `marketplacePublishing`, the tenant isn't `suspended`, **and no conflict blocks it**. The fifth is new; see the two sections above.
+An estate is publicly listable only when: `published` is true, the tenant is `verified`, the tenant holds `marketplacePublishing`, the tenant is **`active`** (so an offboarded company's land isn't for sale either), **and no conflict blocks it**. The fifth is new; see the two sections above.
 - **`actualAreaSqm` is computed**, never sent: square metres derived from the footprint. Null means no boundary yet, never a fallback to the nominal size.
 
 A plot's `footprint` must sit inside its estate's. `published` always starts false.

@@ -1,7 +1,7 @@
 package com.techcomfort.landvaultbackend.inventory.internal.domain;
 
 import com.techcomfort.landvaultbackend.common.AbstractEntity;
-import com.techcomfort.landvaultbackend.inventory.internal.enums.EstateIntent;
+import com.techcomfort.landvaultbackend.common.EstateIntent;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;

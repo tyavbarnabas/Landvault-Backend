@@ -54,6 +54,7 @@
     <include file="changes/046-create-listing-conflicts-table.xml" relativeToChangelogFile="true"/>
     <include file="changes/047-create-conflict-detection-functions.xml" relativeToChangelogFile="true"/>
     <include file="changes/048-dismissal-sticks-unless-geometry-changed.xml" relativeToChangelogFile="true"/>
+    <include file="changes/049-create-marketplace-projection-views.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

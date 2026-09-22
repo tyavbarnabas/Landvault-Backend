@@ -1,6 +1,5 @@
-package com.techcomfort.landvaultbackend.inventory.internal.service;
+package com.techcomfort.landvaultbackend.common.geojson;
 
-import com.techcomfort.landvaultbackend.inventory.dto.GeoJsonPolygonDto;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.Polygon;

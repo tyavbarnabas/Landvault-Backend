@@ -1,9 +1,9 @@
 package com.techcomfort.landvaultbackend.inventory.internal.domain;
 
 import com.techcomfort.landvaultbackend.common.AbstractEntity;
-import com.techcomfort.landvaultbackend.inventory.internal.enums.VerificationCheckStatus;
-import com.techcomfort.landvaultbackend.inventory.internal.enums.VerificationCheckType;
-import com.techcomfort.landvaultbackend.inventory.internal.enums.VerificationSource;
+import com.techcomfort.landvaultbackend.common.VerificationCheckStatus;
+import com.techcomfort.landvaultbackend.common.VerificationCheckType;
+import com.techcomfort.landvaultbackend.common.VerificationSource;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;

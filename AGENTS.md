@@ -1420,10 +1420,15 @@ An estate is publicly listable only when **all five** hold:
 1. `estates.published` is true (the developer's own opt-in switch)
 2. the owning tenant's `verificationState` is `VERIFIED`
 3. that tenant holds the `marketplacePublishing` entitlement
-4. the tenant's `status` is not `SUSPENDED`
+4. the tenant's `status` is **`ACTIVE`** — corrected from "not
+   `SUSPENDED`", which would have left an **`OFFBOARDED`** company's land
+   for sale on a platform it has left
 5. **no conflict blocks it** — `ConflictDetectionApi.publicationCheckFor(estateId)`
    returns `blocked == false` (added by inventory slice 4; see the conflict
    detection sections below for why HIGH blocks and MEDIUM only warns)
+
+**Built in the publication slice** as `marketplace_estate_eligibility`
+(changeset 049) — see "The public marketplace" below.
 
 **The gate belongs to the `marketplace` projection, not to the inventory
 schema** — which is why `estates.published` is only condition 1 and carries a
@@ -2715,3 +2720,162 @@ restores 047's bodies verbatim the same way.
   above the conflict actually pausing their listing. Live now sorts before
   closed in both the tenant view (a stable sort in Java — 047's `ORDER BY`
   is not edited) and the admin queue (a `CASE` in the specification).
+
+## The public marketplace: a view is the RLS escape, and why it's narrower than a function
+
+The first surface in this system with **no authentication**. An anonymous
+request has no tenant scope and no platform scope, so every RLS policy
+fails closed and every table returns zero rows — silently, with a 200. The
+marketplace would "work" and show nothing. This is the fifth time this
+codebase has met that shape (after tenant-staff login, the branch
+switcher, conflict detection, and the inventory read policies), and the
+third deliberate escape (after changesets 043 and 047).
+
+**The escape is a set of Postgres views** (changeset 049), owned by the
+migration role. A view reads its tables with the **owner's** privileges;
+the owner is a superuser, and superusers bypass RLS even under `FORCE ROW
+LEVEL SECURITY`. If migrations ever run as a non-superuser table owner,
+`FORCE` applies to the owner and every view returns nothing — fail closed,
+and `MarketplaceIT.anAnonymousRequestSeesAPublishedEstate` goes red.
+That test was **proven to fail** by switching the view to
+`security_invoker = true` (the caller's RLS instead of the owner's): the
+feed came back empty.
+
+**Why a view is narrower than the `SECURITY DEFINER` precedent.** A view's
+column list is fixed. No caller can make it return a column it never
+selected, and no refactor of calling code can widen it — which is exactly
+MP-3's "a distinct projection, not tenant tables with a filter". What the
+public can see is decided in one reviewed place: adding a column to a
+`marketplace_*` view is publishing it to the internet.
+
+**What the views must never select**: clients, finances, staff, documents,
+directors, verification decisions, verification-check notes, title
+numbers, estate addresses, the raw plot status, reserved or sold counts,
+tenant or branch ids. `MarketplaceIT.thePublicPayloadContainsNothingTenantPrivate`
+plants several of these and asserts on the serialized JSON of all three
+routes.
+
+**`security_barrier` on every view**, so a caller-supplied predicate built
+on a leaky function can't run before the eligibility filter. **SELECT only**
+for the app role: changeset 019's default privileges would otherwise grant
+INSERT/UPDATE/DELETE on every new relation, views included, and a
+single-table view is auto-updatable — a write through an owner-privileged
+view would bypass RLS. None of these views is updatable today (all join),
+which is why the guard test asks `has_table_privilege` directly: the first
+version attempted an UPDATE, and Postgres rejected it for being
+non-updatable *before* checking privileges, so that test would have passed
+with the REVOKE missing. Proven red by granting INSERT.
+
+**`marketplace` reads only views, never a tenant repository.** Under an
+anonymous request a repository returns nothing, and the obvious "fix" —
+elevating scope — is the leak MP-3 exists to prevent. A new buyer-visible
+field goes in the view, where it's reviewed as a publication decision.
+Hibernate accepts `@Immutable` entities mapped onto views under
+`ddl-auto: validate`; the repositories extend `Repository`, not
+`JpaRepository`, so no save method exists to call.
+
+### Publication is intent; eligibility is current state
+
+The five conditions live in exactly **one** place,
+`marketplace_estate_eligibility`, and every public view joins through it,
+so an ineligible estate is structurally unreachable rather than filtered
+by a query someone might forget. Evaluated at read time: the `published`
+flag records what the developer wants, and is **never cleared** when the
+tenant stops qualifying. A suspended tenant's listings vanish and return
+on reinstatement without republishing (PB-5); a new HIGH conflict pulls a
+live estate with no extra mechanism (PB-6).
+
+**Read-time eligibility checks `published = true` and nothing about who
+set it** — the read is anonymous and has no caller. Who may publish is a
+permission (`portal.estates.manage`), checked once at publish time.
+
+**The publish endpoint and the public feed can't disagree.**
+`POST /api/portal/estates/{id}/publish` reads the tenant conditions through
+`MarketplaceApi` — the same eligibility view — and the conflict condition
+through `ConflictDetectionApi.publicationCheckFor`, which calls the same
+SQL function the view does. Two implementations of one gate would drift;
+this way a refusal and an absence from the feed are one answer. It names
+every failing condition (the code is the first), in a fixed order:
+verification, entitlement, tenant active, conflict. A conflict refusal uses
+`ConflictPublicationCheck.blockReason`, which carries no counterparty by
+design. Conditions are checked even for an already-published estate: a
+published estate can be off the marketplace, and republishing is how the
+developer finds out why. Re-publishing an eligible published estate, or
+unpublishing an unpublished one, is a no-op and writes no audit entry,
+since nothing happened. MEDIUM conflicts ride along in the success response
+(`warningConflictCount`) — they never refuse.
+
+`inventory → marketplace` is the new edge (publish needs `MarketplaceApi`);
+`marketplace` depends on `common` only.
+
+### Public plot status is AVAILABLE / UNAVAILABLE, collapsed inside the view
+
+`reserved` versus `sold` is internal sales information — it reveals sales
+velocity to competitors. The collapse happens **in `marketplace_plots`**, so
+the raw status never reaches the application, let alone a buyer.
+Unavailable plots still appear on the map so the estate reads as a real
+place rather than a sales sheet; the reason isn't disclosed. (Tier-level
+`plotsRemaining` and `availability` — `available`/`low_stock`/`sold_out`,
+the frontend's own rule — are published: MP-5 allows available counts.)
+
+### Shared types moved to `common`
+
+`TitleType`, `EstateIntent`, `VerificationCheckType`,
+`VerificationCheckStatus` and `VerificationSource` moved from
+`inventory.internal.enums` to `common`: marketplace needs their wire values,
+and this file already says enums used across modules belong there. The
+GeoJSON DTOs and `GeoJsonPolygonWriter` moved to `common.geojson` — a wire
+format, not domain logic — so the public map and the portal map are
+literally the same Java types, which is what "one component renders both"
+needs. `GeoJsonPolygonParser` stayed in `inventory`: its Nigeria-bounds
+check is domain logic.
+
+### Rate limiting: in-memory, keyed on the remote address
+
+`MarketplaceRateLimitFilter`, `/api/marketplace/` only, 120 requests per
+client per minute by default (`landvault.marketplace.rate-limit.*`), 429
+with `Retry-After` beyond it. Fixed windows.
+
+- **Keyed on `request.getRemoteAddr()`, never `X-Forwarded-For`.** Anyone
+  can send that header; trusting it lets a client claim a fresh address per
+  request and turns the limiter into decoration.
+  `MarketplaceRateLimitIT` sends a forged one after being throttled and
+  asserts it stays throttled. **The assumption**: no reverse proxy sits in
+  front of the app today, so the remote address is the real client, and
+  `server.forward-headers-strategy` is deliberately unset. Behind a proxy
+  every client would share its address — the fix then is Tomcat's
+  `RemoteIpValve` with that proxy as the only trusted one, not reading the
+  header here.
+- **Per-instance.** Behind more than one server each keeps its own counts.
+  That needs a shared store (Redis, or the database) before scaling out.
+- The table of tracked clients is bounded (`max-tracked-clients`); past it
+  expired windows are swept, and if it's still full it's cleared — erring
+  towards letting requests through rather than failing closed on everyone.
+- The test classpath raises the limit, since every IT browses from
+  127.0.0.1.
+
+### Public routes: explicit, and GET only
+
+Listed one by one in `SecurityConfig.PUBLIC_GET_PATHS`, never
+`/api/marketplace/**`: wishlist, enquiries and reservations will live under
+that prefix and must require a login. Permitted for **GET only** — a step
+stricter than the slice spec's "add to `ALWAYS_PUBLIC_PATHS`" — so a future
+write on one of these exact paths doesn't inherit anonymous access either.
+Reads are not audited: the audit log records actions, not page views.
+
+### Known gaps, recorded rather than filled
+
+- **Frontend contract**: it calls `/api/marketplace/listings` (this is
+  `/estates`, per the slice spec), fetches plots from a paginated
+  `/listings/{id}/plots` rather than `/geojson`, expects the internal plot
+  status (now collapsed), and has `paymentPlans` — which nothing stores, so
+  it's absent. The frontend's `paymentPlans.includes(...)` filter would
+  need changing.
+- **Price filters apply within one currency** (`currency`, default NGN).
+  Comparing a ₦ "from" price with a $ one ranks land by a meaningless
+  number. An estate whose tiers mix currencies has an ambiguous "from"
+  price; the view takes the cheapest available tier as stored.
+- **An estate with no boundary can be published** and can never raise an
+  estate-level conflict, since there's nothing to intersect — a way to sit
+  outside the fifth condition entirely. Not one of the five conditions as
+  specified; flagged as an open decision, not silently added.

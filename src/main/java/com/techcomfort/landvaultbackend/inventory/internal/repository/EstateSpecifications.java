@@ -1,7 +1,7 @@
 package com.techcomfort.landvaultbackend.inventory.internal.repository;
 
 import com.techcomfort.landvaultbackend.inventory.internal.domain.Estate;
-import com.techcomfort.landvaultbackend.inventory.internal.enums.EstateIntent;
+import com.techcomfort.landvaultbackend.common.EstateIntent;
 import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.jpa.domain.Specification;
 

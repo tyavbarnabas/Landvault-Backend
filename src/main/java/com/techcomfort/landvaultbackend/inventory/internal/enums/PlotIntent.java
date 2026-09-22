@@ -1,5 +1,6 @@
 package com.techcomfort.landvaultbackend.inventory.internal.enums;
 
+import com.techcomfort.landvaultbackend.common.EstateIntent;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
 

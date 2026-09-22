@@ -14,7 +14,7 @@ import com.techcomfort.landvaultbackend.inventory.dto.CreatePlotRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreatePlotsRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreatePriceTierRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateDto;
-import com.techcomfort.landvaultbackend.inventory.dto.GeoJsonPolygonDto;
+import com.techcomfort.landvaultbackend.common.geojson.GeoJsonPolygonDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PlotDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PriceTierDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.AddressDto;

@@ -1,0 +1,259 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        The public marketplace projection: the first thing in this system an
+        anonymous request can read.
+
+        WHY VIEWS, AND WHAT THEY BYPASS. An anonymous request has no tenant
+        scope and no platform scope, so every RLS policy fails closed and
+        every table returns zero rows, silently. The marketplace would "work"
+        and show nothing. These views are the escape: a view reads its tables
+        with the privileges of the VIEW OWNER, and the owner here is the
+        migration role, a superuser, which bypasses RLS even under FORCE ROW
+        LEVEL SECURITY. (If migrations ever run as a non-superuser table owner,
+        FORCE applies to the owner too and every view returns nothing: fail
+        closed, and caught by the anonymous-read integration test.)
+
+        WHY THIS IS NARROWER THAN A SECURITY DEFINER FUNCTION. A view's column
+        list is fixed. No caller can make it return a column it never
+        selected, and no later refactor of calling code can widen it. What it
+        exposes is exactly what is written below, reviewed once, here.
+
+        WHAT THESE VIEWS MUST NEVER SELECT: clients, finances, staff,
+        documents, directors, verification decisions, verification-check
+        notes, title numbers, addresses, the raw plot status, reserved or sold
+        counts, tenant or branch ids, or anything else operational. Adding a
+        column here is publishing it to the internet.
+
+        THE FIVE CONDITIONS live in exactly one place,
+        marketplace_estate_eligibility, and every public view joins through
+        it, so an ineligible estate is structurally unreachable rather than
+        filtered by a query someone might forget:
+          1. estates.published = true
+          2. tenant verification_state = VERIFIED
+          3. tenant holds marketplace_publishing
+          4. tenant status = ACTIVE (not merely "not SUSPENDED": an OFFBOARDED
+             company has left the platform and must not have land for sale)
+          5. no blocking conflict, via landvault_estate_conflict_summary(),
+             the same function ConflictDetectionApi.publicationCheckFor uses,
+             so the publish check and the public read cannot disagree
+        All evaluated at read time: publication is the developer's intent,
+        eligibility is current state (PB-5). A suspended tenant's listings
+        vanish without being unpublished and return on reinstatement; a new
+        HIGH conflict pulls a live estate with no extra mechanism (PB-6).
+
+        security_barrier stops a caller-supplied predicate built on a leaky
+        function from being evaluated before the eligibility filter.
+    -->
+    <changeSet id="049-create-marketplace-estate-eligibility-view" author="landvault">
+        <sql splitStatements="false"><![CDATA[
+            -- Internal, not public: read only by the publish check
+            -- (MarketplaceApi) and joined by the public views below. Nothing
+            -- here is ever serialized to a buyer.
+            CREATE VIEW marketplace_estate_eligibility WITH (security_barrier = true) AS
+            SELECT
+                e.id                                   AS estate_id,
+                e.published                            AS published,
+                (o.verification_state = 'VERIFIED')    AS tenant_verified,
+                o.marketplace_publishing               AS tenant_entitled,
+                (o.status = 'ACTIVE')                  AS tenant_active,
+                -- CASE short-circuits, so the conflict function only runs for
+                -- estates that already pass the four cheap conditions.
+                CASE
+                    WHEN e.published
+                     AND o.verification_state = 'VERIFIED'
+                     AND o.marketplace_publishing
+                     AND o.status = 'ACTIVE'
+                    THEN (SELECT s.blocking_count FROM landvault_estate_conflict_summary(e.id) s) = 0
+                    ELSE false
+                END                                    AS eligible
+            FROM estates e
+            JOIN organizations o ON o.id = e.tenant_id AND o.deleted = false
+            WHERE e.deleted = false;
+        ]]></sql>
+        <rollback>
+            DROP VIEW marketplace_estate_eligibility;
+        </rollback>
+    </changeSet>
+
+    <changeSet id="049-create-marketplace-public-views" author="landvault">
+        <sql splitStatements="false"><![CDATA[
+            -- One row per eligible estate: the listing card and the header of
+            -- the detail page. Seller is branch . company (MP-7): names only.
+            CREATE VIEW marketplace_listings WITH (security_barrier = true) AS
+            SELECT
+                e.id                     AS estate_id,
+                e.name                   AS name,
+                e.area                   AS area,
+                e.city                   AS city,
+                e.state                  AS state,
+                e.description            AS description,
+                e.image_url              AS image_url,
+                e.intent                 AS intent,
+                e.corner_premium_pct     AS corner_premium_pct,
+                e.published_at           AS published_at,
+                e.footprint              AS footprint,
+                t.title_type             AS title_type,
+                b.name                   AS branch_name,
+                COALESCE(NULLIF(btrim(o.trading_name), ''), o.registered_name) AS company_name,
+                v.last_verified_at       AS last_verified_at,
+                ft.price                 AS from_price,
+                ft.currency              AS from_price_currency,
+                ft.price_per_sqm         AS from_price_per_sqm,
+                sz.min_size_sqm          AS min_size_sqm,
+                sz.max_size_sqm          AS max_size_sqm,
+                COALESCE(pr.plots_remaining, 0) AS plots_remaining
+            FROM marketplace_estate_eligibility el
+            JOIN estates e       ON e.id = el.estate_id
+            JOIN organizations o ON o.id = e.tenant_id
+            LEFT JOIN branches b      ON b.id = e.branch_id AND b.deleted = false
+            LEFT JOIN estate_titles t ON t.estate_id = e.id AND t.deleted = false
+            -- The most recent check that actually came back VERIFIED. Never a
+            -- pending or not_checked one: absent verification stays absent.
+            LEFT JOIN LATERAL (
+                SELECT max(c.last_verified_at) AS last_verified_at
+                FROM estate_verification_checks c
+                WHERE c.estate_id = e.id AND c.deleted = false AND c.status = 'VERIFIED'
+            ) v ON true
+            -- "From" price: the cheapest tier that still has a plot for sale,
+            -- falling back to the cheapest tier overall when everything is
+            -- sold (the frontend's fromPrice() rule). The tier's own base
+            -- price: a corner premium only ever raises it.
+            LEFT JOIN LATERAL (
+                SELECT pt.price, pt.currency,
+                       CASE WHEN pt.tier_type = 'LAND_SIZE' AND pt.size_sqm > 0
+                            THEN round(pt.price / pt.size_sqm, 2) END AS price_per_sqm
+                FROM price_tiers pt
+                WHERE pt.estate_id = e.id AND pt.deleted = false
+                ORDER BY EXISTS (
+                            SELECT 1 FROM plots p
+                            WHERE p.price_tier_id = pt.id AND p.deleted = false
+                              AND p.status IN ('AVAILABLE_DEV', 'AVAILABLE_INV')
+                         ) DESC,
+                         pt.price ASC
+                LIMIT 1
+            ) ft ON true
+            LEFT JOIN LATERAL (
+                SELECT min(pt.size_sqm) AS min_size_sqm, max(pt.size_sqm) AS max_size_sqm
+                FROM price_tiers pt
+                WHERE pt.estate_id = e.id AND pt.deleted = false AND pt.tier_type = 'LAND_SIZE'
+            ) sz ON true
+            LEFT JOIN LATERAL (
+                SELECT count(*) AS plots_remaining
+                FROM plots p
+                WHERE p.estate_id = e.id AND p.deleted = false
+                  AND p.status IN ('AVAILABLE_DEV', 'AVAILABLE_INV')
+            ) pr ON true
+            WHERE el.eligible;
+
+            -- An eligible estate's price list. price_per_sqm is a display
+            -- comparison only, and NULL for a UNIT_TYPE tier, never zero.
+            CREATE VIEW marketplace_price_tiers WITH (security_barrier = true) AS
+            SELECT
+                pt.id          AS tier_id,
+                pt.estate_id   AS estate_id,
+                pt.size_sqm    AS size_sqm,
+                pt.label       AS label,
+                pt.price       AS price,
+                pt.currency    AS currency,
+                CASE WHEN pt.tier_type = 'LAND_SIZE' AND pt.size_sqm > 0
+                     THEN round(pt.price / pt.size_sqm, 2) END AS price_per_sqm,
+                (SELECT count(*) FROM plots p
+                  WHERE p.price_tier_id = pt.id AND p.deleted = false
+                    AND p.status IN ('AVAILABLE_DEV', 'AVAILABLE_INV')) AS plots_remaining,
+                (SELECT round(avg(p.actual_area_sqm), 2) FROM plots p
+                  WHERE p.price_tier_id = pt.id AND p.deleted = false
+                    AND p.actual_area_sqm IS NOT NULL) AS actual_area_sqm
+            FROM price_tiers pt
+            JOIN marketplace_estate_eligibility el ON el.estate_id = pt.estate_id AND el.eligible
+            WHERE pt.deleted = false;
+
+            -- An eligible estate's plots, for the map. The status collapse
+            -- happens HERE: RESERVED and SOLD both become UNAVAILABLE inside
+            -- the database, so the distinction (which reveals sales velocity
+            -- to competitors) never reaches the application, let alone a
+            -- buyer. Unavailable plots still appear, so the estate reads as a
+            -- real place rather than a sales sheet.
+            CREATE VIEW marketplace_plots WITH (security_barrier = true) AS
+            SELECT
+                p.id                 AS plot_id,
+                p.estate_id          AS estate_id,
+                p.price_tier_id      AS price_tier_id,
+                p.plot_number        AS plot_number,
+                COALESCE(NULLIF(btrim(bl.label), ''), bl.name) AS block_name,
+                p.is_corner          AS is_corner,
+                p.nominal_size_sqm   AS nominal_size_sqm,
+                p.actual_area_sqm    AS actual_area_sqm,
+                CASE WHEN p.status IN ('AVAILABLE_DEV', 'AVAILABLE_INV')
+                     THEN 'AVAILABLE' ELSE 'UNAVAILABLE' END AS availability,
+                p.footprint          AS footprint
+            FROM plots p
+            JOIN marketplace_estate_eligibility el ON el.estate_id = p.estate_id AND el.eligible
+            LEFT JOIN blocks bl ON bl.id = p.block_id AND bl.deleted = false
+            WHERE p.deleted = false;
+
+            -- Verification with its SOURCE (MP-5): a registry lookup and a
+            -- human reading a PDF are different claims in front of a buyer.
+            -- Only checks that exist; a missing row means nobody has looked,
+            -- and nothing here manufactures a placeholder. Notes are excluded:
+            -- free text a developer wrote for themselves.
+            CREATE VIEW marketplace_verification_checks WITH (security_barrier = true) AS
+            SELECT
+                c.id                  AS check_id,
+                c.estate_id           AS estate_id,
+                c.check_type          AS check_type,
+                c.status              AS status,
+                c.verification_source AS verification_source,
+                c.last_verified_at    AS last_verified_at
+            FROM estate_verification_checks c
+            JOIN marketplace_estate_eligibility el ON el.estate_id = c.estate_id AND el.eligible
+            WHERE c.deleted = false;
+
+            CREATE VIEW marketplace_amenities WITH (security_barrier = true) AS
+            SELECT a.id AS amenity_id, a.estate_id AS estate_id, a.name AS name
+            FROM estate_amenities a
+            JOIN marketplace_estate_eligibility el ON el.estate_id = a.estate_id AND el.eligible
+            WHERE a.deleted = false;
+        ]]></sql>
+        <rollback>
+            DROP VIEW marketplace_amenities;
+            DROP VIEW marketplace_verification_checks;
+            DROP VIEW marketplace_plots;
+            DROP VIEW marketplace_price_tiers;
+            DROP VIEW marketplace_listings;
+        </rollback>
+    </changeSet>
+
+    <!--
+        SELECT and nothing else. 019's default privileges would otherwise grant
+        the app role INSERT/UPDATE/DELETE on every new relation, views
+        included, and a simple single-table view is auto-updatable in
+        Postgres: a write through an owner-privileged view would be a write
+        that bypasses RLS. None of these views is auto-updatable today (all
+        join), but the grant should not depend on that staying true.
+    -->
+    <changeSet id="049-grant-select-on-marketplace-views" author="landvault">
+        <sql>
+            REVOKE ALL ON marketplace_estate_eligibility, marketplace_listings, marketplace_price_tiers,
+                          marketplace_plots, marketplace_verification_checks, marketplace_amenities
+                FROM PUBLIC;
+            REVOKE ALL ON marketplace_estate_eligibility, marketplace_listings, marketplace_price_tiers,
+                          marketplace_plots, marketplace_verification_checks, marketplace_amenities
+                FROM ${appDbUsername};
+            GRANT SELECT ON marketplace_estate_eligibility, marketplace_listings, marketplace_price_tiers,
+                            marketplace_plots, marketplace_verification_checks, marketplace_amenities
+                TO ${appDbUsername};
+        </sql>
+        <rollback>
+            REVOKE SELECT ON marketplace_estate_eligibility, marketplace_listings, marketplace_price_tiers,
+                             marketplace_plots, marketplace_verification_checks, marketplace_amenities
+                FROM ${appDbUsername};
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
