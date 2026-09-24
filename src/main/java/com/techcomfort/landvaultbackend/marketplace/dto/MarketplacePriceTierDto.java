@@ -27,6 +27,13 @@ public record MarketplacePriceTierDto(
         Currency currency,
         BigDecimal pricePerSqm,
         String availability,
-        long plotsRemaining
+        long plotsRemaining,
+
+        /**
+         * What this tier actually costs once declared charges are included —
+         * the figure FD-2 exists to make visible. Null only for an estate
+         * grandfathered in before disclosure was required.
+         */
+        TierCommitmentDto commitment
 ) {
 }

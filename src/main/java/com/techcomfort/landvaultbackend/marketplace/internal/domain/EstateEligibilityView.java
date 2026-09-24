@@ -41,4 +41,11 @@ public class EstateEligibilityView {
 
     @Column(name = "eligible")
     private boolean eligible;
+
+    /** Includes estates grandfathered when disclosure shipped — see changeset 056. */
+    @Column(name = "fees_declared")
+    private boolean feesDeclared;
+
+    @Column(name = "refund_terms_declared")
+    private boolean refundTermsDeclared;
 }

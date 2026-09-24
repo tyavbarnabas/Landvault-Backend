@@ -2,7 +2,7 @@ package com.techcomfort.landvaultbackend.inventory.internal.domain;
 
 import com.techcomfort.landvaultbackend.common.AbstractEntity;
 import com.techcomfort.landvaultbackend.inventory.internal.enums.ListingIntent;
-import com.techcomfort.landvaultbackend.inventory.internal.enums.PlotIntent;
+import com.techcomfort.landvaultbackend.common.PlotIntent;
 import com.techcomfort.landvaultbackend.inventory.internal.enums.PlotOrientation;
 import com.techcomfort.landvaultbackend.inventory.internal.enums.PlotStatus;
 import com.techcomfort.landvaultbackend.inventory.internal.enums.PropertyType;

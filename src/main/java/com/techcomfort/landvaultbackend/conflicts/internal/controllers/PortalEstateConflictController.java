@@ -6,6 +6,13 @@ import com.techcomfort.landvaultbackend.conflicts.dto.TenantConflictDto;
 import com.techcomfort.landvaultbackend.conflicts.internal.service.ConflictQueryService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import com.techcomfort.landvaultbackend.common.OpenApiConfig;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -37,6 +44,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/portal/estates/{id}/conflicts")
 @RequiredArgsConstructor
+@Tag(name = OpenApiConfig.TAG_PORTAL_CONFLICTS)
 public class PortalEstateConflictController {
 
     private final ConflictQueryService queryService;
@@ -48,6 +56,28 @@ public class PortalEstateConflictController {
      * company's estate exists at that id, which is precisely the kind of
      * fact this endpoint exists to withhold.
      */
+    @Operation(
+            summary = "Conflicts affecting one of your own estates",
+            description = """
+                    Requires `portal.estates.view`.
+
+                    **The other company is never identified, and that is deliberate, not a missing \
+                    field.** You get your own estate or plot, how much land overlaps, your side's \
+                    share of it, the severity, and what it means for publication — and nothing about \
+                    who is on the other side. Both parties believe they are right; handing each the \
+                    other's identity invites a confrontation over disputed land that the platform \
+                    would have arranged. The database function behind this never selects those \
+                    columns, so the information does not reach the application at all.
+
+                    A `high` conflict (two different companies) blocks publication. A `medium` one \
+                    (your own two boundaries overlapping) warns but does not. `underReview` means a \
+                    correction has been detected and is waiting on a human — correcting a boundary \
+                    does **not** lift a block on its own.
+
+                    An estate id that is not yours returns an empty list rather than a 403, which \
+                    would confirm the estate exists.""")
+    @ApiResponse(responseCode = "200", description = "Conflicts on that estate, live ones first; "
+            + "empty if there are none, or the estate is not yours")
     @GetMapping
     @PreAuthorize("hasAuthority('portal.estates.view')")
     public ResponseEntity<List<TenantConflictDto>> list(@PathVariable UUID id) {

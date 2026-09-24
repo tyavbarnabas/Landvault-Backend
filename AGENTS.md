@@ -2879,3 +2879,625 @@ Reads are not audited: the audit log records actions, not page views.
   estate-level conflict, since there's nothing to intersect — a way to sit
   outside the fifth condition entirely. Not one of the five conditions as
   specified; flagged as an open decision, not silently added.
+
+## The OpenAPI document describes what exists, and stays dev-only
+
+`OpenApiConfig` (in `common`) carries the title, the JWT bearer scheme and
+the tag order; every controller carries a `@Tag`, and every operation a
+summary, description and documented failure responses. **No behaviour
+changed** — annotations and configuration only.
+
+**The dev-only gating is untouched and must stay that way**: the document is
+generated and reachable under the `dev` profile alone
+(`springdoc.api-docs.enabled` plus `SecurityConfig.DEV_ONLY_PUBLIC_PATHS`).
+A publicly readable spec is free reconnaissance — the complete API surface
+handed over before anyone authenticates.
+
+**Security is declared globally and opted out of, never the reverse.**
+`OpenApiConfig` adds the bearer requirement to the whole document, and the
+handful of genuinely public operations carry `@SecurityRequirements` (empty).
+An operation that says nothing is therefore documented as protected, which
+is the safe direction to be wrong: the failure mode is a needless
+"Authorize" prompt, not a reader believing a protected endpoint is open.
+
+### The public-path cross-check
+
+The slice asked for the documented public endpoints to match
+`SecurityConfig` exactly, and to report any discrepancy rather than
+silently pick one. Three findings, none of them a security gap:
+
+1. **The marketplace routes are not in `ALWAYS_PUBLIC_PATHS`**, which is
+   what the slice assumed. They are in a separate `PUBLIC_GET_PATHS` list
+   permitted for **GET only**, added in the publication slice so a future
+   write on one of those exact paths cannot inherit anonymous access. The
+   effect matches the documentation (those GETs are public); the list they
+   live in does not.
+2. **`/actuator/health` and `/error` are public but are not documented**,
+   because neither is a controller in this codebase. `/error` in particular
+   is there so a wrong method or missing handler returns a real 404/405
+   instead of a misleading 401 — an implementation detail, not API surface.
+3. **`/api/auth/**` is no longer a wildcard.** `AuthController`'s own class
+   comment still claimed it was; the 2FA slice replaced it with one entry
+   per route so the 2FA management endpoints require a session. The stale
+   comment was corrected while annotating.
+
+Everything else lines up: the five `AuthController` routes and
+`/api/auth/2fa/verify` are documented public and are public; the four other
+`/api/auth/2fa/*` routes are documented protected and are protected.
+
+### A correction to the slice's own brief
+
+It said "TOTP secrets and password hashes never appear" in responses.
+Password hashes never do. **The TOTP secret does** — once, in
+`TwoFaSetupResponse`, deliberately, so a user can type it in when a QR code
+cannot be scanned. Hiding that from the documentation would have made the
+spec disagree with the API. It is documented as what it is instead: returned
+here and nowhere else, encrypted at rest, never readable again.
+
+### What the documentation is for
+
+Not tidiness. These endpoints carry rules a path list cannot show, and they
+are the ones an integrator gets wrong:
+
+- **`[longitude, latitude]`**, called out on every route that takes or
+  returns geometry, with a copyable Abuja example on `GeoJsonPolygonDto`.
+  Transposing it raises no error.
+- **Login returns one of two different 200 shapes**, and the second carries
+  no tokens.
+- **Setup does not enable 2FA**; confirmation does.
+- **Identical responses are deliberate** — wrong password vs unknown email,
+  and every password-reset failure — so nobody "fixes" them into helpful
+  errors that enable account enumeration.
+- **The tenant conflict view omits the counterparty on purpose**, so it is
+  not filed as a missing field.
+- **Absent is absent**: an unchecked verification renders as unchecked, a
+  plot with no boundary has a null surveyed area, a masked ID number stays
+  masked.
+
+Where behaviour is deliberately limited, the documentation says so rather
+than letting a reader infer capability: support-access grants are a record
+and not a gate, reads are not audited, and the audit log has no write
+surface by design.
+
+## Reserving a plot: the third RLS escape, and the first one that writes
+
+This is where browsing becomes buying, and it runs into row-level security
+harder than anything before it.
+
+A buyer's session is `tenant_id = ''`, `platform_scope = off`, so changeset
+044's policies make `plots` **neither readable nor writable** to them.
+Verified against the app role rather than inferred: with a buyer's exact
+GUCs, `SELECT count(*) FROM plots` returns 0, and
+`UPDATE plots SET status = 'RESERVED'` affects **0 rows with no error**.
+
+**That second half is what makes this dangerous rather than merely broken.**
+The correct atomic acquire is:
+
+```sql
+UPDATE plots SET status = 'RESERVED'
+ WHERE id = ? AND status IN ('AVAILABLE_DEV','AVAILABLE_INV')
+```
+
+checking the affected row count — where **zero means another buyer won the
+race**. RLS produces the identical zero. From inside the application the two
+are indistinguishable, so every buyer would be told "that plot is no longer
+available", forever, with nothing in any log to say why. And because
+`@ServiceConnection` tests connect as the superuser, the whole suite would
+have been green.
+
+Changeset **054** is the escape: `landvault_reserve_plot(uuid, varchar)` and
+`landvault_release_plot(uuid, varchar, varchar)`, `SECURITY DEFINER`, hardened
+exactly like 043 and 047 — `SET search_path = public, pg_temp`, `EXECUTE`
+revoked from `PUBLIC` and granted only to the app role. A view cannot help
+here the way changeset 049's did for the marketplace: **views are not
+writable**.
+
+`ReservationCheckoutUnderRlsIT` wires the restricted role explicitly and was
+**proven red** by flipping the functions to `SECURITY INVOKER` — the acquire
+then runs under the caller's own policies and every reservation is refused as
+`PLOT_NOT_AVAILABLE`. **Do not convert that class to `@ServiceConnection`**,
+and do not "simplify" either function into a repository call.
+
+### The release function validates its own argument
+
+`landvault_release_plot` takes the status to restore, and rejects anything
+that is not `AVAILABLE_DEV` or `AVAILABLE_INV`. Without that check, a definer
+function that writes `plots.status` would be a way to mark any held plot
+`SOLD` with no payment, from a buyer's own session — a worse hole than the
+one it exists to bridge. **Any `SECURITY DEFINER` function that writes a
+caller-supplied value has to validate it inside the function**; the caller is
+by definition outside the privilege boundary.
+
+## Postgres compare-and-swap, not Redis — and the TTL argument is what settles it
+
+The slice specified Redis with a TTL, on the reasoning that a read-then-write
+check cannot be atomic. The first half is right; the conclusion does not
+follow, and this was reconciled before building rather than after.
+
+A single-statement `UPDATE … WHERE status IN (…)` **is** an atomic
+compare-and-swap: Postgres takes the row lock for the statement's duration, so
+of two concurrent attempts exactly one updates and the other reports zero
+rows. It is the same DB-level CAS this codebase already uses for refresh-token
+rotation. The function implements it with `SELECT … FOR UPDATE` followed by
+the update, because Postgres 16 has no `OLD.*` in `UPDATE … RETURNING` (that
+arrived in 18) and the **previous** status has to be captured — see the
+availability-variant rule below. Under `READ COMMITTED` a second caller blocks
+on the row lock, then re-evaluates the qual against the committed row, finds
+`RESERVED`, and gets nothing.
+
+**Why not Redis:** a key expiring in Redis does not flip `plots.status` in
+Postgres. Something must still write to the database on expiry, so the sweeper
+has to exist regardless — at which point Redis is a *second source of truth*
+for plot availability that can disagree with the first, with nothing
+reconciling them. It is also not currently a dependency. Reach for it when a
+lock genuinely must be shared across instances, which is the same point the
+marketplace rate limiter needs it.
+
+`twoBuyersReachingTheSamePlotAtOnceCannotBothHoldIt` releases two real HTTP
+requests from a latch and asserts exactly one 201 and one 409.
+
+## The expiry sweep is the first scheduled job, and it has to establish its own scope
+
+AGENTS.md predicted this before anything could hit it: *"it cannot rely on 'no
+context means see everything' … There is no ambient 'system' identity that
+sees past RLS today."* `ReservationExpirySweeper` is the first job to meet it.
+
+It sets a platform `TenantScope` in `TenantContext` for the duration of the
+sweep and clears it in a `finally`, exactly as `TenantContextFilter` does for
+a request. The scope has to be established **before** the transaction begins —
+`TenantScopedDataSource` issues its `SET LOCAL` statements when the connection
+turns off autocommit — which is why the sweeper is a thin trigger around a
+`@Transactional` method **on another bean**, not a self-invoked method.
+
+Exceptions are caught and logged rather than propagated: an exception escaping
+a `fixedDelay` scheduled method cancels all future runs, turning one bad sweep
+into holds that never expire again.
+
+`sweep-interval` is 60s, and the test classpath sets it to an hour — a sweep
+firing mid-assertion would pull a hold out from under a test. `ReservationIT`
+calls `sweep()` directly instead, which is also the only way to test expiry
+without waiting on a clock.
+
+**Per-instance.** Behind more than one server every instance sweeps; that is
+wasteful rather than wrong (the release is idempotent and a reservation closes
+once), but it wants a shared scheduler lock before scaling out.
+
+### Releasing restores the *variant*, never a hardcoded available status
+
+`AVAILABLE_DEV` and `AVAILABLE_INV` are a real distinction, so the acquire
+captures `previous_plot_status` on the reservation and the release writes that
+back. A hold on an investment plot must not return it to the pool as a
+development plot. Pinned by
+`anExpiredHoldIsSweptAndTheOriginalAvailabilityVariantComesBack`.
+
+## A hold cannot be extended
+
+RS-5 asked for a decision: **no extension, ever.** One window for everyone is
+the fair version — every minute added for one buyer is a minute taken from
+whoever is waiting behind them, and an extendable hold is a way to park
+inventory indefinitely. `hold-duration` is configuration so a test can shorten
+it, not so it can be negotiated per buyer.
+
+## Price is captured on the *reservation*, not on the transaction
+
+TX-1 says the price is captured at reservation and never recomputed. The
+transaction is opened by a **separate, later request**, so capturing it there
+would recompute against whatever the tier says minutes afterwards.
+
+So `reservations` carries `base_price`, `corner_premium_pct`, `total_price`
+and `currency`, computed by `PlotPricing` from the same locked snapshot that
+granted the hold, and the transaction **copies** them. A developer re-pricing
+a tier mid-checkout cannot alter what the buyer already agreed to.
+`repricingTheTierAfterAHoldDoesNotChangeWhatTheBuyerAgreedTo` pins it.
+
+This is the one place in this schema where duplicating a value is correct
+rather than drift: the tier answers "what does this cost today", the
+reservation and transaction answer "what was agreed".
+
+### No money ever comes from the client
+
+The frontend's `initiateTransaction` currently posts `basePrice`,
+`totalPrice`, `amountDue`, `cornerPremiumPct`, `sizeSqm` and `titleType` from
+the browser. **None of them is accepted.** A client-supplied price is the same
+class of hole as a client-supplied `tenantId` — it lets the payer name their
+own figure. `CreateTransactionRequest` carries a reservation id, an intent and
+a plan, and nothing else; `aPriceSentByTheClientIsIgnoredEntirely` posts raw
+JSON with a ₦1.00 price and asserts the stored figure is the server's.
+
+**Frontend reconciliation needed**: that call has to stop sending them, and
+`POST /api/reservations` takes only `plotId` (the estate is derived from the
+plot, never trusted from the request).
+
+## Two new `client.*` slugs, and one `admin.*`
+
+`client.checkout.reserve` and `client.kyc.manage`, granted to `buyer`;
+`admin.kyc.review`, granted to `super_admin` and `compliance_officer` only
+(reviewing identity documents *is* the compliance role; `platform_moderator`
+is left out on the same narrower-is-reversible reasoning as
+`admin.audit.view`).
+
+Reusing `client.marketplace.view` was rejected: browsing and buying are
+different acts, and folding the ability to take a plot out of circulation into
+the slug everyone browsing holds leaves no way to restrict purchasing later.
+
+**Frontend requirement**: `authService.ts` knows none of these three. The nav
+and route gates render directly off these strings, so they must be added
+there too.
+
+## KYC: platform-level, and the NIN does not repeat the `directors` mistake
+
+`kyc_records` and `kyc_documents` carry **no tenant** — a buyer verifies once
+and transacts with every company (KY-4). That is the structural reason buyers
+are not tenant-scoped, not a consequence of it.
+
+Neither table is RLS-policied, for the same reason as `users`/`refresh_tokens`/
+`otp_codes`: every row belongs to a buyer, a buyer's session has no tenant or
+platform scope, and a fail-closed policy would hide a buyer's own record from
+them and nothing else. Rows are reached only by `user_id`. This becomes a real
+question the day a tenant-facing surface needs to see that a buyer is verified
+(KY-5) — that view must expose the *outcome*, never these rows.
+
+**`nin_number` is encrypted at rest** (AES-256-GCM, `KycNinConverter`, its own
+`KYC_ENCRYPTION_KEY` — deliberately a different key from
+`TOTP_ENCRYPTION_KEY`, so one leak does not yield both). A converter rather
+than service-layer calls, for the same reason `@SQLRestriction` lives on the
+entity: writing plaintext becomes structurally impossible. The column is
+`text`, not `varchar(11)` — it holds ciphertext, and sizing it to the
+plaintext would truncate. **No route returns it, not even masked.**
+
+Of `directors.id_number`'s four standing obligations, this table closes the
+first. **Three remain open and are recorded in the column's own Postgres
+comment**: reads restricted to compliance staff, every read audited as an
+event, and a defined retention policy. Nothing reads the column at all today,
+which is why they are open rather than violated.
+
+### The document set follows residence, and stops there
+
+Local (`NG`) buyers submit an **NIN only** — never a utility bill on top.
+Diaspora buyers submit a passport and proof of address. Derived from the
+country captured at registration, never asked again, and `buyer_type` is
+**stored** on the record: it says what this buyer was actually required to
+produce at the time, and recomputing it from a later change of residence would
+rewrite history.
+
+### The review endpoint is beyond the stated scope, deliberately
+
+`POST /api/admin/kyc/{userId}/decision` was not in the slice's endpoint list,
+and is built anyway: without it nothing can ever reach `approved`, so
+reservations would be permanently unreachable and every per-document rejection
+column would be dead. "Manual review for now" needs a way for a human to
+review.
+
+A rejection **must name the documents that failed**, and approves every other
+document on the submission — the same cascade a tenant's verification decision
+already applies. Resubmission then reopens only what failed.
+
+`UNDER_REVIEW` exists in the enum (the frontend's union has it) but nothing
+produces it yet — the `channel` precedent, not the `otp.purpose` one: a legal
+value recording a real state a reviewer workflow will reach, rather than a
+fabricated one.
+
+## Wire-value divergences from the slice spec, resolved toward the frontend
+
+The task spec and the frontend's existing contract disagreed twice, and the
+contract won both times (it already exists; the spec was describing it from
+memory):
+
+- **`released`, not `CANCELLED`**, for a hold the buyer gave up.
+- **`approved`, not `VERIFIED`**, and **`unsubmitted`, not `NOT_STARTED`**,
+  for verification status.
+
+Constants are named for the wire value in both cases, so the two spellings
+cannot drift apart.
+
+Also recorded rather than silently accommodated: `ReservationDto` returns
+`estateId` where the frontend's `Reservation` says `listingId`, consistent
+with this backend's own vocabulary and with `MarketplaceListingDto.id`.
+
+## `audit_log_entries.actor_user_id` is nullable now: the system can act
+
+Found by the expiry sweep failing, not by inspection. Every audit entry until
+now came from a request, so "a human did this" was a safe assumption and
+`NOT NULL` encoded it. A hold expiring is nobody's action — TX-5 says the
+actor is the system, not the buyer — and the insert failed outright.
+
+Changeset **055** drops the constraint. Both alternatives were worse: writing
+the buyer's id would state in the permanent record that they released a plot
+they never touched, which is exactly the misattribution an audit trail exists
+to prevent and exactly what someone would be reading during a dispute; a
+sentinel "system user" row would put a login-shaped record in `users` that
+nobody can log in as and that every user listing would then have to exclude.
+
+The read path renders a null actor as **"System"**, distinct from the
+**"Unknown user"** it already rendered for a deleted account — those are
+different facts.
+
+**Rollback caveat**: restoring `NOT NULL` only succeeds while no
+system-authored entry exists, and this is an append-only table, so after the
+first sweep it cannot be rolled back without deleting rows. Inherent to the
+change, not a defect in it.
+
+## `IdentityApi` had no implementation, and `identity.dto` is not actually exposed
+
+Two related things found while wiring `kyc`, both worth knowing before the
+next module tries to read a user:
+
+- **`IdentityApi` was declared but never implemented.** Injecting it anywhere
+  would have failed at startup, not at compile time. `IdentityApiImpl` now
+  exists; `kyc` is its first caller.
+- **`identity.dto` is not a Modulith named interface**, so `UserDto`'s
+  accessors cannot be called from another module — `ModularityTests` rejects
+  it with "depends on non-exposed type". AGENTS.md's own package-structure
+  section describes `dto/` as "public — safe to share", and **that is not what
+  the build enforces**: only the module's base package is exposed. So
+  `IdentityApi.findById` is public but unusable across a boundary.
+
+The fix taken was the narrow one — `IdentityApi.countryOf(UUID)`, returning
+the single field `kyc` needs. Settle the broader question (annotate the `dto`
+packages with `@NamedInterface`, or keep cross-module surfaces to narrow
+methods) before the next module wants a DTO from another one; don't discover
+it again at the verification test.
+
+## `PlotIntent` and `PlotPricing` moved to `common`
+
+`checkout` needs both — the buyer's intent on a transaction, and the one
+place a plot's price is computed. Duplicating the pricing formula so that
+`inventory` and `checkout` each own a copy is precisely how two figures
+eventually disagree about what a corner plot costs, and the disagreement is
+money. `PlotPricing` is a pure function over `BigDecimal` with no entity or
+repository, which is what makes it shared-kernel material rather than domain
+logic leaking into `common`.
+
+`AesGcmCipher` (in `common`) is new for the same reason: two modules now
+encrypt a column at rest, and two hand-rolled copies of a cipher is how one of
+them quietly ends up with a reused IV. **`TwoFaSecretConverter` was left on
+its own copy** rather than refactored mid-slice — 2FA is shipped and working,
+and rewriting its cipher to prove a tidiness point is not a trade this slice
+needed. Converging them is worth doing in a change whose tests are about that.
+
+## Reservations and transactions are buyer-owned, and `seller_tenant_id` says so
+
+Both tables leave the inherited `tenantId` **null** and carry an explicit
+`seller_tenant_id` instead — the same split `Branch` makes for a different
+reason. The generic column means "this row is isolated to that tenant", and a
+reservation belongs to a buyer who has no tenant at all; populating it would
+be false, and would hide a buyer's own reservation from them the day a generic
+policy is applied to the table.
+
+Neither table is RLS-policied today (same reasoning as `kyc_records`). When
+finance needs the seller's side of a transaction, that wants a scoped
+projection, not a generic policy bolted on.
+
+## "That plot is no longer available" deliberately conflates several cases
+
+A refused reservation returns one `PLOT_NOT_AVAILABLE` whether the plot is
+held, sold, deleted, non-existent, or on an estate that is no longer eligible.
+Distinguishing them would let anyone probe which plot ids exist on estates
+they cannot see, and which companies are currently suspended — the same
+non-disclosure reasoning as the 404-not-403 on someone else's reservation, and
+the silently-ignored `X-Branch-Id`.
+
+The one exception is `KYC_REQUIRED`, which is specific on purpose: the
+frontend has to route the buyer into verification rather than show them a dead
+end. It reveals nothing about the estate.
+
+## Nothing here allocates a plot
+
+`TransactionStatus.PENDING_PAYMENT` is the only status this module writes. A
+reservation holds a plot; it never sells one. Allocation follows finance
+verification — a human — and `finance` does not exist. The enum declares the
+frontend's full union so the contract is documented, but nothing in this
+module can advance past pending, and
+`aTransactionIsPendingAndThePlotIsHeldNeverSold` pins it.
+
+## Full cost disclosure: the platform moves the sequence, it does not regulate
+
+Derived from four real Nigerian allocation letters (August 2026). The claim
+this feature makes is narrow, and every comment, response and document should
+keep it narrow:
+
+**Double King Estate**: ₦6,000,000 of land, plus ₦10,000 application,
+₦300,000 setting-out, ₦3,500,000 infrastructure and ₦200,000 supervision — a
+true commitment of **₦10,010,000, 67% above the advertised price**, with an
+annual facility fee on top. **Top Rank Platinum City**: ₦4,500,000 of land
+against **₦7,000,000 of infrastructure alone — 156% of the land price** — for
+**₦12,610,000**, nearly three times what was advertised.
+
+**Both companies disclosed every term. Both appear to operate legally.** The
+failure is entirely one of **sequence**: every charge arrives in a letter
+issued after the buyer has already committed money. So the platform does not
+prevent fraud here — it moves disclosure to the moment it can still affect the
+decision.
+
+**Nothing caps, warns on, or judges an amount.** A 156% infrastructure fee
+computes exactly like a 5% one. The platform discloses; it does not regulate,
+and no future "reasonableness" check belongs in this code.
+
+### Two new publication conditions, not one — and default terms deliberately not a third
+
+"Please disclose your fees" is a policy a developer ignores. **"You cannot
+list until you have" is enforceable**, and it is enforceable here only because
+the conditions live in exactly one place — `marketplace_estate_eligibility`
+(changeset 059) — which both the publish endpoint and the public feed read.
+A refusal and an absence from the marketplace stay the same answer.
+
+`feesDeclared` (FD-1) and `refundTermsDeclared` (RF-4) are **separate
+booleans** on `EstateEligibility` beside the other five, not folded into
+`eligible`, for the reason PB-3 established: the publish endpoint must name
+the condition that actually failed. They fail independently and carry
+distinct codes (`PUBLICATION_FEES_UNDECLARED`,
+`PUBLICATION_REFUND_TERMS_UNDECLARED`).
+
+**Default terms are deliberately not required.** DF-1's own condition is
+"where installments are offered", and nothing on an estate records whether
+they are — a payment plan is chosen per transaction, at checkout. Requiring
+them unconditionally would enforce more than the story asked; conditioning on
+a fact that does not exist would be guesswork. Revisit if an estate ever
+declares which plans it offers.
+
+**This was caught by the full suite, not by inspection.** The first
+implementation checked fees only while the refusal message named fees, refund
+terms *and* default terms — a message describing a rule the code did not
+enforce. Every pre-existing fixture that publishes an estate went red at the
+same time, which is the feature working: `MarketplaceIT` and
+`ReservationCheckoutUnderRlsIT` now declare an explicitly empty schedule plus
+refund terms before publishing.
+
+**Declaring an empty schedule counts; silence does not.** An estate with
+genuinely no extra charges must be able to list, but by saying so. That is why
+the condition reads `estates.fees_declared_at IS NOT NULL` rather than
+counting fee rows — "nothing to declare" and "nobody asked" are different
+facts, and only one of them is a disclosure.
+
+### Grandfathering, and why not a backfill
+
+Requiring a schedule retroactively would have **delisted every live listing**,
+which is principle over usefulness. Changeset 056 sets
+`estates.fees_declaration_exempt = true`, once, for estates already published.
+
+Backfilling `fees_declared_at` for them instead was rejected: it would record
+a declaration that never happened, which is exactly the fabrication this
+feature exists to prevent. A grandfathered estate's `costDisclosure` is
+**null**, not an empty schedule — an empty schedule would tell a buyer "no
+extra charges" on the authority of nobody.
+
+Same shape as the `state` precedent: enforced at the API for new writes,
+nullable in the database for rows that predate it. **TODO** in the column
+comment: backfill real schedules, clear the flag, drop the column and its term
+in the view.
+
+### Recurring charges are excluded from total commitment — the letters' own arithmetic says so
+
+Not stated in the task spec, and required by its own expected figures.
+Double King's ₦10,010,000 and Top Rank's ₦12,610,000 are both **land plus
+one-off fees**; each letter names its annual facility fee separately. Folding
+one year of a perpetual charge into a purchase total would be arbitrary (why
+one year?) and would misstate both the purchase and the obligation.
+
+So `DueTrigger.ANNUAL` is reported in `recurringFees`, outside
+`totalCommitment`. Genuinely avoidable charges sit in `optionalFees`, also
+outside — but note FD-3 means very little lands there: **a fee whose stated
+condition is itself mandatory is mandatory.** Both letters charge setting-out
+and supervision only "if you build", and both also *require* building (Double
+King clause 1 mandates a 4-bedroom terrace duplex, Top Rank clause 2 a
+2-bedroom). Reading those as conditional is the natural reading of the
+documents and the wrong one.
+
+### Total commitment is per tier, and sometimes deliberately not a total
+
+An estate's tiers carry different prices, so one estate-level figure would
+apply to nobody. `TierCommitmentDto` therefore hangs off each tier, with:
+
+- **`totalCommitmentIfCorner`** — a corner plot really does cost more, and a
+  buyer choosing one deserves the real number rather than a percentage to
+  apply themselves. Null when the estate charges no premium.
+- **A range** (`min`/`max`) wherever any contributing fee is a range, and
+  **never a midpoint** — a midpoint is a figure nobody quoted and nobody is
+  bound by.
+- **`totalExcludesOtherCurrencyFees`** when a declared fee is in a different
+  currency from the tier. Those are **never summed in** — adding a dollar fee
+  to a naira price produces a number wrong in every currency — but the flag
+  makes the omission visible rather than silent, and the charge still appears
+  in the breakdown.
+
+### Percentages are not disclosure
+
+`CommitmentCalculator` (in `common`, beside `PlotPricing`, for the same
+reason: one sum, not two that drift) computes everything in naira.
+*"20% administrative charge"* is abstract; *"you receive ₦3,600,000 — a loss
+of ₦910,000 — after about 90 days"* is something a person reacts to. Same
+discipline the upgrade engine already applies to its signed delta.
+
+Non-refundable fees are **reported as part of the loss**, never netted quietly
+out of the refund: Double King's ₦10,000 application fee is explicitly one.
+
+**The refund is computed against the headline price**, which is a limitation
+stated rather than hidden. RF-3 — a refund against what has actually been paid
+— needs payment records, and nothing tracks payments. It belongs to `finance`.
+The published figure is therefore a **maximum exposure**, and
+`ExitCostsDto`'s own description says so.
+
+### DF-3: the trap is only visible when both exits are on one screen
+
+Top Rank's buyer faces penalties escalating to 20% for falling behind, and a
+20% deduction for withdrawing. **Neither clause is hidden individually** — a
+buyer can read both and still not notice there is no affordable way out.
+`ExitCostsDto` puts them together, and `bothPathsCarryACost` is arithmetic
+(penalties exist *and* withdrawal forfeits something), not an opinion about
+fairness.
+
+Exit costs are computed against the **cheapest tier**, named in the response
+(`basisTierId`, `basisLandPrice`) so the figures are never mistaken for a
+particular buyer's position.
+
+### What is declared but deliberately inert
+
+- **`development_deadline_months`** (DF-4) is stored and published, and
+  **nothing tracks the clock**. Surfacing it needs an attention surface
+  (which does not exist backend-side) and a second scheduled job after the
+  reservation sweeper. Its own slice.
+- **`transfer_requires_consent`** (DF-5) is disclosed at purchase and
+  **not enforced** — there is no resale module. The story claimed resale
+  "assumes an owner can list freely"; **it does not.** The frontend's
+  `ResaleTransferStage` already begins at `developer_approval` with an
+  explicit decline path. The real problem is that consent lands at *transfer*
+  time, after the seller has listed, negotiated, accepted an offer and sent a
+  buyer through KYC — this epic's own sequence failure, one layer up. When
+  resale ships, surface the restriction at listing time, not only at the end.
+
+### Versioned, never overwritten
+
+Every declaration writes a new version (`estate_fees.version`, and a new row
+for refund/default terms); the previous one stays. A schedule that can be
+quietly revised after a buyer has seen it is not a disclosure, and FD-5's
+acknowledgement — **not built; it gates the transaction, not the hold, and
+belongs with checkout where the commitment actually forms** — has to be able
+to name the version it refers to.
+
+Note the three tables version **independently**. An acknowledgement will need
+to capture all three versions, not one number.
+
+### Reads use `portal.estates.view`, writes `portal.estates.manage`
+
+A deliberate deviation from the task spec, which put every disclosure route
+behind `manage`. Reading the fee schedule is what a sales manager does all day
+— they are the ones buyers ask — while defining it is what two roles do. That
+split is exactly why the two slugs exist.
+
+### The disclosure ships with its RLS policies, in the same changeset
+
+A developer's fee schedule, refund policy and penalty terms are their
+commercial position. Changeset 058 policies all four tables in the same slice
+that adds a read endpoint — deliberately not deferred to "whoever reads them
+next", which is the mistake inventory slice 3 had to correct after RLS was
+listed out of scope twice while nothing could read the rows back.
+
+## `./mvnw verify` used to migrate the developer's own database
+
+`LandvaultApplicationTests` was a bare `@SpringBootTest` with no
+Testcontainers, so it resolved `spring.datasource.*` to whatever the
+developer's configuration pointed at — their real local Postgres. Every test
+run applied the full changelog to it.
+
+**Found the expensive way**: an unreleased changeset (059) reached a live
+database without anyone starting the app, purely because the suite had run.
+Editing that changeset afterwards — legitimate, since nobody believed it had
+been applied anywhere — then failed checksum validation against a database it
+was never meant to touch. Reconciled by deleting that one
+`databasechangelog` row and letting the idempotent `CREATE OR REPLACE VIEW`
+re-run, the same technique changeset 047 needed.
+
+The class now owns a container, which makes it the cheapest real migration
+test in the suite as a side effect: a fresh database on every build means the
+whole changelog runs from nothing, so a changeset that only works against an
+already-migrated database fails immediately.
+
+**The rule**: a `@SpringBootTest` that starts a real context needs a
+container, always. `ModularityTests` is the one exception and is safe — it
+only names `@SpringBootTest` in its javadoc to say it deliberately isn't one,
+and starts no context at all.
+
+**A checking gotcha worth carrying**: verifying "has this changeset run?" with
+`WHERE id LIKE '05[6-9]%'` silently returns nothing, because SQL `LIKE` has no
+character classes — that is `SIMILAR TO` or `~`. It reads as a clean "not
+applied" and is simply a query that matches nothing. Use `~ '^05[6-9]'`.

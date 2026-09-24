@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        What it costs to walk away.
+
+        A REFUND TERM IS A PRICE. It belongs beside the price, not in a
+        document issued after the money has moved. Both source letters state
+        a deduction and a 90-day wait; both state them only in the allocation
+        letter.
+
+        Versioned on the same terms as estate_fees: the current policy is the
+        highest version, and a revision cannot quietly rewrite what a buyer
+        was shown.
+    -->
+    <changeSet id="057-create-estate-refund-terms-table" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE estate_refund_terms (
+                id                       uuid PRIMARY KEY,
+                tenant_id                uuid,
+                branch_id                uuid,
+                created_at               timestamptz NOT NULL,
+                created_by               varchar(255),
+                updated_at               timestamptz,
+                updated_by               varchar(255),
+                deleted                  boolean NOT NULL DEFAULT false,
+
+                estate_id                uuid NOT NULL REFERENCES estates (id),
+                version                  integer NOT NULL,
+
+                deduction_pct            numeric(5,2) NOT NULL,
+
+                -- Both letters: 90. Time is part of the cost, so it is part
+                -- of the disclosure.
+                processing_days          integer NOT NULL,
+
+                -- AMOUNT_PAID | TOTAL_PRICE. This materially changes the
+                -- figure a buyer gets back, and BOTH source letters are
+                -- ambiguous about it — which is exactly why the developer is
+                -- made to state it rather than the platform guessing.
+                applies_to               varchar(16) NOT NULL,
+
+                -- Fee types never returned under any circumstances. Double
+                -- King's ₦10,000 application fee is explicitly
+                -- non-refundable; a refund figure that ignored it would
+                -- overstate what the buyer actually receives.
+                non_refundable_fee_types varchar(32)[] NOT NULL DEFAULT '{}',
+
+                notes                    text,
+
+                CONSTRAINT uq_estate_refund_terms_version UNIQUE (estate_id, version),
+                CONSTRAINT ck_estate_refund_terms_pct
+                    CHECK (deduction_pct >= 0 AND deduction_pct <= 100),
+                CONSTRAINT ck_estate_refund_terms_days CHECK (processing_days >= 0)
+            );
+
+            CREATE INDEX idx_estate_refund_terms_estate ON estate_refund_terms (estate_id, version);
+            CREATE INDEX idx_estate_refund_terms_tenant_id ON estate_refund_terms (tenant_id);
+
+            COMMENT ON TABLE estate_refund_terms IS
+                'What a buyer gets back if they withdraw, and how long it takes. Required before a new '
+                'estate may be listed: a developer who will not state refund terms does not get a '
+                'listing. Some will object that their terms look harsh beside a competitor''s — the '
+                'terms are identical either way; one platform simply says so beforehand.';
+        ]]></sql>
+        <rollback>
+            DROP TABLE estate_refund_terms;
+        </rollback>
+    </changeSet>
+
+    <!--
+        What happens if the buyer falls behind, and what they lose.
+
+        Top Rank clause 6 escalates 5% at three months late, 10% at six, 20%
+        at twelve, or revokes on one month's notice. Double King revokes if
+        construction has not begun within three months. Neither letter says
+        what happens to money already paid on revocation — which is the
+        single most consequential omission in either document, and the reason
+        on_revocation_refund is a required field here.
+    -->
+    <changeSet id="057-create-estate-default-terms-table" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE estate_default_terms (
+                id                          uuid PRIMARY KEY,
+                tenant_id                   uuid,
+                branch_id                   uuid,
+                created_at                  timestamptz NOT NULL,
+                created_by                  varchar(255),
+                updated_at                  timestamptz,
+                updated_by                  varchar(255),
+                deleted                     boolean NOT NULL DEFAULT false,
+
+                estate_id                   uuid NOT NULL REFERENCES estates (id),
+                version                     integer NOT NULL,
+
+                revocation_trigger          text NOT NULL,
+                revocation_notice_days      integer,
+
+                -- Required, precisely because both source letters are silent
+                -- on it. "Your allocation may be revoked" without saying what
+                -- happens to the money is not a disclosure.
+                on_revocation_refund        text NOT NULL,
+
+                -- DF-4: stored as declared data only. Nothing surfaces or
+                -- tracks it yet — that needs an attention surface and a
+                -- second scheduled job, and belongs in its own slice.
+                -- Double King clause 2: work must commence within 3 months.
+                development_deadline_months integer,
+
+                -- DF-5: both letters forbid transfer without the company's
+                -- written consent. Disclosed here at purchase. NOT enforced:
+                -- there is no resale module yet.
+                -- TODO: when resale is built, this gates listing — and note
+                -- the frontend already models developer consent at TRANSFER
+                -- time (ResaleTransferStage starts at developer_approval),
+                -- which is this epic's own sequence failure one layer up:
+                -- the restriction is real, disclosed, and arrives after the
+                -- seller has listed, negotiated and accepted an offer.
+                transfer_requires_consent   boolean NOT NULL,
+
+                notes                       text,
+
+                CONSTRAINT uq_estate_default_terms_version UNIQUE (estate_id, version),
+                CONSTRAINT ck_estate_default_terms_notice
+                    CHECK (revocation_notice_days IS NULL OR revocation_notice_days >= 0),
+                CONSTRAINT ck_estate_default_terms_deadline
+                    CHECK (development_deadline_months IS NULL OR development_deadline_months > 0)
+            );
+
+            CREATE INDEX idx_estate_default_terms_estate ON estate_default_terms (estate_id, version);
+            CREATE INDEX idx_estate_default_terms_tenant_id ON estate_default_terms (tenant_id);
+
+            -- Months late -> percentage. A child of the versioned parent, so
+            -- a schedule cannot be edited out from under an acknowledgement.
+            CREATE TABLE estate_default_penalty_tiers (
+                id                  uuid PRIMARY KEY,
+                tenant_id           uuid,
+                branch_id           uuid,
+                created_at          timestamptz NOT NULL,
+                created_by          varchar(255),
+                updated_at          timestamptz,
+                updated_by          varchar(255),
+                deleted             boolean NOT NULL DEFAULT false,
+
+                default_terms_id    uuid NOT NULL REFERENCES estate_default_terms (id),
+                months_late         integer NOT NULL,
+                penalty_pct         numeric(5,2) NOT NULL,
+
+                CONSTRAINT uq_penalty_tiers_months UNIQUE (default_terms_id, months_late),
+                CONSTRAINT ck_penalty_tiers_months CHECK (months_late > 0),
+                CONSTRAINT ck_penalty_tiers_pct CHECK (penalty_pct >= 0 AND penalty_pct <= 100)
+            );
+
+            CREATE INDEX idx_penalty_tiers_terms ON estate_default_penalty_tiers (default_terms_id);
+            CREATE INDEX idx_penalty_tiers_tenant_id ON estate_default_penalty_tiers (tenant_id);
+
+            COMMENT ON TABLE estate_default_terms IS
+                'Penalties, revocation and transfer restrictions, disclosed before purchase rather than '
+                'discovered after. The platform does not forbid these terms; it makes sure the buyer '
+                'sees them while the decision is still open.';
+
+            COMMENT ON TABLE estate_default_penalty_tiers IS
+                'Late-payment escalation. Top Rank: 5% at 3 months, 10% at 6, 20% at 12. Read together '
+                'with the refund terms these describe a position with no cheap exit — fall behind and '
+                'you are penalised, withdraw and you lose the deduction. Neither clause is hidden on its '
+                'own; the trap is only visible when both are shown at once, which is what the combined '
+                'exit-cost view exists for.';
+        ]]></sql>
+        <rollback>
+            DROP TABLE estate_default_penalty_tiers;
+            DROP TABLE estate_default_terms;
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

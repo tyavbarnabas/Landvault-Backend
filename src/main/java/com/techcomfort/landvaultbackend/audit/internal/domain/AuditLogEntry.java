@@ -38,7 +38,12 @@ import java.util.UUID;
 )
 public class AuditLogEntry extends AbstractAppendOnlyEntity {
 
-    @Column(name = "actor_user_id", nullable = false)
+    /**
+     * Null when the platform itself acted — a scheduled job, with no human
+     * behind it. Every entry had an actor until the reservation expiry sweep
+     * arrived; see changeset 055 for why a sentinel user was rejected.
+     */
+    @Column(name = "actor_user_id")
     private UUID actorUserId;
 
     // A string code, not an enum — every module that will eventually write

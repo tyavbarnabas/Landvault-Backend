@@ -229,6 +229,8 @@ class MarketplaceIT {
         EstateDto first = createEstate(company, "Medium North", estateRing());
         createEstate(company, "Medium South", overlappingEstateRing());
 
+        declareMinimumDisclosure(company, first.id());
+
         ResponseEntity<PublicationDto> published = restTemplate.exchange(
                 "/api/portal/estates/" + first.id() + "/publish", HttpMethod.POST,
                 entity(company.token(), null), PublicationDto.class);
@@ -356,6 +358,26 @@ class MarketplaceIT {
      * tier, three plots (available, reserved, sold), a title, a verified
      * check, and planted private values the payload must never contain.
      */
+    /**
+     * Fees and refund terms are publication conditions now (changeset 059).
+     * These tests are not about disclosure, so they declare the honest
+     * minimum: an explicitly empty schedule — which is a real declaration,
+     * unlike silence — plus refund terms. A test that skips this gets a 409,
+     * which is the feature working rather than a broken fixture.
+     */
+    private void declareMinimumDisclosure(Tenant tenant, UUID estateId) {
+        assertThat(restTemplate.exchange(
+                "/api/portal/estates/" + estateId + "/fees", HttpMethod.PUT,
+                entity(tenant.token(), "{\"fees\":[]}"), String.class).getStatusCode())
+                .isEqualTo(HttpStatus.OK);
+        assertThat(restTemplate.exchange(
+                "/api/portal/estates/" + estateId + "/refund-terms", HttpMethod.PUT,
+                entity(tenant.token(), """
+                        {"deductionPct":20.00,"processingDays":90,"appliesTo":"total_price"}
+                        """), String.class).getStatusCode())
+                .isEqualTo(HttpStatus.OK);
+    }
+
     private Listing publishedListing(String name) {
         Tenant tenant = verifiedTenant(name + " Ltd");
         EstateDto estate = createEstate(tenant, name, estateRing());
@@ -378,6 +400,8 @@ class MarketplaceIT {
         post(tenant, "/api/portal/estates/" + estate.id() + "/verification-checks",
                 new CreateVerificationCheckRequest("title_verification", "verified", "manual_review",
                         "SECRET-NOTE internal only"), String.class);
+
+        declareMinimumDisclosure(tenant, estate.id());
 
         ResponseEntity<String> published = publish(tenant, estate.id());
         assertThat(published.getStatusCode()).as(published.getBody()).isEqualTo(HttpStatus.OK);

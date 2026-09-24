@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        The charges a buyer commits to beyond the advertised land price.
+
+        Derived from four real Nigerian allocation letters (August 2026).
+        Double King: ₦6,000,000 of land carrying ₦4,010,000 of fees — 67%
+        above the advertised figure. Top Rank: ₦4,500,000 of land against
+        ₦7,000,000 of infrastructure alone, for a true commitment of
+        ₦12,610,000, nearly three times what was advertised.
+
+        BOTH COMPANIES DISCLOSED EVERY TERM, AND BOTH APPEAR TO OPERATE
+        LEGALLY. The failure is one of sequence: every charge arrives in a
+        letter issued after the buyer has already paid. This table exists so
+        the same facts arrive while they can still affect the decision.
+
+        The platform DISCLOSES, it does not REGULATE. Nothing here caps,
+        warns on, or judges an amount — a 156% infrastructure fee is
+        representable, because it is real.
+
+        VERSIONED, NEVER OVERWRITTEN (FD-6). A developer revising a schedule
+        writes a new version; the old rows stay. A buyer's acknowledgement
+        (not built — it belongs with checkout, where the commitment forms)
+        must be able to name the version they were shown, and a fee that can
+        be quietly edited after the fact is not a disclosure.
+    -->
+    <changeSet id="056-create-estate-fees-table" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE estate_fees (
+                id                  uuid PRIMARY KEY,
+                tenant_id           uuid,
+                branch_id           uuid,
+                created_at          timestamptz NOT NULL,
+                created_by          varchar(255),
+                updated_at          timestamptz,
+                updated_by          varchar(255),
+                deleted             boolean NOT NULL DEFAULT false,
+
+                estate_id           uuid NOT NULL REFERENCES estates (id),
+
+                -- Which declaration this row belongs to. The current schedule
+                -- is the highest version; earlier ones are history, not noise.
+                version             integer NOT NULL,
+
+                -- APPLICATION | SETTING_OUT | INFRASTRUCTURE |
+                -- CONSTRUCTION_SUPERVISION | FACILITY_MANAGEMENT | SURVEY |
+                -- LEGAL | OTHER. Every one of these appears in the source
+                -- letters; none was invented to look thorough.
+                fee_type            varchar(32) NOT NULL,
+
+                -- Required for OTHER, so an unlabelled "other" charge cannot
+                -- be disclosed as a number with no name.
+                label               varchar(128),
+
+                -- A fixed fee carries amount; a variable one carries the
+                -- range instead. Never both, never neither — see the CHECK.
+                amount              numeric(19,4),
+                amount_min          numeric(19,4),
+                amount_max          numeric(19,4),
+                currency            varchar(3) NOT NULL,
+
+                is_fixed            boolean NOT NULL,
+
+                -- Why a variable fee varies, in the developer's own words.
+                -- Both letters say infrastructure is "subject to change due
+                -- to fluctuations in the prices of building materials" —
+                -- which is a genuine constraint, not necessarily a trick.
+                -- Cement prices really do move. What is NOT permitted is
+                -- silence.
+                variation_basis     text,
+
+                -- AT_APPLICATION | AT_ALLOCATION | ON_CONSTRUCTION_START |
+                -- ON_MILESTONE | ANNUAL | BEFORE_OCCUPATION
+                due_trigger         varchar(32) NOT NULL,
+
+                refundable          boolean NOT NULL,
+                is_mandatory        boolean NOT NULL,
+                notes               text,
+
+                CONSTRAINT uq_estate_fees_version_type
+                    UNIQUE NULLS NOT DISTINCT (estate_id, version, fee_type, label),
+
+                -- A fixed fee has an amount and no range; a variable one has
+                -- a range and no amount. Anything else is a figure nobody
+                -- can act on.
+                CONSTRAINT ck_estate_fees_fixed_has_amount
+                    CHECK ((is_fixed AND amount IS NOT NULL
+                            AND amount_min IS NULL AND amount_max IS NULL)
+                        OR (NOT is_fixed AND amount IS NULL
+                            AND amount_min IS NOT NULL AND amount_max IS NOT NULL)),
+
+                -- A range that runs backwards is a typo, not a range.
+                CONSTRAINT ck_estate_fees_range_ordered
+                    CHECK (amount_min IS NULL OR amount_max >= amount_min),
+
+                -- A variable fee must say WHY it varies. This is the whole
+                -- point of allowing ranges: the alternative to a stated basis
+                -- is not a fixed price, it is silence.
+                CONSTRAINT ck_estate_fees_variation_basis
+                    CHECK (is_fixed OR (variation_basis IS NOT NULL AND btrim(variation_basis) <> '')),
+
+                CONSTRAINT ck_estate_fees_amounts_positive
+                    CHECK ((amount IS NULL OR amount >= 0)
+                       AND (amount_min IS NULL OR amount_min >= 0))
+            );
+
+            CREATE INDEX idx_estate_fees_estate_version ON estate_fees (estate_id, version);
+            CREATE INDEX idx_estate_fees_tenant_id ON estate_fees (tenant_id);
+
+            COMMENT ON TABLE estate_fees IS
+                'Charges beyond the land price, declared before an estate may be listed. Versioned: a '
+                'revision writes a new version and leaves the old one intact, so a buyer''s '
+                'acknowledgement can name what they were actually shown.';
+
+            COMMENT ON COLUMN estate_fees.is_mandatory IS
+                'A fee whose stated condition is ITSELF mandatory must be recorded as mandatory. Both '
+                'source letters charge setting-out and supervision only "if you build" — and both also '
+                'REQUIRE building (Double King clause 1 mandates a 4-bedroom terrace duplex, Top Rank '
+                'clause 2 a 2-bedroom). Reading those fees as conditional is the natural reading of the '
+                'documents and the wrong one: the buyer has no path that avoids them.';
+
+            COMMENT ON COLUMN estate_fees.due_trigger IS
+                'When the charge falls due. ANNUAL covers recurring obligations — both letters impose a '
+                'yearly facility-management fee, Double King''s payable by 15 January, Top Rank''s '
+                '"subject to change by the appointed facility manager", i.e. open-ended. An open-ended '
+                'recurring fee is representable as exactly that (is_fixed = false with a variation '
+                'basis saying so) and must never be flattened into a number implying certainty.';
+        ]]></sql>
+        <rollback>
+            DROP TABLE estate_fees;
+        </rollback>
+    </changeSet>
+
+    <!--
+        The declaration marker, and the grandfathering.
+
+        fees_declared_at is what the publication condition actually reads —
+        NOT a count of fee rows. An estate with genuinely no extra charges
+        must be able to list, but by SAYING so, not by staying silent. Those
+        are different facts and the schema keeps them different.
+
+        fees_declaration_exempt is a one-time grandfathering flag, set below
+        for estates already published when this changeset ran. Backfilling
+        fees_declared_at for them instead would have been a lie: it would
+        record a declaration that never happened, which is precisely the
+        fabrication this whole feature exists to prevent.
+
+        TODO: once existing estates have real schedules, backfill them,
+        clear this flag, and drop the column together with its term in the
+        eligibility view.
+    -->
+    <changeSet id="056-add-estate-fee-declaration-columns" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE estates
+                ADD COLUMN fees_declared_at        timestamptz,
+                ADD COLUMN fees_version            integer NOT NULL DEFAULT 0,
+                ADD COLUMN fees_declaration_exempt boolean NOT NULL DEFAULT false;
+
+            -- Grandfathering, applied once: every estate already on the
+            -- marketplace keeps its listing. Requiring a declaration
+            -- retroactively would delist real, live listings to make a
+            -- point — principle over usefulness. New publications get no
+            -- such exemption.
+            UPDATE estates SET fees_declaration_exempt = true
+             WHERE published = true AND deleted = false;
+
+            COMMENT ON COLUMN estates.fees_declared_at IS
+                'When this estate''s fee schedule was last declared. NULL means nobody has said anything '
+                '— which is NOT the same as declaring no fees, and blocks publication. Declaring an '
+                'empty schedule sets this and is permitted.';
+
+            COMMENT ON COLUMN estates.fees_declaration_exempt IS
+                'One-time grandfathering: true for estates already published when full cost disclosure '
+                'shipped. They predate the requirement and keep their listing. TODO: backfill real '
+                'schedules for these, then clear the flag and drop this column and its term in '
+                'marketplace_estate_eligibility.';
+        ]]></sql>
+        <rollback>
+            ALTER TABLE estates
+                DROP COLUMN fees_declared_at,
+                DROP COLUMN fees_version,
+                DROP COLUMN fees_declaration_exempt;
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

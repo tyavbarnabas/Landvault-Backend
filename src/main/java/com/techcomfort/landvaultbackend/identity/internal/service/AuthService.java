@@ -2,6 +2,7 @@ package com.techcomfort.landvaultbackend.identity.internal.service;
 
 import com.techcomfort.landvaultbackend.audit.AuditApi;
 import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
+import com.techcomfort.landvaultbackend.identity.BuyerKycStatusProvider;
 import com.techcomfort.landvaultbackend.identity.dto.AuthResponse;
 import com.techcomfort.landvaultbackend.identity.dto.AuthUserResponse;
 import com.techcomfort.landvaultbackend.identity.dto.ForgotPasswordRequest;
@@ -89,6 +90,11 @@ public class AuthService {
     private final TwoFaChallengeRepository twoFaChallengeRepository;
     private final RecoveryCodeRepository recoveryCodeRepository;
     private final TwoFaProperties twoFaProperties;
+    /**
+     * Implemented in {@code kyc}, declared in this module — see
+     * {@link BuyerKycStatusProvider} for why the arrow points that way.
+     */
+    private final BuyerKycStatusProvider buyerKycStatusProvider;
 
     // Precomputed once at startup, not per login attempt — see login()'s
     // timing-safe-failure comment. Not `final`/constructor-assigned: it's
@@ -394,7 +400,13 @@ public class AuthService {
                 user.getPhone(),
                 user.getCountry(),
                 user.getCurrency(),
-                "unsubmitted",
+                // The buyer's real verification status. No record at all
+                // reads as "unsubmitted" — an honest absence, since nothing
+                // is written until a buyer actually submits. This was a
+                // hardcoded literal until the kyc module existed to answer
+                // it; leaving it hardcoded would have been a lie the moment
+                // anyone got verified.
+                buyerKycStatusProvider.kycStatusOf(user.getId()).orElse("unsubmitted"),
                 "NG".equalsIgnoreCase(user.getCountry()) ? "local" : "diaspora",
                 twoFaConfirmed,
                 Boolean.TRUE.equals(user.getMustChangePassword()),

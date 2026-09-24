@@ -116,11 +116,37 @@ public class Estate extends AbstractEntity {
     @Column(name = "image_url")
     private String imageUrl;
 
+    /**
+     * When the fee schedule was last declared — the sixth publication
+     * condition reads this, not a count of fee rows. Declaring an
+     * <em>empty</em> schedule is legitimate and sets this; staying silent
+     * does not, and the two are different facts.
+     */
+    @Column(name = "fees_declared_at")
+    private Instant feesDeclaredAt;
+
+    /** Which {@code estate_fees} version is current. Incremented per declaration. */
+    @Column(name = "fees_version", nullable = false)
+    private Integer feesVersion;
+
+    /**
+     * One-time grandfathering for estates already published when disclosure
+     * shipped — see changeset 056. Never set for a new estate.
+     */
+    @Column(name = "fees_declaration_exempt", nullable = false)
+    private Boolean feesDeclarationExempt;
+
     @Override
     public void prePersist() {
         super.prePersist();
         if (published == null) {
             published = false;
+        }
+        if (feesVersion == null) {
+            feesVersion = 0;
+        }
+        if (feesDeclarationExempt == null) {
+            feesDeclarationExempt = false;
         }
     }
 }

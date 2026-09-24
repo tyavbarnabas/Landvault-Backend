@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        The same two-permissive-policy shape as changesets 020 and 044, on
+        the four disclosure tables.
+
+        Not optional, and not deferrable to "the slice that reads them": a
+        developer's fee schedule, refund policy and penalty terms are their
+        commercial position, and one company reading another's would be a
+        real leak. Inventory slice 3 learned this the expensive way — RLS
+        was listed as out of scope for two slices, which was harmless while
+        nothing could read the rows back and became a breach the moment a
+        read endpoint existed. These tables ship with a read endpoint in the
+        same slice, so the policies ship with them.
+
+        `tenant_id::text = current_setting(...)`, never
+        `current_setting(...)::uuid` — Postgres does not guarantee
+        left-to-right evaluation of a USING clause, so a cast on the setting
+        can run before the guard meant to protect it and throw on ''. See
+        changeset 020.
+
+        The public marketplace reads these through owner-privileged views
+        (changeset 059), not through these policies — an anonymous buyer has
+        no scope at all and would otherwise see nothing.
+    -->
+    <changeSet id="058-enable-rls-disclosure-tables" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE estate_fees ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE estate_fees FORCE ROW LEVEL SECURITY;
+            ALTER TABLE estate_refund_terms ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE estate_refund_terms FORCE ROW LEVEL SECURITY;
+            ALTER TABLE estate_default_terms ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE estate_default_terms FORCE ROW LEVEL SECURITY;
+            ALTER TABLE estate_default_penalty_tiers ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE estate_default_penalty_tiers FORCE ROW LEVEL SECURITY;
+
+            CREATE POLICY estate_fees_platform ON estate_fees FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY estate_fees_tenant ON estate_fees FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                );
+
+            CREATE POLICY estate_refund_terms_platform ON estate_refund_terms FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY estate_refund_terms_tenant ON estate_refund_terms FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                );
+
+            CREATE POLICY estate_default_terms_platform ON estate_default_terms FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY estate_default_terms_tenant ON estate_default_terms FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                );
+
+            CREATE POLICY penalty_tiers_platform ON estate_default_penalty_tiers FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY penalty_tiers_tenant ON estate_default_penalty_tiers FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                );
+        ]]></sql>
+        <rollback>
+            DROP POLICY penalty_tiers_tenant ON estate_default_penalty_tiers;
+            DROP POLICY penalty_tiers_platform ON estate_default_penalty_tiers;
+            DROP POLICY estate_default_terms_tenant ON estate_default_terms;
+            DROP POLICY estate_default_terms_platform ON estate_default_terms;
+            DROP POLICY estate_refund_terms_tenant ON estate_refund_terms;
+            DROP POLICY estate_refund_terms_platform ON estate_refund_terms;
+            DROP POLICY estate_fees_tenant ON estate_fees;
+            DROP POLICY estate_fees_platform ON estate_fees;
+            ALTER TABLE estate_default_penalty_tiers NO FORCE ROW LEVEL SECURITY;
+            ALTER TABLE estate_default_penalty_tiers DISABLE ROW LEVEL SECURITY;
+            ALTER TABLE estate_default_terms NO FORCE ROW LEVEL SECURITY;
+            ALTER TABLE estate_default_terms DISABLE ROW LEVEL SECURITY;
+            ALTER TABLE estate_refund_terms NO FORCE ROW LEVEL SECURITY;
+            ALTER TABLE estate_refund_terms DISABLE ROW LEVEL SECURITY;
+            ALTER TABLE estate_fees NO FORCE ROW LEVEL SECURITY;
+            ALTER TABLE estate_fees DISABLE ROW LEVEL SECURITY;
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

@@ -42,6 +42,15 @@ public record MarketplaceListingDto(
         Currency fromPriceCurrency,
         long plotsRemaining,
         boolean hasMap,
-        List<MarketplaceVerificationCheckDto> verificationChecks
+        List<MarketplaceVerificationCheckDto> verificationChecks,
+
+        /**
+         * The declared charges, refund policy and default terms. Present on
+         * the feed as well as the detail: FD-2 is explicit that the total is
+         * not hidden behind a tap, and one code path is harder to get wrong
+         * than two. Null only for a grandfathered estate that predates the
+         * requirement.
+         */
+        CostDisclosureDto costDisclosure
 ) {
 }

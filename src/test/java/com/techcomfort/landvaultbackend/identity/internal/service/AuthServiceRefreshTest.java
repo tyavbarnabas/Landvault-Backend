@@ -81,7 +81,10 @@ class AuthServiceRefreshTest {
                 userRepository, roleRepository, permissionRepository, userRoleRepository,
                 refreshTokenRepository, passwordEncoder, jwtService, jwtProperties, tenancyApi,
                 otpCodeRepository, otpDeliveryService, otpProperties, auditApi,
-                twoFaChallengeRepository, recoveryCodeRepository, TWO_FA_PROPERTIES);
+                twoFaChallengeRepository, recoveryCodeRepository, TWO_FA_PROPERTIES,
+                // No KYC record for these users: the login response reads
+                // "unsubmitted", which is what an absent record means.
+                userId -> Optional.empty());
         // @PostConstruct isn't invoked by a plain `new` outside Spring —
         // only refresh() is under test here so dummyPasswordHash being
         // unset wouldn't currently bite, but call it anyway so this stays

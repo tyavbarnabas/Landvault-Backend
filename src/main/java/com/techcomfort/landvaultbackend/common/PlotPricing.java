@@ -1,4 +1,4 @@
-package com.techcomfort.landvaultbackend.inventory.internal.service;
+package com.techcomfort.landvaultbackend.common;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;

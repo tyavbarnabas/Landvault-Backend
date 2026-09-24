@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        audit_log_entries.actor_user_id becomes nullable, and null now means
+        "the platform itself did this".
+
+        Found by the reservation expiry sweep, not by inspection. Every audit
+        entry written until now came from a request, so "some human did this"
+        was a safe assumption and NOT NULL encoded it. The first scheduled job
+        in this system breaks it: a hold expiring is nobody's action. TX-5
+        says so explicitly — the actor is the system, not the buyer.
+
+        The alternatives were worse. Writing the buyer's id would state in the
+        permanent record that they released a plot they did not touch, which
+        is precisely the misattribution an audit trail exists to prevent, and
+        a disputed allocation is exactly when someone would read it. A
+        sentinel "system user" row would put a login-shaped record in `users`
+        that nobody can log in as, and which every user-facing count and
+        listing would then have to remember to exclude.
+
+        The read path renders null as "System" rather than "Unknown user":
+        an entry whose actor was deleted and an entry that never had one are
+        different facts, and the reader deserves to see which is which.
+    -->
+    <changeSet id="055-allow-system-actor-in-audit-log" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE audit_log_entries ALTER COLUMN actor_user_id DROP NOT NULL;
+
+            COMMENT ON COLUMN audit_log_entries.actor_user_id IS
+                'The user who performed the action, or NULL when the platform itself did — a '
+                'scheduled job with no human behind it, such as a reservation hold expiring. '
+                'Deliberately not a sentinel user id: an action nobody took should read as such, '
+                'and attributing it to the affected user would misrepresent the record.';
+        ]]></sql>
+        <rollback>
+            <!--
+                Only succeeds while no system-authored entry exists. Once the
+                expiry sweep has run even once, rolling back means deleting
+                those rows first — which an append-only table forbids. That
+                is inherent to the change, not a defect in it: the point of
+                the column being nullable is that some entries genuinely have
+                no actor.
+            -->
+            ALTER TABLE audit_log_entries ALTER COLUMN actor_user_id SET NOT NULL;
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

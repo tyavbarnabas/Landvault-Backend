@@ -30,6 +30,13 @@ public class AuditLogQueryService {
 
     private static final String UNKNOWN_ACTOR = "Unknown user";
 
+    /**
+     * An entry with no actor at all: the platform acted, not a person. A
+     * different fact from an actor whose account was since deleted, so it
+     * reads differently.
+     */
+    private static final String SYSTEM_ACTOR = "System";
+
     private final AuditLogEntryRepository repository;
     private final ActorNameResolver actorNameResolver;
 
@@ -59,9 +66,12 @@ public class AuditLogQueryService {
         return new AuditLogEntryDto(
                 entry.getId(),
                 entry.getActorUserId(),
-                // An entry whose actor was since deleted still has to render
-                // — honest placeholder, never blank and never a crash.
-                names.getOrDefault(entry.getActorUserId(), UNKNOWN_ACTOR),
+                // Three cases, kept distinct: the platform acted, a person
+                // acted, or a person acted and their account is gone. Never
+                // blank, never a crash.
+                entry.getActorUserId() == null
+                        ? SYSTEM_ACTOR
+                        : names.getOrDefault(entry.getActorUserId(), UNKNOWN_ACTOR),
                 entry.getAction(),
                 entry.getTargetType(),
                 entry.getTargetId(),

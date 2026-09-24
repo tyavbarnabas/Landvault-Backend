@@ -6,7 +6,7 @@ import com.fasterxml.jackson.annotation.JsonValue;
 /**
  * What the <strong>seller is offering</strong> — sale, rent, or either.
  * <p>
- * <strong>Do not confuse this with {@link PlotIntent}</strong>, which
+ * <strong>Do not confuse this with {@code PlotIntent}</strong>, which
  * describes what a <em>buyer</em> means to do with the land (develop it or
  * hold it as an investment). Different axes, both legitimate: a plot can be
  * {@code FOR_SALE} with {@code PlotIntent.INVESTMENT}, or {@code FOR_RENT}

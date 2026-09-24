@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        The pending purchase record (TX-1). Created at reservation so that
+        everything downstream — payments, documents, the portfolio entry —
+        has something to attach to.
+
+        PRICE IS CAPTURED HERE, NOT REFERENCED. base_price, corner_premium_pct
+        and total_price are copies taken at reservation, deliberately not
+        joins to price_tiers: a developer re-pricing a tier mid-checkout must
+        not silently alter what the buyer agreed to. This is the one place in
+        this schema where duplicating a value is correct rather than drift —
+        the tier's price answers "what does this cost today", the transaction
+        answers "what was agreed", and those are different questions.
+
+        None of these figures is ever accepted from the request body. They
+        are computed server-side from the tier and the estate's corner
+        premium at the instant the plot is acquired. A client-supplied price
+        is the same class of hole as a client-supplied tenant_id.
+
+        Same tenant_id/seller_tenant_id split, and the same absence of an RLS
+        policy, as reservations — see 052.
+    -->
+    <changeSet id="053-create-transactions-table" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE transactions (
+                id                  uuid PRIMARY KEY,
+                tenant_id           uuid,
+                branch_id           uuid,
+                created_at          timestamptz NOT NULL,
+                created_by          varchar(255),
+                updated_at          timestamptz,
+                updated_by          varchar(255),
+                deleted             boolean NOT NULL DEFAULT false,
+
+                -- Human-quotable on a bank transfer or a support call, which
+                -- a uuid is not. Unique, generated server-side.
+                reference           varchar(32) NOT NULL,
+
+                buyer_user_id       uuid NOT NULL REFERENCES users (id),
+                plot_id             uuid NOT NULL REFERENCES plots (id),
+                estate_id           uuid NOT NULL REFERENCES estates (id),
+                seller_tenant_id    uuid NOT NULL REFERENCES organizations (id),
+                reservation_id      uuid NOT NULL REFERENCES reservations (id),
+
+                -- The tier's own price, before any corner premium.
+                base_price          numeric(19,4) NOT NULL,
+                -- NULL on a non-corner plot rather than 0, so a premium that
+                -- was not applied never reads as though it was.
+                corner_premium_pct  numeric(5,2),
+                total_price         numeric(19,4) NOT NULL,
+                currency            varchar(3) NOT NULL,
+
+                -- DEVELOPMENT | INVESTMENT — what the BUYER intends to do
+                -- with the land. Not the seller's ListingIntent; see
+                -- PlotIntent's javadoc for why the two stay separate.
+                intent              varchar(16) NOT NULL,
+
+                -- OUTRIGHT | INSTALLMENT | MILESTONE. Recorded here only;
+                -- generating the schedule belongs to finance (TX-2).
+                plan                varchar(16) NOT NULL,
+                installment_months  integer,
+
+                status              varchar(24) NOT NULL,
+
+                CONSTRAINT uq_transactions_reference UNIQUE (reference),
+                -- One transaction per hold. A second POST for the same
+                -- reservation is a duplicate, not a second purchase.
+                CONSTRAINT uq_transactions_reservation UNIQUE (reservation_id),
+                -- Cannot be a CHECK on plan alone: a month count is
+                -- meaningless without an installment plan, and an
+                -- installment plan without one has nothing to schedule.
+                CONSTRAINT ck_transactions_installment_months
+                    CHECK ((plan = 'INSTALLMENT') = (installment_months IS NOT NULL))
+            );
+
+            CREATE INDEX idx_transactions_buyer ON transactions (buyer_user_id);
+            CREATE INDEX idx_transactions_seller ON transactions (seller_tenant_id);
+
+            COMMENT ON TABLE transactions IS
+                'A pending purchase. Created at reservation in PENDING_PAYMENT and left there by this '
+                'module: reservation does not allocate, and no payment signal is ever treated as '
+                'confirmation (TX-3). Every later status belongs to finance, which does not exist yet.';
+
+            COMMENT ON COLUMN transactions.total_price IS
+                'Captured at reservation: base_price adjusted by corner_premium_pct, computed server-side '
+                'via PlotPricing. Never accepted from the request, never recomputed on read — a tier '
+                'price change after this row exists must not alter what the buyer agreed to.';
+        ]]></sql>
+        <rollback>
+            DROP TABLE transactions;
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

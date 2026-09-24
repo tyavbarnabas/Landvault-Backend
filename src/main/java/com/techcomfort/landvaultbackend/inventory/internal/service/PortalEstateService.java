@@ -31,7 +31,7 @@ import com.techcomfort.landvaultbackend.inventory.internal.domain.Plot;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.PriceTier;
 import com.techcomfort.landvaultbackend.common.EstateIntent;
 import com.techcomfort.landvaultbackend.inventory.internal.enums.ListingIntent;
-import com.techcomfort.landvaultbackend.inventory.internal.enums.PlotIntent;
+import com.techcomfort.landvaultbackend.common.PlotIntent;
 import com.techcomfort.landvaultbackend.inventory.internal.enums.PlotOrientation;
 import com.techcomfort.landvaultbackend.inventory.internal.enums.PlotStatus;
 import com.techcomfort.landvaultbackend.inventory.internal.enums.PropertyType;
@@ -515,6 +515,22 @@ public class PortalEstateService {
         if (!eligibility.tenantActive()) {
             codes.add("PUBLICATION_TENANT_NOT_ACTIVE");
             reasons.add("Your company's account isn't active, so listings can't be published right now.");
+        }
+        if (!eligibility.feesDeclared()) {
+            // The condition this platform adds that the market does not: a
+            // listing whose true cost is undeclared is exactly the listing a
+            // buyer cannot evaluate.
+            codes.add("PUBLICATION_FEES_UNDECLARED");
+            reasons.add("Declare this estate's fee schedule before listing it. Declaring that there "
+                    + "are no charges beyond the land price counts — saying nothing does not.");
+        }
+        if (!eligibility.refundTermsDeclared()) {
+            // RF-4. Developers sometimes object that their terms look harsh
+            // beside a competitor's; the terms are identical either way, and
+            // only one platform says so beforehand.
+            codes.add("PUBLICATION_REFUND_TERMS_UNDECLARED");
+            reasons.add("Declare what a buyer gets back if they withdraw, and how long it takes, "
+                    + "before listing this estate.");
         }
         if (conflicts.blocked()) {
             codes.add("PUBLICATION_CONFLICT_OUTSTANDING");

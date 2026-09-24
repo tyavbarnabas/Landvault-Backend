@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        A 45-minute hold on one plot (RS-1).
+
+        seller_tenant_id is an EXPLICIT, PURPOSE-NAMED FK, and the inherited
+        tenant_id deliberately stays NULL — the same split Branch already
+        makes for a different reason. The distinction matters here: a
+        reservation is owned by the BUYER, who has no tenant at all, while
+        the plot belongs to a company. Populating the generic tenant_id would
+        say "this row is isolated to that company", which is the opposite of
+        true, and would silently hide a buyer's own reservation from them the
+        day a generic tenant policy is applied to this table.
+
+        NOT RLS-POLICIED, same reasoning as kyc_records: buyer-owned rows
+        reached only by the authenticated buyer's own id. A policy keyed on
+        tenant would fail closed for every buyer. When finance needs the
+        seller's side of this, the answer is a scoped projection, not a
+        generic policy bolted on.
+
+        expires_at, not a Redis TTL. A key expiring in Redis does not flip
+        plots.status back in Postgres, so a sweeper has to exist regardless —
+        at which point Redis would be a second source of truth for
+        availability with nothing reconciling the two. See AGENTS.md.
+    -->
+    <changeSet id="052-create-reservations-table" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE reservations (
+                id                   uuid PRIMARY KEY,
+                tenant_id            uuid,
+                branch_id            uuid,
+                created_at           timestamptz NOT NULL,
+                created_by           varchar(255),
+                updated_at           timestamptz,
+                updated_by           varchar(255),
+                deleted              boolean NOT NULL DEFAULT false,
+
+                buyer_user_id        uuid NOT NULL REFERENCES users (id),
+                plot_id              uuid NOT NULL REFERENCES plots (id),
+                estate_id            uuid NOT NULL REFERENCES estates (id),
+                seller_tenant_id     uuid NOT NULL REFERENCES organizations (id),
+
+                -- The tier the plot was priced by when it was held. Captured
+                -- rather than joined for the same reason the transaction
+                -- captures the price itself: a plot re-tiered mid-checkout
+                -- must not silently re-describe a hold already taken.
+                price_tier_id        uuid NOT NULL REFERENCES price_tiers (id),
+
+                -- THE PRICE IS CAPTURED HERE, at the instant the plot is
+                -- locked, from the same snapshot that granted the lock —
+                -- not when the transaction is opened a few minutes later.
+                -- TX-1 requires that a tier re-priced mid-checkout cannot
+                -- alter what the buyer agreed to, and the buyer agreed when
+                -- they took the hold. The transaction copies these figures;
+                -- nothing re-reads the tier.
+                base_price           numeric(19,4) NOT NULL,
+                corner_premium_pct   numeric(5,2),
+                total_price          numeric(19,4) NOT NULL,
+                currency             varchar(3) NOT NULL,
+
+                -- What the plot was before the hold, restored when the hold
+                -- ends. NOT a hardcoded 'AVAILABLE_DEV' on release:
+                -- AVAILABLE_DEV and AVAILABLE_INV are a real distinction
+                -- (a development plot must not silently become an investment
+                -- one), so the variant is captured at acquire time.
+                previous_plot_status varchar(32) NOT NULL,
+
+                -- ACTIVE | EXPIRED | RELEASED | CONVERTED. Wire values are
+                -- the frontend's Reservation.status union verbatim; the
+                -- task's own spec said CANCELLED where the frontend says
+                -- released, and the frontend's contract already exists.
+                status               varchar(16) NOT NULL,
+
+                expires_at           timestamptz NOT NULL,
+                ended_at             timestamptz
+            );
+
+            CREATE INDEX idx_reservations_buyer ON reservations (buyer_user_id);
+
+            -- The sweeper's query: live holds whose time is up. Partial, so
+            -- it stays small as closed reservations accumulate.
+            CREATE INDEX idx_reservations_expiry ON reservations (expires_at)
+                WHERE status = 'ACTIVE';
+
+            -- A database backstop under the atomic acquire, not the acquire
+            -- itself. The CAS on plots.status is what actually decides the
+            -- race; this makes a second ACTIVE hold on one plot
+            -- unrepresentable even if some future code path forgets to go
+            -- through the acquire function at all.
+            CREATE UNIQUE INDEX uq_reservations_active_plot ON reservations (plot_id)
+                WHERE status = 'ACTIVE' AND deleted = false;
+
+            COMMENT ON TABLE reservations IS
+                'A 45-minute hold on one plot. Holding is not owning: a reservation never allocates, '
+                'and the plot is RESERVED, never SOLD, until finance verification (TX-3).';
+
+            COMMENT ON COLUMN reservations.expires_at IS
+                'Released by a scheduled sweep, never by the buyer''s browser — a closed laptop must '
+                'still return the plot to the pool (RS-3). Holds cannot be extended (RS-5).';
+        ]]></sql>
+        <rollback>
+            DROP TABLE reservations;
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

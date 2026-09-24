@@ -86,7 +86,10 @@ class AuthServicePasswordResetTest {
                 userRepository, roleRepository, permissionRepository, userRoleRepository,
                 refreshTokenRepository, passwordEncoder, jwtService, jwtProperties, tenancyApi,
                 otpCodeRepository, otpDeliveryService, otpProperties, auditApi,
-                twoFaChallengeRepository, recoveryCodeRepository, TWO_FA_PROPERTIES);
+                twoFaChallengeRepository, recoveryCodeRepository, TWO_FA_PROPERTIES,
+                // No KYC record for these users: the login response reads
+                // "unsubmitted", which is what an absent record means.
+                userId -> Optional.empty());
         authService.initDummyPasswordHash();
     }
 

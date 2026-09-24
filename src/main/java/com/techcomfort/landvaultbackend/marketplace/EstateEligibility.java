@@ -15,6 +15,14 @@ public record EstateEligibility(
         boolean tenantVerified,
         boolean tenantEntitled,
         boolean tenantActive,
+        /**
+         * The sixth condition: a fee schedule has been declared — including
+         * an explicitly empty one. Estates published before full cost
+         * disclosure shipped are grandfathered and report true.
+         */
+        boolean feesDeclared,
+        /** RF-4: refund terms exist. Grandfathered estates report true. */
+        boolean refundTermsDeclared,
         boolean eligible
 ) {
 }

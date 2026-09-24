@@ -16,6 +16,14 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import com.techcomfort.landvaultbackend.common.OpenApiConfig;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
+
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -37,6 +45,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/marketplace/estates")
 @RequiredArgsConstructor
+@Tag(name = OpenApiConfig.TAG_MARKETPLACE)
 public class MarketplaceController {
 
     private static final int DEFAULT_PAGE_SIZE = 24;
@@ -49,6 +58,38 @@ public class MarketplaceController {
      * plots_remaining, the frontend's own set. A price filter applies within
      * one currency, NGN unless {@code currency} says otherwise.
      */
+    @Operation(
+            summary = "Browse published estates (no authentication)",
+            description = """
+                    The public feed. **No token required** — browsing never needs an account, only \
+                    acting does. Rate-limited per client address.
+
+                    **An estate appears only if all five conditions hold**, evaluated on every read \
+                    rather than from a stored flag:
+
+                    1. the developer published it;
+                    2. the owning company's verification state is `verified`;
+                    3. that company holds the `marketplacePublishing` entitlement;
+                    4. its status is `active` — so a suspended *or offboarded* company's land is not \
+                    for sale;
+                    5. no blocking boundary conflict (an open HIGH, or one confirmed a duplicate).
+
+                    Because it is evaluated at read time, a suspended company's listings disappear \
+                    without being unpublished and return on reinstatement, with nothing republished.
+
+                    `sort` is one of `newest` (default), `price_low`, `price_per_sqm`, \
+                    `plots_remaining`. **A price filter only matches listings priced in the \
+                    requested `currency`** (NGN unless given): comparing ₦20,000,000 against $50,000 \
+                    would rank land by a meaningless number.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "A page of listings; empty when nothing "
+                    + "is currently eligible"),
+            @ApiResponse(responseCode = "400", description = "Unknown `sort`, `titleType` or `intent` "
+                    + "value", content = @Content()),
+            @ApiResponse(responseCode = "429", description = "Rate limited; see `Retry-After`",
+                    content = @Content())
+    })
+    @SecurityRequirements
     @GetMapping
     public ResponseEntity<PageResponse<MarketplaceListingDto>> list(
             @RequestParam(required = false) String q,
@@ -73,11 +114,54 @@ public class MarketplaceController {
         return ResponseEntity.ok(service.search(filters, pageable(cursor, limit, sort)));
     }
 
+    @Operation(
+            summary = "One published estate (no authentication)",
+            description = """
+                    Full detail: description, amenities, price tiers, seller, and the estate's \
+                    verification checks **with the source of each** — a registry lookup and a person \
+                    reading a PDF are different claims, and a buyer deciding whether to part with \
+                    money should see which.
+
+                    **A check type that is absent was never checked.** Render it as unchecked; never \
+                    as verified, and never as a clean bill of health.
+
+                    Tier prices are the base price. A corner plot costs \
+                    `price × (1 + cornerPremiumPct/100)`, computed by the client, never stored. \
+                    `pricePerSqm` is a display comparison and is null for a unit-type tier.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "The listing"),
+            @ApiResponse(responseCode = "404", description = "No such estate, or it is not currently "
+                    + "eligible — deliberately the same answer, so this cannot be used to discover "
+                    + "that a hidden estate exists", content = @Content())
+    })
+    @SecurityRequirements
     @GetMapping("/{id}")
     public ResponseEntity<MarketplaceListingDto> get(@PathVariable UUID id) {
         return ResponseEntity.ok(service.get(id));
     }
 
+    @Operation(
+            summary = "An estate's boundary and plots as GeoJSON (no authentication)",
+            description = """
+                    A `FeatureCollection`: the estate boundary first, then every plot that has one, \
+                    in **`[longitude, latitude]`** order (SRID 4326). The same shape the portal \
+                    returns, so one map component renders both.
+
+                    **Plot availability is only `AVAILABLE` or `UNAVAILABLE`.** Reserved and sold are \
+                    deliberately indistinguishable: the difference is internal sales information and \
+                    reveals sales velocity to competitors. Unavailable plots still appear, so the \
+                    estate reads as a real place rather than a sales sheet.
+
+                    Plots carry `priceTierId` and `isCorner` but no price — compute it from the \
+                    tier and the estate's corner premium. A plot with no surveyed boundary is \
+                    omitted rather than returned with a null geometry, which most mapping clients \
+                    would draw at [0, 0].""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "A GeoJSON FeatureCollection"),
+            @ApiResponse(responseCode = "404", description = "No such estate, or not eligible",
+                    content = @Content())
+    })
+    @SecurityRequirements
     @GetMapping("/{id}/geojson")
     public ResponseEntity<GeoJsonFeatureCollectionDto> geoJson(@PathVariable UUID id) {
         return ResponseEntity.ok(service.geoJson(id));

@@ -9,6 +9,13 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
+import com.techcomfort.landvaultbackend.common.OpenApiConfig;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -40,6 +47,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/admin/audit-log")
 @RequiredArgsConstructor
+@Tag(name = OpenApiConfig.TAG_ADMIN_AUDIT)
 public class AdminAuditLogController {
 
     private static final int DEFAULT_PAGE_SIZE = 25;
@@ -47,6 +55,28 @@ public class AdminAuditLogController {
 
     private final AuditLogQueryService service;
 
+    @Operation(
+            summary = "Read the audit trail",
+            description = """
+                    Requires `admin.audit.view` (held by `super_admin` and `compliance_officer`, \
+                    deliberately not by `platform_moderator`).
+
+                    **Read-only by design. There is no write, update, delete or archive route here, \
+                    and there must never be one** — the entries have no `updatedAt` and no soft-delete \
+                    flag at the schema level either. An append-only log that can be quietly revised \
+                    is not a record.
+
+                    Newest first, always. `privileged` marks entries where a platform operator used \
+                    support access to look into a tenant's data; filtering on it is the most likely \
+                    reason to open this screen deliberately.
+
+                    **Reads are not audited.** This log records actions, not page views — logging \
+                    browsing would drown the entries that matter.
+
+                    Platform scope only today: a Super Admin sees every tenant's entries. A \
+                    tenant-facing view would need both a policy on the table and a decision about \
+                    whether a tenant may see `privileged` entries about themselves.""")
+    @ApiResponse(responseCode = "200", description = "A page of audit entries, newest first")
     @GetMapping
     @PreAuthorize("hasAuthority('admin.audit.view')")
     public ResponseEntity<PageResponse<AuditLogEntryDto>> list(

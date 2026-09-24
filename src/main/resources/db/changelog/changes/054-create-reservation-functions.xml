@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        THE THIRD DELIBERATE RLS ESCAPE, after 043 (auth bootstrap) and 047
+        (conflict detection), and the first one that WRITES.
+
+        A buyer's session is tenant_id = '' and platform_scope = off, so
+        changeset 044's policies fail closed on plots: zero rows readable,
+        and — the dangerous half — zero rows updatable, with no error.
+        Verified directly against the app role rather than inferred.
+
+        That matters more here than anywhere it has come up before, because
+        the correct atomic-acquire idiom is exactly:
+
+            UPDATE plots SET status = 'RESERVED'
+             WHERE id = ? AND status IN ('AVAILABLE_DEV','AVAILABLE_INV')
+
+        and then checking the affected row count, where ZERO MEANS SOMEONE
+        ELSE WON THE RACE. RLS produces the identical zero. Without these
+        functions every buyer would be told the plot was already taken,
+        forever, with nothing anywhere to indicate why — and every test on a
+        superuser connection would pass.
+
+        A view cannot solve it (views are not writable), which is why this is
+        a function rather than the projection the marketplace slice used.
+
+        Hardened the same way as 043/047: SET search_path so a caller cannot
+        shadow `plots` with a temp table and have the definer's privileges
+        applied to it, EXECUTE revoked from PUBLIC and granted only to the
+        application role, and each function answers exactly one question
+        rather than opening the table.
+    -->
+    <changeSet id="054-create-reservation-functions" author="landvault">
+        <sql splitStatements="false"><![CDATA[
+            -- Acquires the hold and returns the facts the caller needs to
+            -- price it. Returns NO ROWS when the plot could not be acquired:
+            -- it does not exist, it is deleted, it is not available, or its
+            -- estate is no longer publicly eligible.
+            CREATE FUNCTION landvault_reserve_plot(p_plot_id uuid, p_actor varchar)
+            RETURNS TABLE (
+                previous_status     varchar,
+                estate_id           uuid,
+                seller_tenant_id    uuid,
+                branch_id           uuid,
+                price_tier_id       uuid,
+                tier_price          numeric,
+                tier_currency       varchar,
+                is_corner           boolean,
+                corner_premium_pct  numeric
+            )
+            LANGUAGE plpgsql
+            SECURITY DEFINER
+            SET search_path = public, pg_temp
+            AS $$
+            DECLARE
+                v_previous_status varchar;
+                v_estate_id       uuid;
+            BEGIN
+                -- SELECT ... FOR UPDATE is what makes this atomic, and it is
+                -- also the only way to learn the PREVIOUS status: Postgres 16
+                -- has no OLD.* in an UPDATE ... RETURNING (that arrived in 18),
+                -- and the variant matters — a development plot must not come
+                -- back from a released hold as an investment one.
+                --
+                -- Under READ COMMITTED, a second caller blocks here on the row
+                -- lock and then re-evaluates this WHERE against the committed
+                -- row version. It finds status = 'RESERVED', the qual fails,
+                -- and it gets NOT FOUND. Exactly one of two concurrent callers
+                -- can proceed past this point.
+                SELECT p.status, p.estate_id
+                  INTO v_previous_status, v_estate_id
+                  FROM plots p
+                 WHERE p.id = p_plot_id
+                   AND p.deleted = false
+                   AND p.status IN ('AVAILABLE_DEV', 'AVAILABLE_INV')
+                   FOR UPDATE;
+
+                IF NOT FOUND THEN
+                    RETURN;
+                END IF;
+
+                -- The five publication conditions, re-checked inside the lock
+                -- (TX-4). The service checks eligibility first so it can name
+                -- which condition failed; this is the backstop that makes
+                -- reserving on a delisted estate impossible even in the
+                -- window between the two.
+                IF NOT EXISTS (
+                    SELECT 1 FROM marketplace_estate_eligibility el
+                     WHERE el.estate_id = v_estate_id AND el.eligible
+                ) THEN
+                    RETURN;
+                END IF;
+
+                UPDATE plots p
+                   SET status = 'RESERVED',
+                       updated_at = now(),
+                       updated_by = p_actor
+                 WHERE p.id = p_plot_id;
+
+                RETURN QUERY
+                SELECT v_previous_status,
+                       p.estate_id,
+                       p.tenant_id,
+                       p.branch_id,
+                       p.price_tier_id,
+                       pt.price,
+                       pt.currency,
+                       p.is_corner,
+                       e.corner_premium_pct
+                  FROM plots p
+                  JOIN price_tiers pt ON pt.id = p.price_tier_id
+                  JOIN estates e      ON e.id = p.estate_id
+                 WHERE p.id = p_plot_id;
+            END;
+            $$;
+
+            -- Returns the plot to the pool. True when this call is what
+            -- released it; false when it was not held (already released by
+            -- the sweeper, say), which makes cancel and expiry idempotent
+            -- rather than racing each other.
+            CREATE FUNCTION landvault_release_plot(
+                p_plot_id uuid, p_restore_status varchar, p_actor varchar)
+            RETURNS boolean
+            LANGUAGE plpgsql
+            SECURITY DEFINER
+            SET search_path = public, pg_temp
+            AS $$
+            BEGIN
+                -- The status is caller-supplied, so it is validated here
+                -- rather than trusted. Without this, a definer function that
+                -- writes plots.status would be a way to mark any held plot
+                -- SOLD without a payment, from a buyer's own session — worse
+                -- than the RLS gap it exists to bridge.
+                IF p_restore_status NOT IN ('AVAILABLE_DEV', 'AVAILABLE_INV') THEN
+                    RAISE EXCEPTION 'landvault_release_plot: refusing to set plot status to %',
+                        p_restore_status;
+                END IF;
+
+                UPDATE plots p
+                   SET status = p_restore_status,
+                       updated_at = now(),
+                       updated_by = p_actor
+                 WHERE p.id = p_plot_id
+                   AND p.deleted = false
+                   AND p.status = 'RESERVED';
+
+                RETURN FOUND;
+            END;
+            $$;
+
+            REVOKE ALL ON FUNCTION landvault_reserve_plot(uuid, varchar) FROM PUBLIC;
+            REVOKE ALL ON FUNCTION landvault_release_plot(uuid, varchar, varchar) FROM PUBLIC;
+            GRANT EXECUTE ON FUNCTION landvault_reserve_plot(uuid, varchar) TO ${appDbUsername};
+            GRANT EXECUTE ON FUNCTION landvault_release_plot(uuid, varchar, varchar) TO ${appDbUsername};
+        ]]></sql>
+        <!--
+            Grants live in this same changeset rather than a separate one,
+            deliberately: dropping a function drops its grants with it, and
+            changeset 047 learned the hard way that a separate, unedited
+            grant changeset is skipped on re-run, leaving recreated functions
+            with no EXECUTE for the app role and a permission error at
+            runtime. One changeset, one object lifecycle.
+        -->
+        <rollback>
+            DROP FUNCTION IF EXISTS landvault_reserve_plot(uuid, varchar);
+            DROP FUNCTION IF EXISTS landvault_release_plot(uuid, varchar, varchar);
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

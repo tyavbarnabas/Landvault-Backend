@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Purchase-time identity verification, held at PLATFORM level.
+
+        The inherited tenant_id/branch_id stay NULL on every row, and that is
+        the whole point rather than an omission (KY-4): a buyer verifies once
+        and transacts with any company on the marketplace. Per-tenant KYC
+        would mean the same passport sitting in several companies' storage
+        and a buyer re-verifying for every purchase — and it is the
+        structural reason AGENTS.md gives for buyers never being
+        tenant-scoped in the first place.
+
+        NOT RLS-POLICIED, deliberately, same reasoning as users/refresh_tokens/
+        otp_codes: every row here belongs to a buyer, and a buyer's session
+        has no tenant scope and no platform scope, so a fail-closed policy
+        would hide a buyer's own record from them and nothing else. Rows are
+        reached only by user_id, never enumerated. This becomes a real
+        question the day a tenant-facing surface needs to see that a buyer is
+        verified (KY-5) — that view must expose the verification *outcome*,
+        never these rows, so the answer is likely a projection rather than a
+        policy. Not built here.
+    -->
+    <changeSet id="051-create-kyc-records-table" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE kyc_records (
+                id                  uuid PRIMARY KEY,
+                tenant_id           uuid,
+                branch_id           uuid,
+                created_at          timestamptz NOT NULL,
+                created_by          varchar(255),
+                updated_at          timestamptz,
+                updated_by          varchar(255),
+                deleted             boolean NOT NULL DEFAULT false,
+
+                user_id             uuid NOT NULL REFERENCES users (id),
+
+                -- LOCAL | DIASPORA. Stored, not derived on read, for the same
+                -- reason directors.is_beneficial_owner is stored: it decides
+                -- which documents were required of this buyer at the moment
+                -- they submitted, and recomputing it from a later country
+                -- change would silently rewrite what they were asked for.
+                buyer_type          varchar(16) NOT NULL,
+
+                status              varchar(24) NOT NULL,
+
+                -- NDPR-REGULATED PERSONAL DATA, ENCRYPTED AT REST.
+                -- AES-256-GCM via KycNinConverter, stored as
+                -- base64(iv || ciphertext) — hence text, not varchar(11):
+                -- this column never holds an eleven-digit NIN, it holds
+                -- ciphertext, and sizing it to the plaintext would truncate.
+                nin_number          text,
+
+                submitted_at        timestamptz,
+                decided_at          timestamptz,
+                decided_by_user_id  uuid,
+
+                -- MANUAL_REVIEW today, always. The column exists so that a
+                -- future NIMC/QoreID integration records which verifications
+                -- were machine-checked and which a human eyeballed — the same
+                -- distinction estate_verification_checks.verification_source
+                -- exists to preserve. A green badge from a registry API and
+                -- one from a person reading a PDF are different claims.
+                verification_source varchar(24),
+
+                CONSTRAINT uq_kyc_records_user UNIQUE (user_id)
+            );
+
+            CREATE INDEX idx_kyc_records_status ON kyc_records (status);
+
+            COMMENT ON TABLE kyc_records IS
+                'Purchase-time buyer identity verification. Platform-level: tenant_id is always NULL '
+                'because a buyer verifies once and transacts with any company (KY-4).';
+
+            COMMENT ON COLUMN kyc_records.nin_number IS
+                'NDPR-regulated. Encrypted at rest (AES-256-GCM, KycNinConverter). MET: encryption at rest, '
+                'and no API ever returns it — not even masked. OUTSTANDING: reads are not yet restricted to '
+                'compliance staff (nothing reads it at all today), individual reads are not audited as '
+                'events, and no retention policy is defined or enforced. Whoever builds the compliance '
+                'review screen owns closing those three — see AGENTS.md and directors.id_number, whose '
+                'four unmet obligations this table was created specifically not to repeat wholesale.';
+
+            COMMENT ON COLUMN kyc_records.status IS
+                'UNSUBMITTED | SUBMITTED | UNDER_REVIEW | APPROVED | REJECTED. Wire values are the '
+                'frontend''s KycStatus union verbatim. No record at all is also UNSUBMITTED: an unverified '
+                'buyer has no row, never a defaulted one.';
+        ]]></sql>
+        <rollback>
+            DROP TABLE kyc_records;
+        </rollback>
+    </changeSet>
+
+    <!--
+        Per-document status, not a single pass/fail flag on the record (KY-3).
+        A rejection has to name WHICH document failed and why, so the buyer
+        re-uploads that one rather than starting the whole submission again.
+    -->
+    <changeSet id="051-create-kyc-documents-table" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE kyc_documents (
+                id                  uuid PRIMARY KEY,
+                tenant_id           uuid,
+                branch_id           uuid,
+                created_at          timestamptz NOT NULL,
+                created_by          varchar(255),
+                updated_at          timestamptz,
+                updated_by          varchar(255),
+                deleted             boolean NOT NULL DEFAULT false,
+
+                kyc_record_id       uuid NOT NULL REFERENCES kyc_records (id),
+
+                -- NIN | PASSPORT | PROOF_OF_ADDRESS
+                doc_type            varchar(24) NOT NULL,
+
+                -- MISSING | SUBMITTED | APPROVED | REJECTED
+                status              varchar(16) NOT NULL,
+
+                -- Metadata only. Actual file storage is not built — same
+                -- position as organization_documents and estate boundary
+                -- upload: the column records where the object would live so
+                -- that wiring a bucket later needs no schema change.
+                file_name           varchar(255),
+                file_size           bigint,
+                storage_key         varchar(512),
+
+                rejection_reason    text,
+                submitted_at        timestamptz,
+
+                CONSTRAINT uq_kyc_documents_record_type UNIQUE (kyc_record_id, doc_type)
+            );
+
+            CREATE INDEX idx_kyc_documents_record ON kyc_documents (kyc_record_id);
+
+            COMMENT ON TABLE kyc_documents IS
+                'One row per document required of this buyer. The required set is derived from the '
+                'buyer''s country of residence: local buyers submit a NIN only (never a utility bill), '
+                'diaspora buyers a passport plus proof of address.';
+        ]]></sql>
+        <rollback>
+            DROP TABLE kyc_documents;
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

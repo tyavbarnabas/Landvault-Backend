@@ -1,0 +1,206 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        THE SIXTH PUBLICATION CONDITION.
+
+        This is the mechanism the whole epic turns on. "Please disclose your
+        fees" is a policy a developer can ignore; "you cannot list until you
+        have" is enforceable, and it is enforceable here because the
+        conditions live in exactly one place — this view — which both the
+        publish endpoint and the public feed read. A refusal and an absence
+        from the marketplace stay the same answer.
+
+        TWO new booleans, not one: a fee schedule (FD-1) and refund terms
+        (RF-4) are separate requirements that fail separately, and each is
+        kept beside the other five rather than folded into `eligible` alone,
+        for the reason PB-3 established — the publish endpoint has to name
+        the condition that actually failed, not just refuse.
+
+        Default terms are deliberately NOT required. DF-1's own condition is
+        "where installments are offered", and nothing on an estate records
+        whether they are: the payment plan is chosen per transaction, at
+        checkout. Requiring them unconditionally would enforce something the
+        story did not ask for; conditioning on a fact that does not exist
+        would be guesswork. Revisit when an estate declares which plans it
+        offers.
+
+        GRANDFATHERED: fees_declaration_exempt is true for every estate
+        already published when disclosure shipped. Requiring a declaration
+        retroactively would have delisted live listings to make a point.
+        New publications have no exemption.
+
+        CREATE OR REPLACE rather than DROP/CREATE: the dependent
+        marketplace_* views join this one, and dropping it would cascade.
+        Replacing is permitted because every existing column keeps its name,
+        type and position — fees_declared is appended at the end.
+    -->
+    <changeSet id="059-add-fee-declaration-to-eligibility" author="landvault">
+        <sql><![CDATA[
+            CREATE OR REPLACE VIEW marketplace_estate_eligibility WITH (security_barrier = true) AS
+            SELECT
+                e.id                                   AS estate_id,
+                e.published                            AS published,
+                (o.verification_state = 'VERIFIED')    AS tenant_verified,
+                o.marketplace_publishing               AS tenant_entitled,
+                (o.status = 'ACTIVE')                  AS tenant_active,
+                -- CASE short-circuits, so the conflict function — the only
+                -- expensive term — runs last, and only for estates that
+                -- already pass every cheap condition.
+                CASE
+                    WHEN e.published
+                     AND o.verification_state = 'VERIFIED'
+                     AND o.marketplace_publishing
+                     AND o.status = 'ACTIVE'
+                     AND (e.fees_declared_at IS NOT NULL OR e.fees_declaration_exempt)
+                     AND (e.fees_declaration_exempt OR EXISTS (
+                            SELECT 1 FROM estate_refund_terms rt
+                             WHERE rt.estate_id = e.id AND rt.deleted = false))
+                    THEN (SELECT s.blocking_count FROM landvault_estate_conflict_summary(e.id) s) = 0
+                    ELSE false
+                END                                    AS eligible,
+                -- Declaring an EMPTY schedule counts: an estate with no
+                -- extra charges may list, but by saying so. Silence does
+                -- not, and the two are different facts.
+                (e.fees_declared_at IS NOT NULL OR e.fees_declaration_exempt) AS fees_declared,
+                -- RF-4: a developer who will not state what a buyer gets
+                -- back does not get a listing. Its own boolean beside the
+                -- others so the publish endpoint can name which one failed.
+                (e.fees_declaration_exempt OR EXISTS (
+                        SELECT 1 FROM estate_refund_terms rt
+                         WHERE rt.estate_id = e.id AND rt.deleted = false)) AS refund_terms_declared
+            FROM estates e
+            JOIN organizations o ON o.id = e.tenant_id AND o.deleted = false
+            WHERE e.deleted = false;
+        ]]></sql>
+        <rollback>
+            <!-- 049's definition, verbatim. -->
+            <![CDATA[
+            CREATE OR REPLACE VIEW marketplace_estate_eligibility WITH (security_barrier = true) AS
+            SELECT
+                e.id                                   AS estate_id,
+                e.published                            AS published,
+                (o.verification_state = 'VERIFIED')    AS tenant_verified,
+                o.marketplace_publishing               AS tenant_entitled,
+                (o.status = 'ACTIVE')                  AS tenant_active,
+                CASE
+                    WHEN e.published
+                     AND o.verification_state = 'VERIFIED'
+                     AND o.marketplace_publishing
+                     AND o.status = 'ACTIVE'
+                    THEN (SELECT s.blocking_count FROM landvault_estate_conflict_summary(e.id) s) = 0
+                    ELSE false
+                END                                    AS eligible
+            FROM estates e
+            JOIN organizations o ON o.id = e.tenant_id AND o.deleted = false
+            WHERE e.deleted = false;
+            ]]>
+        </rollback>
+    </changeSet>
+
+    <!--
+        The disclosure itself, published to anyone — no account, no token.
+        A buyer has to be able to compare true commitments BEFORE deciding
+        whether this platform is worth registering for; putting the numbers
+        behind a signup would reintroduce the sequence problem in a new form.
+
+        Only the CURRENT version is exposed. History exists so a past
+        acknowledgement can be resolved, not so a buyer has to work out which
+        schedule applies to them.
+
+        Every view joins marketplace_estate_eligibility, so an ineligible
+        estate's terms are structurally unreachable rather than filtered by a
+        query someone might forget.
+    -->
+    <changeSet id="059-create-marketplace-disclosure-views" author="landvault">
+        <sql><![CDATA[
+            CREATE VIEW marketplace_estate_fees WITH (security_barrier = true) AS
+            SELECT
+                f.id              AS fee_id,
+                f.estate_id       AS estate_id,
+                f.fee_type        AS fee_type,
+                f.label           AS label,
+                f.amount          AS amount,
+                f.amount_min      AS amount_min,
+                f.amount_max      AS amount_max,
+                f.currency        AS currency,
+                f.is_fixed        AS is_fixed,
+                f.variation_basis AS variation_basis,
+                f.due_trigger     AS due_trigger,
+                f.refundable      AS refundable,
+                f.is_mandatory    AS is_mandatory,
+                f.notes           AS notes
+            FROM estate_fees f
+            JOIN estates e ON e.id = f.estate_id
+            JOIN marketplace_estate_eligibility el ON el.estate_id = f.estate_id AND el.eligible
+            -- The current declaration only. estates.fees_version is the
+            -- authoritative pointer: a max(version) subquery would return
+            -- nothing for an estate that declared an empty schedule, which
+            -- is a legitimate state.
+            WHERE f.deleted = false AND f.version = e.fees_version;
+
+            CREATE VIEW marketplace_refund_terms WITH (security_barrier = true) AS
+            SELECT DISTINCT ON (r.estate_id)
+                r.estate_id                AS estate_id,
+                r.deduction_pct            AS deduction_pct,
+                r.processing_days          AS processing_days,
+                r.applies_to               AS applies_to,
+                r.non_refundable_fee_types AS non_refundable_fee_types,
+                r.notes                    AS notes
+            FROM estate_refund_terms r
+            JOIN marketplace_estate_eligibility el ON el.estate_id = r.estate_id AND el.eligible
+            WHERE r.deleted = false
+            ORDER BY r.estate_id, r.version DESC;
+
+            CREATE VIEW marketplace_default_terms WITH (security_barrier = true) AS
+            SELECT DISTINCT ON (d.estate_id)
+                d.id                          AS default_terms_id,
+                d.estate_id                   AS estate_id,
+                d.revocation_trigger          AS revocation_trigger,
+                d.revocation_notice_days      AS revocation_notice_days,
+                d.on_revocation_refund        AS on_revocation_refund,
+                d.development_deadline_months AS development_deadline_months,
+                d.transfer_requires_consent   AS transfer_requires_consent,
+                d.notes                       AS notes
+            FROM estate_default_terms d
+            JOIN marketplace_estate_eligibility el ON el.estate_id = d.estate_id AND el.eligible
+            WHERE d.deleted = false
+            ORDER BY d.estate_id, d.version DESC;
+
+            CREATE VIEW marketplace_penalty_tiers WITH (security_barrier = true) AS
+            SELECT
+                t.id               AS penalty_tier_id,
+                d.estate_id        AS estate_id,
+                t.months_late      AS months_late,
+                t.penalty_pct      AS penalty_pct
+            FROM estate_default_penalty_tiers t
+            JOIN marketplace_default_terms d ON d.default_terms_id = t.default_terms_id
+            WHERE t.deleted = false;
+
+            REVOKE ALL ON marketplace_estate_fees, marketplace_refund_terms,
+                          marketplace_default_terms, marketplace_penalty_tiers
+                FROM PUBLIC;
+            REVOKE ALL ON marketplace_estate_fees, marketplace_refund_terms,
+                          marketplace_default_terms, marketplace_penalty_tiers
+                FROM ${appDbUsername};
+            -- SELECT only. Changeset 019's default privileges would otherwise
+            -- grant INSERT/UPDATE/DELETE on every new relation, views
+            -- included, and a write through an owner-privileged view would
+            -- bypass RLS entirely.
+            GRANT SELECT ON marketplace_estate_fees, marketplace_refund_terms,
+                            marketplace_default_terms, marketplace_penalty_tiers
+                TO ${appDbUsername};
+        ]]></sql>
+        <rollback>
+            DROP VIEW marketplace_penalty_tiers;
+            DROP VIEW marketplace_default_terms;
+            DROP VIEW marketplace_refund_terms;
+            DROP VIEW marketplace_estate_fees;
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

@@ -21,4 +21,21 @@ public interface MarketplaceApi {
      * handed an id the caller hasn't been authorised for.
      */
     Optional<EstateEligibility> eligibilityOf(UUID estateId);
+
+    /**
+     * Which estate a plot belongs to, read through the public projection.
+     * <p>
+     * Exists because {@code checkout} cannot answer it any other way: a
+     * buyer's session has no tenant scope, so reading {@code plots} through
+     * a repository returns nothing. This reads {@code marketplace_plots},
+     * which is owner-privileged and therefore works for an anonymous or
+     * buyer-scoped caller.
+     * <p>
+     * <strong>Empty covers several cases on purpose</strong> — no such plot,
+     * a deleted one, or one whose estate is not currently eligible. The
+     * caller reports them identically: distinguishing them would let anyone
+     * probe which plot ids exist on estates they cannot see, and which
+     * companies are suspended.
+     */
+    Optional<UUID> estateIdOfPlot(UUID plotId);
 }

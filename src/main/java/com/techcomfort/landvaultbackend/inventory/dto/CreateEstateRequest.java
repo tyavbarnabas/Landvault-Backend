@@ -1,5 +1,7 @@
 package com.techcomfort.landvaultbackend.inventory.dto;
 
+import io.swagger.v3.oas.annotations.media.Schema;
+
 import com.techcomfort.landvaultbackend.common.geojson.GeoJsonPolygonDto;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -26,6 +28,28 @@ import java.util.UUID;
  * {@code footprint} is optional — an estate exists as a draft before its
  * boundary is surveyed, and absent means absent.
  */
+@Schema(
+        name = "CreateEstateRequest",
+        description = "A new estate. `tenantId` is never accepted here — it comes from your token.",
+        example = """
+                {
+                  "name": "Gwarinpa Heights",
+                  "description": "Phase 1",
+                  "area": "Gwarinpa",
+                  "city": "Abuja",
+                  "state": "FCT",
+                  "address": "1 Access Road",
+                  "cornerPremiumPct": 12.50,
+                  "intent": "development",
+                  "amenities": ["24/7 security", "Borehole", "Paved roads"],
+                  "branchId": "d94ecb29-be86-49b4-b7fa-a478a948d3da",
+                  "footprint": {
+                    "type": "Polygon",
+                    "coordinates": [[
+                      [7.400, 9.100], [7.409, 9.100], [7.409, 9.109], [7.400, 9.109], [7.400, 9.100]
+                    ]]
+                  }
+                }""")
 public record CreateEstateRequest(
         @NotBlank String name,
         String description,

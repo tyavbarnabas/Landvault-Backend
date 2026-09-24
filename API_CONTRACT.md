@@ -150,9 +150,36 @@ No `Authorization` header needed (or sent). Rate-limited: 429 with `Retry-After`
 
 Differences from the frontend's current services, all in AGENTS.md: the path is `/api/marketplace/estates`, not `/listings`; plots come from `/geojson`, not a paginated `/listings/{id}/plots`; plot status is collapsed; `paymentPlans` is absent (nothing stores it yet), so the frontend's `paymentPlans.includes(...)` filter needs guarding.
 
-### Publication now has five conditions, not four
+### Full cost disclosure (tenant portal) — **built**
+| Method | Path | Request | Response |
+|---|---|---|---|
+| GET | `/api/portal/estates/{id}/fees` | — | `FeeSchedule` |
+| PUT | `/api/portal/estates/{id}/fees` | `DeclareFeesRequest` | `FeeSchedule` |
+| GET | `/api/portal/estates/{id}/refund-terms` | — | `RefundTerms` (404 if undeclared) |
+| PUT | `/api/portal/estates/{id}/refund-terms` | `DeclareRefundTermsRequest` | `RefundTerms` |
+| GET | `/api/portal/estates/{id}/default-terms` | — | `DefaultTerms` (404 if undeclared) |
+| PUT | `/api/portal/estates/{id}/default-terms` | `DeclareDefaultTermsRequest` | `DefaultTerms` |
 
-An estate is publicly listable only when: `published` is true, the tenant is `verified`, the tenant holds `marketplacePublishing`, the tenant is **`active`** (so an offboarded company's land isn't for sale either), **and no conflict blocks it**. The fifth is new; see the two sections above.
+Reads need `portal.estates.view`, writes `portal.estates.manage`. Every write
+**versions rather than overwrites**, so a buyer's future acknowledgement can
+name the version they were shown.
+
+There is **no frontend service for any of this yet** — these are new
+endpoints with no counterpart in `~/landvault/src/services/`. The public half
+arrives inside the existing marketplace payload (below), so a listing page
+gets it without a new call.
+
+### Publication now has SEVEN conditions, not five
+
+An estate is publicly listable only when: `published` is true, the tenant is `verified`, the tenant holds `marketplacePublishing`, the tenant is **`active`** (so an offboarded company's land isn't for sale either), **no conflict blocks it**, **its fee schedule has been declared**, and **its refund terms have been declared**.
+
+The last two are what make disclosure structural rather than a request: "please declare your fees" is a policy a developer ignores; "you cannot list until you have" is enforceable. They fail separately, with `PUBLICATION_FEES_UNDECLARED` and `PUBLICATION_REFUND_TERMS_UNDECLARED`.
+
+**Declaring an empty fee schedule counts** — an estate with no extra charges may list, by saying so. Silence does not.
+
+**Default terms are not a condition.** Their story requires them only "where installments are offered", and nothing on an estate records whether they are.
+
+**Estates already published when this shipped are grandfathered** and keep their listing; their `costDisclosure` is `null` rather than a fabricated empty schedule.
 - **`actualAreaSqm` is computed**, never sent: square metres derived from the footprint. Null means no boundary yet, never a fallback to the nominal size.
 
 A plot's `footprint` must sit inside its estate's. `published` always starts false.
@@ -162,6 +189,27 @@ A plot's `footprint` must sit inside its estate's. `published` always starts fal
 |---|---|---|
 | GET | `/api/marketplace/listings/{listingId}/plots?cursor&limit` | `Page<ListingPlot>` |
 | GET | `/api/marketplace/listings/{listingId}/plots/{plotId}` | `ListingPlot` |
+
+### What the public listing now carries — **built**
+
+`MarketplaceListing` gains two things, both unauthenticated:
+
+- **`priceTiers[].commitment`** — the true cost of that tier: `landPrice`,
+  `oneOffFees`, `totalCommitment`, `totalCommitmentIfCorner`,
+  `recurringFees`, `optionalFees`, and `totalExcludesOtherCurrencyFees`.
+  Every amount is a `{ min, max, isRange }`: show the range when `isRange`,
+  **never a midpoint**.
+- **`costDisclosure`** — `fees[]` (the full breakdown) and `exitCosts` (what
+  withdrawing returns, what falling behind costs, and the revocation terms),
+  all computed in naira. `null` only for an estate grandfathered in before
+  disclosure was required.
+
+`totalCommitment` is land plus **one-off** mandatory fees. Recurring charges
+(an annual facility fee) are deliberately outside it — that is how the real
+allocation letters state their own totals.
+
+The frontend's `MarketplaceListing` type needs both fields added; nothing
+today reads them.
 
 ## Marketplace listings (public, derived) — `marketplaceService.ts`
 | Method | Path | Response |
@@ -182,20 +230,48 @@ A plot's `footprint` must sit inside its estate's. `published` always starts fal
 ## Checkout / transactions — `marketplaceCheckoutService.ts`
 | Method | Path | Request | Response |
 |---|---|---|---|
-| POST | `/api/checkout/transactions` | `InitiateTransactionInput` | `Transaction` |
+| POST | `/api/checkout/transactions` | `{ reservationId, intent, plan, installmentMonths? }` | `Transaction` — **built** |
 | POST | `/api/checkout/transactions/{id}/payment` | `{ method: MarketplacePaymentMethod }` | `{ requiresTransfer: boolean, account?: VirtualAccountDetails }` |
 | POST | `/api/checkout/transactions/{id}/confirm` | — | `Transaction` |
 | POST | `/api/checkout/transactions/{id}/finance-verify` | — (Finance-role action) | `Transaction` |
-| GET | `/api/checkout/transactions/{id}` | — | `Transaction` |
+| GET | `/api/checkout/transactions/{id}` | — | `Transaction` — **built** |
 
 `TransactionStatus`: `pending_payment → payment_received → awaiting_finance → verified` (or `rejected`). A successful checkout must create the buyer's `OwnedPlot` — don't leave that as a frontend-only side effect.
 
-## Reservations — `reservationService.ts`
-| Method | Path | Response |
-|---|---|---|
-| POST | `/api/reservations` `{ listingId, plotId }` | `Reservation` (time-boxed hold, ~45 min) |
-| DELETE | `/api/reservations/{id}` | 204 |
-| POST | `/api/reservations/{id}/convert` | 204 |
+**Only `pending_payment` is produced today**; everything after it belongs to
+`finance`, which is not built. A reservation never allocates: the plot stays
+held, never sold, until a finance-role human verifies a payment.
+
+**`InitiateTransactionInput` is deliberately not the accepted body.** The
+frontend currently posts `basePrice`, `totalPrice`, `amountDue`,
+`cornerPremiumPct`, `sizeSqm` and `titleType` from the browser; none is read.
+A client-supplied price is the same hole as a client-supplied `tenantId`. The
+price is computed server-side and **captured when the plot was held**, so a
+tier re-priced mid-checkout cannot change what the buyer agreed to. The
+frontend must stop sending them.
+
+## Reservations — `reservationService.ts` — **built**
+| Method | Path | Request | Response |
+|---|---|---|---|
+| POST | `/api/reservations` | `{ plotId }` | `Reservation` (45-minute hold) |
+| GET | `/api/reservations/mine` | — | `Reservation[]` (active only) |
+| DELETE | `/api/reservations/{id}` | — | 204 |
+| POST | `/api/reservations/{id}/convert` | — | **not built** — conversion follows finance verification |
+
+Gated on `client.checkout.reserve` **and** an approved KYC record. Divergences
+from the frontend's current call, both needing a frontend change:
+
+- **`listingId` is not accepted** — the estate is derived from the plot. A
+  client-supplied estate could only ever disagree with the stored one.
+- The response says **`estateId`** where the frontend's `Reservation` says
+  `listingId`, and **`released`** where it says a hold was cancelled;
+  `secondsRemaining` is added for the countdown so it never depends on the
+  client's clock.
+
+The hold is acquired by a database-level compare-and-swap inside a
+`SECURITY DEFINER` function (changeset 054): two buyers can never both hold
+one plot, and a buyer cannot read or write `plots` directly at all. Expiry is
+a scheduled sweep, not a client timer. **Holds cannot be extended.**
 
 ## Portfolio (owned plots + payments) — `portfolioService.ts`
 | Method | Path | Request | Response |
@@ -220,13 +296,27 @@ A plot's `footprint` must sit inside its estate's. `published` always starts fal
 
 File storage: frontend notes it needs real S3/MinIO-backed URLs behind "download" — `Document` itself carries only metadata; add a signed-URL or streaming endpoint when wiring real files.
 
-## KYC — `kycService.ts`
+## KYC — `kycService.ts` — **built**
 | Method | Path | Request | Response |
 |---|---|---|---|
-| GET | `/api/kyc/status` | — | `KycRecord` |
-| POST | `/api/kyc` | `SubmitKycInput` | `KycRecord` |
+| GET | `/api/kyc` | — | `KycRecord` |
+| POST | `/api/kyc` | `SubmitKycRequest` | `KycRecord` |
+| GET | `/api/admin/kyc/{userId}` | — | `KycRecord` (needs `admin.kyc.review`) |
+| POST | `/api/admin/kyc/{userId}/decision` | `{ decision, reason?, failedDocumentTypes? }` | `KycRecord` |
 
-`KycBuyerType`: `"local" | "diaspora"` (derived from buyer country); doc types `nin \| passport \| proof_of_address`.
+`KycBuyerType`: `"local" | "diaspora"` (derived from the country captured at
+registration); doc types `nin \| passport \| proof_of_address`. A local buyer
+submits an NIN **only**.
+
+- The read route is `/api/kyc`, not `/api/kyc/status`.
+- **The submitted NIN is never returned**, by any route, masked or otherwise
+  — the frontend's optional `KycRecord.ninNumber` is simply absent.
+- Files are **metadata only** (`{ fileName, fileSize?, storageKey? }`);
+  object storage is not built, so no bytes are transferred.
+- Verification is **manual**: a reviewer approves or rejects, and a rejection
+  must name which documents failed. No registry integration exists.
+- A buyer with no record reads as `unsubmitted` with every required document
+  `missing` — nothing is written just by looking.
 
 ## Inspections — `inspectionService.ts`
 | Method | Path | Request | Response |

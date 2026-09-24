@@ -8,6 +8,13 @@ import com.techcomfort.landvaultbackend.identity.internal.security.AccessTokenCl
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.springframework.http.ResponseEntity;
+import com.techcomfort.landvaultbackend.common.OpenApiConfig;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,11 +33,18 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping("/api/me")
+@Tag(name = OpenApiConfig.TAG_SESSION)
 public class MeController {
 
     @PersistenceContext
     private EntityManager entityManager;
 
+    @Operation(
+            summary = "The current token's user",
+            description = "Who the bearer token belongs to, with the flattened permission slugs it "
+                    + "carries. Permissions are assembled at login from the user's roles and are "
+                    + "never stored on the user row.")
+    @ApiResponse(responseCode = "200", description = "The authenticated user")
     @GetMapping
     public ResponseEntity<MeResponse> me(@AuthenticationPrincipal AccessTokenClaims claims) {
         return ResponseEntity.ok(new MeResponse(
@@ -39,6 +53,16 @@ public class MeController {
 
     // Exists only to prove @EnableMethodSecurity + @PreAuthorize work end
     // to end — a buyer's token has no admin.* permissions, so this 403s.
+    @Operation(
+            summary = "Diagnostic: prove permission checks are wired",
+            description = "**A probe, not a feature.** It exists so that method-level security can "
+                    + "be verified end to end against a real token. Returns 204 for a caller holding "
+                    + "`admin.tenants.view` and 403 otherwise; it does nothing else and has no "
+                    + "response body.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "204", description = "Caller holds `admin.tenants.view`"),
+            @ApiResponse(responseCode = "403", description = "Caller does not", content = @Content())
+    })
     @GetMapping("/admin-check")
     @PreAuthorize("hasAuthority('admin.tenants.view')")
     public ResponseEntity<Void> adminCheck() {
@@ -65,6 +89,19 @@ public class MeController {
      * place — this was tried with {@code JdbcTemplate} first and every
      * value silently came back {@code NULL} for exactly this reason.
      */
+    @Operation(
+            summary = "Diagnostic: the tenant scope reaching the database",
+            description = """
+                    **A probe, not a feature.** It reports the scope resolved from the token \
+                    alongside the Postgres session variables actually set on the connection, which \
+                    is how the two are verified to agree.
+
+                    Isolation is enforced by row-level security in the database, not by query \
+                    filters, and these session variables are what the policies read. Scope comes \
+                    from the signed token, never from a request header — an `X-Branch-Id` header \
+                    can only ever *narrow* an organization-wide scope to a branch of the caller's \
+                    own tenant, and is silently ignored otherwise.""")
+    @ApiResponse(responseCode = "200", description = "Resolved scope and the matching session variables")
     @GetMapping("/tenant-scope")
     @Transactional(readOnly = true)
     public ResponseEntity<TenantScopeResponse> tenantScope() {

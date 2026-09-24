@@ -1,6 +1,6 @@
 package com.techcomfort.landvaultbackend.inventory;
 
-import com.techcomfort.landvaultbackend.inventory.internal.service.PlotPricing;
+import com.techcomfort.landvaultbackend.common.PlotPricing;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;

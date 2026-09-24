@@ -22,5 +22,24 @@ import java.util.UUID;
  */
 public interface IdentityApi {
 
+    /**
+     * <strong>Careful:</strong> {@code identity.dto} is not a Modulith
+     * named interface, so {@link UserDto}'s accessors cannot be called from
+     * another module — the verification test rejects it, even though this
+     * method is public. Until that is settled (either by exposing the DTO
+     * package deliberately or by keeping this module's cross-module surface
+     * to narrow methods like the one below), prefer adding a method that
+     * returns exactly what the caller needs.
+     */
     Optional<UserDto> findById(UUID id);
+
+    /**
+     * A user's country of residence, as the two-letter code captured at
+     * registration. Empty when there is no such user.
+     * <p>
+     * Narrow on purpose: {@code kyc} needs this one field to decide which
+     * documents a buyer must produce, and a caller that receives only the
+     * country cannot accidentally come to depend on the rest of a user row.
+     */
+    Optional<String> countryOf(UUID userId);
 }

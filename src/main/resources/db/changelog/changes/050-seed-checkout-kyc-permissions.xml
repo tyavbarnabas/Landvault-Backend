@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        The first client.* slugs this backend adds. Every earlier one was
+        seeded in 014 from the frontend's own authService.ts; none of them
+        covers buying, because until now nothing could be bought.
+
+        TWO SLUGS, NOT ONE, and neither reuses client.marketplace.view.
+        Browsing and buying are different acts: marketplace.view is held by
+        anyone looking at listings, and folding the ability to take a plot
+        out of circulation into it would leave no way to restrict purchasing
+        later without also removing the ability to browse. The same
+        narrower-is-reversible reasoning as portal.estates.view vs
+        portal.estates.manage.
+
+        client.kyc.manage is separate from client.checkout.reserve because
+        the two are genuinely used at different moments by different code
+        paths — KYC is submitted once, reservations happen repeatedly — and
+        because a future support or compliance role may need to read a
+        buyer's KYC state without ever being able to reserve on their behalf.
+
+        FRONTEND REQUIREMENT: the frontend renders its nav and route gates
+        directly off these strings, and its authService.ts does not know
+        either of them yet. Both must be added there, or a buyer holding
+        them still cannot reach the screens that use them.
+
+        admin.kyc.review is the reviewer's side of the same feature. Granted
+        to super_admin and compliance_officer only — reviewing someone's
+        passport IS the compliance role, and platform_moderator is left out
+        on the same narrower-is-reversible reasoning that kept it off
+        admin.audit.view: moderation is about marketplace content, not
+        buyers' identity documents.
+    -->
+    <changeSet id="050-seed-checkout-kyc-permissions" author="landvault">
+        <sql>
+            INSERT INTO permissions (id, created_at, created_by, deleted, code, description) VALUES
+                (gen_random_uuid(), now(), 'system', false, 'client.checkout.reserve',
+                 'Reserve a plot and open a purchase transaction against it.'),
+                (gen_random_uuid(), now(), 'system', false, 'client.kyc.manage',
+                 'Submit and read one''s own purchase-time identity verification.'),
+                (gen_random_uuid(), now(), 'system', false, 'admin.kyc.review',
+                 'Read and decide buyers'' purchase-time identity verification.');
+
+            INSERT INTO role_permissions (id, created_at, created_by, deleted, role_id, permission_id)
+            SELECT gen_random_uuid(), now(), 'system', false, r.id, p.id
+            FROM roles r, permissions p
+            WHERE r.code = 'buyer'
+              AND p.code IN ('client.checkout.reserve', 'client.kyc.manage');
+
+            INSERT INTO role_permissions (id, created_at, created_by, deleted, role_id, permission_id)
+            SELECT gen_random_uuid(), now(), 'system', false, r.id, p.id
+            FROM roles r, permissions p
+            WHERE r.code IN ('super_admin', 'compliance_officer')
+              AND p.code = 'admin.kyc.review';
+        </sql>
+        <rollback>
+            DELETE FROM role_permissions WHERE permission_id IN (
+                SELECT id FROM permissions
+                 WHERE code IN ('client.checkout.reserve', 'client.kyc.manage', 'admin.kyc.review')
+            );
+            DELETE FROM permissions
+             WHERE code IN ('client.checkout.reserve', 'client.kyc.manage', 'admin.kyc.review');
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

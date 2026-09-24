@@ -1,6 +1,7 @@
 package com.techcomfort.landvaultbackend.inventory.internal.service;
 
 import com.techcomfort.landvaultbackend.common.geojson.GeoJsonPolygonWriter;
+import com.techcomfort.landvaultbackend.common.PlotPricing;
 import com.techcomfort.landvaultbackend.common.PageResponse;
 import com.techcomfort.landvaultbackend.common.PageResponses;
 import com.techcomfort.landvaultbackend.common.TenantContext;

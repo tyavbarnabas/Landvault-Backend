@@ -55,6 +55,16 @@
     <include file="changes/047-create-conflict-detection-functions.xml" relativeToChangelogFile="true"/>
     <include file="changes/048-dismissal-sticks-unless-geometry-changed.xml" relativeToChangelogFile="true"/>
     <include file="changes/049-create-marketplace-projection-views.xml" relativeToChangelogFile="true"/>
+    <include file="changes/050-seed-checkout-kyc-permissions.xml" relativeToChangelogFile="true"/>
+    <include file="changes/051-create-kyc-tables.xml" relativeToChangelogFile="true"/>
+    <include file="changes/052-create-reservations-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/053-create-transactions-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/054-create-reservation-functions.xml" relativeToChangelogFile="true"/>
+    <include file="changes/055-allow-system-actor-in-audit-log.xml" relativeToChangelogFile="true"/>
+    <include file="changes/056-create-estate-fees-table.xml" relativeToChangelogFile="true"/>
+    <include file="changes/057-create-estate-refund-and-default-terms.xml" relativeToChangelogFile="true"/>
+    <include file="changes/058-enable-rls-disclosure-tables.xml" relativeToChangelogFile="true"/>
+    <include file="changes/059-add-disclosure-to-marketplace-views.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>
