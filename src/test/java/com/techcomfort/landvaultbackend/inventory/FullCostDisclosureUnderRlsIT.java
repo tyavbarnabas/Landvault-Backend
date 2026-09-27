@@ -12,6 +12,8 @@ import com.techcomfort.landvaultbackend.inventory.dto.CreateEstateRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreatePlotRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreatePlotsRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreatePriceTierRequest;
+import com.techcomfort.landvaultbackend.inventory.dto.EstateDetailDto;
+import com.techcomfort.landvaultbackend.inventory.dto.EstateEligibilityDto;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateDto;
 import com.techcomfort.landvaultbackend.inventory.dto.FeeScheduleDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PriceTierDto;
@@ -395,6 +397,53 @@ class FullCostDisclosureUnderRlsIT {
         assertThat(countFeeRows(listing.estateId()))
                 .as("the version a buyer was shown must still be there to point at")
                 .isEqualTo(doubleKingFeeCount() + 1);
+    }
+
+    // ------------------------------------------------------------------
+    // Eligibility as a portal read
+    // ------------------------------------------------------------------
+
+    /**
+     * The point of exposing these: a developer learns what is outstanding
+     * from a read, not by attempting a publish and catching one failure at
+     * a time. Nothing here is inferred — an unknown condition would have to
+     * be reported as unknown, never as met.
+     */
+    @Test
+    void theEstateDetailNamesEveryOutstandingConditionWithoutAttemptingAPublish() {
+        Developer developer = verifiedDeveloper();
+        Listing listing = estateWithATier(developer, TOP_RANK_LAND);
+
+        EstateEligibilityDto before = estateDetail(developer, listing.estateId()).eligibility();
+
+        assertThat(before.tenantVerified()).isTrue();
+        assertThat(before.tenantEntitled()).isTrue();
+        assertThat(before.tenantActive()).isTrue();
+        assertThat(before.noBlockingConflict())
+                .as("explicit, not inferred from 'everything else passes but eligible is false'")
+                .isTrue();
+        assertThat(before.feesDeclared()).isFalse();
+        assertThat(before.refundTermsDeclared()).isFalse();
+        assertThat(before.published()).isFalse();
+        assertThat(before.eligible()).isFalse();
+
+        declareFees(developer, listing.estateId(), topRankFees());
+        declareTerms(developer, listing.estateId());
+        assertThat(publish(developer, listing.estateId()).getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        EstateEligibilityDto after = estateDetail(developer, listing.estateId()).eligibility();
+        assertThat(after.feesDeclared()).isTrue();
+        assertThat(after.refundTermsDeclared()).isTrue();
+        assertThat(after.published()).isTrue();
+        assertThat(after.eligible()).isTrue();
+    }
+
+    private EstateDetailDto estateDetail(Developer developer, UUID estateId) {
+        ResponseEntity<EstateDetailDto> response = restTemplate.exchange(
+                "/api/portal/estates/" + estateId, HttpMethod.GET,
+                new HttpEntity<>(bearer(developer.token())), EstateDetailDto.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        return response.getBody();
     }
 
     // ------------------------------------------------------------------

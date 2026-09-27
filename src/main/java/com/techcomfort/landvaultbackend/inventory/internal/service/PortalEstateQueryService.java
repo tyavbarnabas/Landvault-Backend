@@ -12,7 +12,10 @@ import com.techcomfort.landvaultbackend.inventory.dto.EstateSummaryDto;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateTitleDto;
 import com.techcomfort.landvaultbackend.common.geojson.GeoJsonFeatureCollectionDto;
 import com.techcomfort.landvaultbackend.common.geojson.GeoJsonFeatureDto;
+import com.techcomfort.landvaultbackend.conflicts.ConflictDetectionApi;
+import com.techcomfort.landvaultbackend.inventory.dto.EstateEligibilityDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PlotCountsDto;
+import com.techcomfort.landvaultbackend.marketplace.MarketplaceApi;
 import com.techcomfort.landvaultbackend.inventory.dto.PlotDetailDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PriceTierDto;
 import com.techcomfort.landvaultbackend.inventory.dto.VerificationCheckDto;
@@ -77,6 +80,8 @@ public class PortalEstateQueryService {
     private final PlotRepository plotRepository;
     private final EstateTitleRepository estateTitleRepository;
     private final EstateVerificationCheckRepository verificationCheckRepository;
+    private final MarketplaceApi marketplace;
+    private final ConflictDetectionApi conflictDetection;
 
     // --- estate list ---
 
@@ -160,7 +165,35 @@ public class PortalEstateQueryService {
                 title,
                 checks,
                 plotCounts(List.of(estateId)).getOrDefault(estateId, PlotCountsDto.empty()),
+                eligibilityOf(estateId),
                 estate.getCreatedAt());
+    }
+
+    /**
+     * The publication conditions, assembled from the two modules that own
+     * them: {@code marketplace} for the eligibility view's booleans and
+     * {@code conflicts} for the blocking check the view folds into
+     * {@code eligible} alone.
+     * <p>
+     * The conflict call is the expensive one — real polygon work — so it
+     * runs only for a single estate's detail read, never per row of a list.
+     * <p>
+     * Empty rather than fabricated if the view has no row for this estate:
+     * an unknown condition reported as met would be exactly the invented
+     * data this codebase refuses everywhere else.
+     */
+    private EstateEligibilityDto eligibilityOf(UUID estateId) {
+        return marketplace.eligibilityOf(estateId)
+                .map(e -> new EstateEligibilityDto(
+                        e.published(),
+                        e.tenantVerified(),
+                        e.tenantEntitled(),
+                        e.tenantActive(),
+                        e.feesDeclared(),
+                        e.refundTermsDeclared(),
+                        !conflictDetection.publicationCheckFor(estateId).blocked(),
+                        e.eligible()))
+                .orElse(null);
     }
 
     // --- plots ---

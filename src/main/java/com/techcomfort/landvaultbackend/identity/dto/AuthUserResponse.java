@@ -3,6 +3,7 @@ package com.techcomfort.landvaultbackend.identity.dto;
 import com.techcomfort.landvaultbackend.common.Currency;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Matches the frontend's {@code AuthUser} shape exactly (authService.ts) —
@@ -19,6 +20,23 @@ import java.util.List;
 public record AuthUserResponse(
         String name,
         String email,
+        /**
+         * The company this account belongs to, or null for a buyer,
+         * platform staff or an independent agent. Isolation is enforced by
+         * row-level security regardless — this is here so the portal can
+         * label its own screens rather than guess.
+         */
+        UUID tenantId,
+        /**
+         * The branch this account is scoped to, or <strong>null for
+         * organisation-wide</strong> (an Executive Director).
+         * <p>
+         * That distinction is load-bearing in {@code TenantScopeResolver}
+         * and must not be flattened: null is the difference between "every
+         * estate across your company" and "your branch's estates", which is
+         * the label this field exists to get right.
+         */
+        UUID branchId,
         String phone,
         String country,
         Currency currency,

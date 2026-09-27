@@ -38,6 +38,12 @@ public record EstateDetailDto(
         EstateTitleDto title,
         List<VerificationCheckDto> verificationChecks,
         PlotCountsDto plotCounts,
+        /**
+         * Why this estate can or cannot be listed, condition by condition —
+         * so the portal can show what is outstanding without attempting a
+         * publish and reading the answer off an exception.
+         */
+        EstateEligibilityDto eligibility,
         Instant createdAt
 ) {
 }

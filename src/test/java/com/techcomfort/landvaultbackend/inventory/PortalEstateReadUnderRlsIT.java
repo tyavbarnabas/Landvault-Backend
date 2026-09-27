@@ -171,6 +171,44 @@ class PortalEstateReadUnderRlsIT {
         createEstate("Beta Courts", satelliteBranchId, null);
     }
 
+    /**
+     * Login now reports the scope the tenant-context filter will actually
+     * apply — resolved by the same code, so the portal cannot label its
+     * screens with a scope the server does not enforce.
+     * <p>
+     * Null branch is not "unknown": it is the difference between "every
+     * estate across your company" and "your branch's estates".
+     */
+    @Test
+    void loginReportsOrganisationWideAsNullBranchAndABranchManagersBranchExplicitly() {
+        AuthResponse director = loginResponse(emailOf(directorToken));
+        assertThat(director.user().tenantId()).isEqualTo(tenantId);
+        assertThat(director.user().branchId())
+                .as("an Executive Director is organisation-wide, and null says exactly that")
+                .isNull();
+
+        AuthResponse manager = loginResponse(emailOf(branchManagerToken));
+        assertThat(manager.user().tenantId()).isEqualTo(tenantId);
+        assertThat(manager.user().branchId())
+                .as("a branch manager's wall is reported, not guessed at")
+                .isEqualTo(satelliteBranchId);
+    }
+
+    /** The email inside a token's payload, so a test can log the same user in again. */
+    private String emailOf(String token) {
+        String payload = new String(java.util.Base64.getUrlDecoder()
+                .decode(token.split("\\.")[1]), java.nio.charset.StandardCharsets.UTF_8);
+        int start = payload.indexOf("\"email\":\"") + 9;
+        return payload.substring(start, payload.indexOf('"', start));
+    }
+
+    private AuthResponse loginResponse(String email) {
+        ResponseEntity<AuthResponse> response = restTemplate.postForEntity(
+                "/api/auth/login", new LoginRequest(email, PASSWORD), AuthResponse.class);
+        assertThat(response.getStatusCode()).as("login for " + email).isEqualTo(HttpStatus.OK);
+        return response.getBody();
+    }
+
     // --- isolation ---
 
     /**

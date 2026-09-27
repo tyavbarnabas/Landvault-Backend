@@ -2921,6 +2921,17 @@ silently pick one. Three findings, none of them a security gap:
    per route so the 2FA management endpoints require a session. The stale
    comment was corrected while annotating.
 
+**A trap this created, found in a live walkthrough (2026-09-27):**
+`AuthController` carries a class-level empty `@SecurityRequirements`,
+because every route in it was public when it was written. `change-password`
+was later added to the same class, inherited that opt-out, and was
+documented as public — so Swagger UI never sent the token even after
+Authorize, and every try-it-out call came back `UNAUTHENTICATED`. The
+server was correctly protected throughout; only the document was wrong.
+Fixed with a method-level `@SecurityRequirement(name = BEARER_SCHEME)`.
+**Any authenticated route added to `AuthController` needs the same
+override**, or it silently inherits "public" in the docs.
+
 Everything else lines up: the five `AuthController` routes and
 `/api/auth/2fa/verify` are documented public and are public; the four other
 `/api/auth/2fa/*` routes are documented protected and are protected.
@@ -3501,3 +3512,89 @@ and starts no context at all.
 `WHERE id LIKE '05[6-9]%'` silently returns nothing, because SQL `LIKE` has no
 character classes — that is `SIMILAR TO` or `~`. It reads as a clean "not
 applied" and is simply a query that matches nothing. Use `~ '^05[6-9]'`.
+
+## Eligibility is a portal read, not something you learn by failing to publish
+
+`EstateEligibility`'s booleans were kept separate specifically so the publish
+endpoint could name the condition that failed (PB-3) — but the record sat on
+no read DTO, so the only way to learn a condition was outstanding was to
+attempt a publish and catch `PublicationRefused`. A readiness screen built on
+that has nothing to render, and cannot guess: showing an unverified condition
+as met would be fabricated data.
+
+`EstateDetailDto.eligibility` now carries all eight booleans.
+
+**It is `inventory`'s own DTO, not `marketplace`'s record**, because
+`noBlockingConflict` comes from a third module. The eligibility view folds
+the conflict check into `eligible` alone, and `marketplace` has no dependency
+on `conflicts` to expose it separately — so `inventory`, which already
+depends on both, assembles it.
+
+**`noBlockingConflict` is explicit precisely because it was inferable.** A
+client could reason "every named condition passes but `eligible` is false, so
+it must be a conflict" — correct today, and silently wrong the moment a ninth
+condition is added and not exposed, with the failure mode being a developer
+told the wrong reason. An inference standing in for a fact is what the
+separate-booleans design existed to prevent.
+
+The conflict check is real polygon work, so it runs on the **single-estate
+detail read only**, never per row of a list.
+
+## Login reports the caller's own scope, resolved by the filter's own code
+
+`AuthUserResponse` now carries `tenantId` and `branchId`. **This is not a
+security change** — branch scoping is enforced by RLS either way. It is so
+the portal can label a screen honestly: *"your branch's estates"* versus
+*"every estate across your company"*. Previously `branchId` was available
+only from `GET /api/me/tenant-scope`, whose own Javadoc calls it a debug
+surface for observing the tenant-context filter.
+
+**`branchId` null means organisation-wide, not unknown**, and that
+distinction must not be flattened — it is the same one
+`TenantScopeResolver` already makes load-bearing.
+
+`TenantScopeResolver.resolveBaseScope` gained an overload taking the parts
+rather than a parsed token, and `AuthService` calls it. **Deliberately one
+implementation**: if login computed a branch one way and the filter another,
+the portal would label its screens with a scope the server does not apply,
+and the two would drift apart with nothing failing. The class is now public
+*within* `identity.internal` — still invisible to every other module, since
+the whole package is `internal`.
+
+## Change password verifies a password; reset verifies a mailbox
+
+`POST /api/auth/change-password` is authenticated and takes
+`{ currentPassword, newPassword }`. It exists because completing a change via
+`forgot-password` + `reset-password` checks the wrong thing:
+
+- A change-password screen means *"prove you know the password you are
+  replacing"*. A reset proves control of an inbox, which is a different
+  claim — and the right one only when someone is locked out.
+- **A bootstrapped Super Admin needs working email before they can retire a
+  temporary password.** On a fresh deployment with no mail configured, the
+  first admin would be stuck on a credential that has been through an
+  environment variable and a shell history.
+
+`newPassword` carries the same `@NotBlank` as registration, reused rather
+than restated — a password acceptable when an account was created does not
+become unacceptable when it is changed, the same reasoning
+`ResetPasswordRequest` already records.
+
+On success: refresh tokens revoked, `mustChangePassword` cleared, an audit
+entry written. A wrong current password returns the same
+`InvalidCredentials` a bad password gets at login — nothing about it warrants
+its own code. No timing-equalisation dummy hash is needed here, unlike
+`login()`: the caller is already authenticated, so there is no account to
+enumerate.
+
+**"Sessions revoked" means refresh tokens**, as everywhere else: an
+already-issued access token rides out its remaining lifetime, up to 15
+minutes. `AuthenticationIT` asserts on refresh rather than on `/api/me` for
+exactly that reason — asserting the access token died would be asserting
+something untrue.
+
+This also closes the open TODO recorded under "The first Super Admin is a
+deployment step": there is now an endpoint to change the bootstrap password.
+**Login is still not blocked on `mustChangePassword`** — that remains
+deliberate, since blocking both it and `mustSetUpTwoFa` while neither can be
+satisfied is an unrecoverable account.

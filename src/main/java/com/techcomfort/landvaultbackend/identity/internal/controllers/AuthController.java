@@ -1,6 +1,9 @@
 package com.techcomfort.landvaultbackend.identity.internal.controllers;
 
+import com.techcomfort.landvaultbackend.common.TenantContext;
+import com.techcomfort.landvaultbackend.common.TenantScope;
 import com.techcomfort.landvaultbackend.identity.dto.AuthResponse;
+import com.techcomfort.landvaultbackend.identity.dto.ChangePasswordRequest;
 import com.techcomfort.landvaultbackend.identity.dto.ForgotPasswordRequest;
 import com.techcomfort.landvaultbackend.identity.dto.LoginRequest;
 import com.techcomfort.landvaultbackend.identity.dto.MessageResponse;
@@ -14,6 +17,7 @@ import com.techcomfort.landvaultbackend.common.OpenApiConfig;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -83,7 +87,8 @@ public class AuthController {
                     **Two different 200 responses, and a client must handle both.**
 
                     - Two-factor off → `AuthResponse`: access token, refresh token, user.
-                    - Two-factor on → `TwoFactorChallengeResponse`: a challenge id and nothing else. \
+                    - Two-factor on → `TwoFactorChallengeResponse`: `twoFactorRequired`, a \
+                    `challengeToken` and its expiry, and nothing else. \
                     **No tokens are issued at this point.** Exchange the challenge plus a TOTP or \
                     recovery code at `POST /api/auth/2fa/verify`.
 
@@ -103,7 +108,8 @@ public class AuthController {
                     client is responsible for routing on them.""")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Either an `AuthResponse` or a "
-                    + "`TwoFactorChallengeResponse` — check for a `challengeId` field"),
+                    + "`TwoFactorChallengeResponse` — discriminate on `twoFactorRequired`, which is "
+                    + "present and true only on the challenge"),
             @ApiResponse(responseCode = "401", description = "Wrong password, unknown email, or a "
                     + "locked-out account. Identical body in the first two cases",
                     content = @io.swagger.v3.oas.annotations.media.Content()),
@@ -193,5 +199,41 @@ public class AuthController {
     public ResponseEntity<MessageResponse> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
         authService.resetPassword(request);
         return ResponseEntity.ok(new MessageResponse("Your password has been reset. Sign in with your new password."));
+    }
+
+    /**
+     * Authenticated: the caller proves who they are with a token and what
+     * they know with {@code currentPassword}. Deliberately absent from
+     * {@code SecurityConfig}'s public list — unlike reset, this is not a
+     * route for someone locked out.
+     */
+    @Operation(
+            summary = "Change your own password",
+            description = """
+                    Requires a signed-in session **and** the current password.
+
+                    **This is not a reset, and the difference is what it verifies.** A reset proves                     control of a mailbox; this proves knowledge of the password being replaced —                     which is what a change-password screen actually means. It also works on a                     deployment with no mail configured, so a freshly bootstrapped Super Admin can                     retire a temporary credential that has passed through an environment variable                     and a shell history.
+
+                    On success every refresh token is revoked and `mustChangePassword` is cleared.
+
+                    **"Sessions revoked" means refresh tokens.** An access token already issued                     rides out its remaining lifetime, up to 15 minutes — the same accepted                     trade-off as password reset and tenant suspension. Do not present this as                     instant severance.
+
+                    The new password carries the same rule as registration: a password acceptable                     when the account was created does not become unacceptable when it is changed.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Changed; refresh tokens revoked"),
+            @ApiResponse(responseCode = "401", description = "The current password is wrong — the "
+                    + "same response a bad password gets at login",
+                    content = @io.swagger.v3.oas.annotations.media.Content())
+    })
+    // Overrides the class-level empty @SecurityRequirements: this is the one
+    // route here that needs a token, and without this Swagger UI never sends it.
+    @SecurityRequirement(name = OpenApiConfig.BEARER_SCHEME)
+    @PostMapping("/change-password")
+    public ResponseEntity<MessageResponse> changePassword(@Valid @RequestBody ChangePasswordRequest request) {
+        TenantScope scope = TenantContext.get().orElseThrow(() -> new IllegalStateException(
+                "No TenantContext for an authenticated request — TenantContextFilter should have set one."));
+        authService.changePassword(scope.userId(), request);
+        return ResponseEntity.ok(new MessageResponse(
+                "Your password has been changed. Other sessions will need to sign in again."));
     }
 }

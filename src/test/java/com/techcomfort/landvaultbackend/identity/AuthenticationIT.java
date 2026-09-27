@@ -2,6 +2,7 @@ package com.techcomfort.landvaultbackend.identity;
 
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.identity.dto.AuthResponse;
+import com.techcomfort.landvaultbackend.identity.dto.ChangePasswordRequest;
 import com.techcomfort.landvaultbackend.identity.dto.LoginRequest;
 import com.techcomfort.landvaultbackend.identity.dto.MeResponse;
 import com.techcomfort.landvaultbackend.identity.dto.RefreshRequest;
@@ -15,6 +16,7 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -178,6 +180,89 @@ class AuthenticationIT {
         assertThat(unknownEmail.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
         assertThat(wrongPassword.getBody()).contains("INVALID_CREDENTIALS");
         assertThat(unknownEmail.getBody()).contains("INVALID_CREDENTIALS");
+    }
+
+    // ------------------------------------------------------------------
+    // Change password
+    // ------------------------------------------------------------------
+
+    /**
+     * The distinction that justifies this endpoint existing beside reset:
+     * it verifies the password being replaced, not control of a mailbox.
+     * A deployment with no mail configured can still retire a temporary
+     * credential.
+     */
+    @Test
+    void changingAPasswordRequiresTheCurrentOneAndEndsOtherSessions() {
+        String email = "chg+" + UUID.randomUUID() + "@example.com";
+        String original = "correct horse battery staple";
+        String replacement = "a completely different passphrase";
+
+        AuthResponse registered = restTemplate.postForEntity("/api/auth/register",
+                new RegisterRequest("Ada", "L", email, "+2348000000000", original, "NG", Currency.NGN),
+                AuthResponse.class).getBody();
+        String refreshToken = registered.refreshToken();
+
+        // A wrong current password is refused, and is refused the same way
+        // a bad password at login is.
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(registered.token());
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        assertThat(restTemplate.exchange("/api/auth/change-password", HttpMethod.POST,
+                new HttpEntity<>(new ChangePasswordRequest("not the password", replacement), headers),
+                String.class).getStatusCode())
+                .isEqualTo(HttpStatus.UNAUTHORIZED);
+
+        // ...and the old password still works, so a failed attempt changed
+        // nothing.
+        assertThat(restTemplate.postForEntity("/api/auth/login",
+                new LoginRequest(email, original), AuthResponse.class).getStatusCode())
+                .isEqualTo(HttpStatus.OK);
+
+        assertThat(restTemplate.exchange("/api/auth/change-password", HttpMethod.POST,
+                new HttpEntity<>(new ChangePasswordRequest(original, replacement), headers),
+                String.class).getStatusCode())
+                .isEqualTo(HttpStatus.OK);
+
+        assertThat(restTemplate.postForEntity("/api/auth/login",
+                new LoginRequest(email, original), AuthResponse.class).getStatusCode())
+                .as("the old password is gone")
+                .isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(restTemplate.postForEntity("/api/auth/login",
+                new LoginRequest(email, replacement), AuthResponse.class).getStatusCode())
+                .isEqualTo(HttpStatus.OK);
+
+        // "Sessions revoked" means refresh tokens. The access token issued
+        // before the change is NOT severed — it rides out its 15 minutes —
+        // which is why this asserts on refresh and not on /api/me.
+        assertThat(restTemplate.postForEntity("/api/auth/refresh",
+                new RefreshRequest(refreshToken), String.class).getStatusCode())
+                .as("no new session can be minted from a pre-change refresh token")
+                .isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    @Test
+    void changingAPasswordRequiresAuthentication() {
+        assertThat(restTemplate.postForEntity("/api/auth/change-password",
+                new ChangePasswordRequest("a", "b"), String.class).getStatusCode())
+                .as("unlike reset, this is not a route for someone locked out")
+                .isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    /**
+     * A buyer has no company and no branch; both are null rather than
+     * absent, and null branch means organisation-wide rather than unknown.
+     */
+    @Test
+    void loginReportsTheCallersOwnScope() {
+        String email = "scope+" + UUID.randomUUID() + "@example.com";
+        AuthResponse registered = restTemplate.postForEntity("/api/auth/register",
+                new RegisterRequest("Ada", "L", email, "+2348000000000",
+                        "correct horse battery staple", "NG", Currency.NGN),
+                AuthResponse.class).getBody();
+
+        assertThat(registered.user().tenantId()).as("a buyer belongs to no company").isNull();
+        assertThat(registered.user().branchId()).isNull();
     }
 
     private ResponseEntity<MeResponse> callMe(String accessToken) {

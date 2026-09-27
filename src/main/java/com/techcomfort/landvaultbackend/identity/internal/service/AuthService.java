@@ -5,6 +5,7 @@ import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
 import com.techcomfort.landvaultbackend.identity.BuyerKycStatusProvider;
 import com.techcomfort.landvaultbackend.identity.dto.AuthResponse;
 import com.techcomfort.landvaultbackend.identity.dto.AuthUserResponse;
+import com.techcomfort.landvaultbackend.identity.dto.ChangePasswordRequest;
 import com.techcomfort.landvaultbackend.identity.dto.ForgotPasswordRequest;
 import com.techcomfort.landvaultbackend.identity.dto.LoginRequest;
 import com.techcomfort.landvaultbackend.identity.dto.RefreshRequest;
@@ -30,7 +31,9 @@ import com.techcomfort.landvaultbackend.identity.internal.repository.RoleReposit
 import com.techcomfort.landvaultbackend.identity.internal.repository.TwoFaChallengeRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.UserRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.UserRoleRepository;
+import com.techcomfort.landvaultbackend.common.TenantScope;
 import com.techcomfort.landvaultbackend.identity.internal.security.AccessTokenIssue;
+import com.techcomfort.landvaultbackend.identity.internal.security.TenantScopeResolver;
 import com.techcomfort.landvaultbackend.identity.internal.security.JwtProperties;
 import com.techcomfort.landvaultbackend.identity.internal.security.JwtService;
 import com.techcomfort.landvaultbackend.identity.internal.security.RoleClaim;
@@ -376,6 +379,54 @@ public class AuthService {
         log.info("Password reset completed for user {}; refresh tokens revoked", user.getId());
     }
 
+    /**
+     * Changes a password for a signed-in user who can prove they know the
+     * current one.
+     * <p>
+     * <strong>Distinct from {@link #resetPassword} by what it verifies.</strong>
+     * A reset proves control of a mailbox; this proves knowledge of the
+     * password being replaced. Completing a change by sending a code would
+     * check the wrong thing, and would leave a freshly bootstrapped Super
+     * Admin — whose deployment may have no mail configured at all — unable
+     * to retire a credential that has been through an environment variable
+     * and a shell history.
+     * <p>
+     * The current password is compared with {@code PasswordEncoder.matches},
+     * which is constant-time for its own comparison. No timing-equalisation
+     * dummy hash is needed here, unlike {@code login()}: the caller is
+     * already authenticated, so there is no account to enumerate.
+     */
+    @Transactional
+    public void changePassword(UUID userId, ChangePasswordRequest request) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(AuthException.InvalidCredentials::new);
+
+        if (!passwordEncoder.matches(request.currentPassword(), user.getPasswordHash())) {
+            // Deliberately the same exception login uses for a bad password.
+            // Nothing about a wrong current password warrants its own code.
+            throw new AuthException.InvalidCredentials();
+        }
+
+        user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
+        // The bootstrap flag's whole purpose is served the moment a real
+        // password replaces the seeded one.
+        user.setMustChangePassword(false);
+        userRepository.save(user);
+
+        // Stops new sessions being minted, exactly as a reset does. Already
+        // issued access tokens are NOT severed — they ride out their
+        // remaining lifetime, up to the 15-minute TTL. Same accepted
+        // trade-off as password reset and tenant suspension; see AGENTS.md,
+        // and never describe this as instant.
+        revokeTokenFamily(user.getId());
+
+        auditApi.record(AuditEntryRequest.of(
+                user.getId(), "auth.password_changed", "user", user.getId(), user.getTenantId(),
+                "Password changed using the current password; refresh tokens revoked."));
+
+        log.info("Password changed for user {}; refresh tokens revoked", user.getId());
+    }
+
     // Package-private: TwoFactorService completes a two-step login by calling
     // this once the second factor verifies. Not public — issuing tokens stays
     // inside this module's service package.
@@ -394,9 +445,17 @@ public class AuthService {
                 ? recoveryCodeRepository.countByUserIdAndConsumedAtIsNull(user.getId())
                 : 0L;
 
+        // Resolved by the same code the tenant-context filter uses, so the
+        // scope reported at login is exactly the scope enforced afterwards.
+        TenantScope scope = TenantScopeResolver.resolveBaseScope(
+                user.getId(), user.getTenantId(), ctx.platformStaff(), ctx.roleClaims());
+
         AuthUserResponse userResponse = new AuthUserResponse(
                 user.getFirstName() + " " + user.getLastName(),
                 user.getEmail(),
+                scope.tenantId(),
+                // Null means organisation-wide, not "unknown".
+                scope.branchId(),
                 user.getPhone(),
                 user.getCountry(),
                 user.getCurrency(),

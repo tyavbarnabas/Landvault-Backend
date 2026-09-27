@@ -4,6 +4,7 @@ import com.techcomfort.landvaultbackend.common.TenantScope;
 import com.techcomfort.landvaultbackend.tenancy.TenancyApi;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -16,7 +17,11 @@ import java.util.stream.Collectors;
  * AGENTS.md for the reasoning behind each branch below.
  */
 @Slf4j
-final class TenantScopeResolver {
+public final class TenantScopeResolver {
+
+    // Public only within identity.internal: AuthService lives in a sibling
+    // package and needs the same rule for the login response. Still invisible
+    // to every other module, since the whole package is `internal`.
 
     private TenantScopeResolver() {
     }
@@ -25,14 +30,30 @@ final class TenantScopeResolver {
      * Resolves the scope implied by the token's claims alone — before any
      * branch-switch header is considered.
      */
-    static TenantScope resolveBaseScope(AccessTokenClaims claims) {
-        if (claims.platformStaff()) {
+    public static TenantScope resolveBaseScope(AccessTokenClaims claims) {
+        return resolveBaseScope(
+                claims.userId(), claims.tenantId(), claims.platformStaff(), claims.roles());
+    }
+
+    /**
+     * The same rule, from the parts rather than from a parsed token — so
+     * {@code AuthService} can report a user's scope in the login response
+     * without re-deriving it.
+     * <p>
+     * Deliberately one implementation: if login computed a branch one way
+     * and this filter another, the portal would label its screens with a
+     * scope the server does not actually enforce, and the two would drift
+     * apart silently.
+     */
+    public static TenantScope resolveBaseScope(
+            UUID userId, UUID tenantId, boolean platformStaff, List<RoleClaim> roles) {
+        if (platformStaff) {
             // Platform staff never carry a tenant or branch, regardless of
             // whatever role claims happen to be present.
-            return new TenantScope(claims.userId(), null, null, true);
+            return new TenantScope(userId, null, null, true);
         }
 
-        var branchesPerAssignment = claims.roles().stream().map(RoleClaim::branch).toList();
+        var branchesPerAssignment = roles.stream().map(RoleClaim::branch).toList();
         boolean hasOrgWideAssignment = branchesPerAssignment.stream().anyMatch(Objects::isNull);
         Set<UUID> distinctBranches = branchesPerAssignment.stream()
                 .filter(Objects::nonNull)
@@ -61,7 +82,7 @@ final class TenantScopeResolver {
             branchId = null;
         }
 
-        return new TenantScope(claims.userId(), claims.tenantId(), branchId, false);
+        return new TenantScope(userId, tenantId, branchId, false);
     }
 
     /**

@@ -5,6 +5,7 @@ import com.techcomfort.landvaultbackend.common.Currency;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -20,7 +21,10 @@ class AuthUserResponseSerializationTest {
     @Test
     void serializedJsonExcludesCredentialFields() throws Exception {
         AuthUserResponse dto = new AuthUserResponse(
-                "Emeka Okonkwo", "emeka@example.com", "+2348000000000", "NG", Currency.NGN,
+                "Emeka Okonkwo", "emeka@example.com",
+                // Tenant staff, organisation-wide: a real tenant, no branch.
+                UUID.fromString("00000000-0000-0000-0000-00000000dead"), null,
+                "+2348000000000", "NG", Currency.NGN,
                 "unsubmitted", "local", true, false, false, 10L, "client", List.of("client.dashboard.view"));
 
         String json = mapper.writeValueAsString(dto);
