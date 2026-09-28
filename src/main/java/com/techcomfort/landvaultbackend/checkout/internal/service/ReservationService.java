@@ -7,6 +7,7 @@ import com.techcomfort.landvaultbackend.checkout.internal.domain.Reservation;
 import com.techcomfort.landvaultbackend.checkout.internal.enums.ReservationStatus;
 import com.techcomfort.landvaultbackend.checkout.internal.exceptions.CheckoutException;
 import com.techcomfort.landvaultbackend.checkout.internal.repository.ReservationRepository;
+import com.techcomfort.landvaultbackend.checkout.internal.repository.TransactionRepository;
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.PlotPricing;
 import com.techcomfort.landvaultbackend.kyc.KycApi;
@@ -42,6 +43,7 @@ public class ReservationService {
     private static final String ACTOR = "reservation";
 
     private final ReservationRepository reservationRepository;
+    private final TransactionRepository transactionRepository;
     private final PlotLockGateway plotLockGateway;
     private final MarketplaceApi marketplaceApi;
     private final KycApi kycApi;
@@ -131,12 +133,17 @@ public class ReservationService {
     @Transactional
     public void release(UUID buyerUserId, UUID reservationId) {
         Reservation reservation = reservationRepository
-                .findByIdAndBuyerUserId(reservationId, buyerUserId)
+                .findLockedByIdAndBuyerUserId(reservationId, buyerUserId)
                 .orElseThrow(CheckoutException.ReservationNotFound::new);
 
         if (reservation.getStatus() != ReservationStatus.ACTIVE) {
             throw new CheckoutException.ReservationNotActive(
                     "That reservation is already " + reservation.getStatus().getValue() + ".");
+        }
+        // A pending purchase keeps the plot held. Abandoning one is a
+        // transaction-level action, and there is no such route yet.
+        if (transactionRepository.existsByReservationId(reservation.getId())) {
+            throw new CheckoutException.PurchaseInProgress();
         }
 
         endHold(reservation, ReservationStatus.RELEASED, buyerUserId, "reservation.released",
@@ -144,7 +151,9 @@ public class ReservationService {
     }
 
     /**
-     * RS-3: every hold whose time is up, returned to the pool.
+     * RS-3: every hold whose time is up, returned to the pool — except one a
+     * transaction has been opened against, which stays held while payment is
+     * pending. Returns how many were actually released.
      * <p>
      * Separate from the scheduled trigger so the sweep is callable directly
      * — a test must be able to run it without waiting on a clock, and a
@@ -159,17 +168,27 @@ public class ReservationService {
         List<Reservation> expired = reservationRepository
                 .findByStatusAndExpiresAtBefore(ReservationStatus.ACTIVE, Instant.now());
 
+        int released = 0;
         for (Reservation reservation : expired) {
+            // A hold with a transaction behind it is not abandoned — the
+            // buyer is paying. Releasing it would put a plot back on the
+            // market while its purchase is pending: a double sale. The rows
+            // are locked by the query above, and this check is a fresh
+            // statement, so a transaction committed while we waited is seen.
+            if (transactionRepository.existsByReservationId(reservation.getId())) {
+                continue;
+            }
             // The actor is the SYSTEM, not the buyer (TX-5): nobody chose
             // this, and attributing it to the buyer would misrepresent the
             // record a disputed allocation is later reconstructed from.
             endHold(reservation, ReservationStatus.EXPIRED, null, "reservation.expired",
                     "Hold expired and the plot returned to the pool");
+            released++;
         }
-        if (!expired.isEmpty()) {
-            log.info("Released {} expired hold(s)", expired.size());
+        if (released > 0) {
+            log.info("Released {} expired hold(s)", released);
         }
-        return expired.size();
+        return released;
     }
 
     /**

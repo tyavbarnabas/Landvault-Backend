@@ -12,6 +12,8 @@ public interface PriceTierRepository extends JpaRepository<PriceTier, UUID> {
 
     boolean existsByEstateIdAndSizeSqm(UUID estateId, BigDecimal sizeSqm);
 
+    boolean existsByEstateIdAndSizeSqmAndIdNot(UUID estateId, BigDecimal sizeSqm, UUID id);
+
     Optional<PriceTier> findByIdAndEstateId(UUID id, UUID estateId);
 
     List<PriceTier> findByEstateIdOrderBySizeSqmAsc(UUID estateId);

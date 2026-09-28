@@ -63,6 +63,12 @@ public class CheckoutExceptionHandler {
                 .body(ErrorResponse.of(ex.getMessage(), "RESERVATION_NOT_ACTIVE"));
     }
 
+    @ExceptionHandler(CheckoutException.PurchaseInProgress.class)
+    public ResponseEntity<ErrorResponse> handlePurchaseInProgress(CheckoutException.PurchaseInProgress ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of(ex.getMessage(), "PURCHASE_IN_PROGRESS"));
+    }
+
     @ExceptionHandler(CheckoutException.TransactionAlreadyExists.class)
     public ResponseEntity<ErrorResponse> handleDuplicate(CheckoutException.TransactionAlreadyExists ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)

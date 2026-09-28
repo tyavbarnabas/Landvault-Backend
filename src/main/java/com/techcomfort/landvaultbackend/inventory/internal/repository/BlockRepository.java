@@ -11,6 +11,9 @@ public interface BlockRepository extends JpaRepository<Block, UUID> {
 
     boolean existsByEstateIdAndNameIgnoreCase(UUID estateId, String name);
 
+    /** A rename's clash check — the block itself is excluded, so a case-only rename is allowed. */
+    boolean existsByEstateIdAndNameIgnoreCaseAndIdNot(UUID estateId, String name, UUID id);
+
     Optional<Block> findByIdAndEstateId(UUID id, UUID estateId);
 
     List<Block> findByEstateIdOrderByNameAsc(UUID estateId);

@@ -17,8 +17,13 @@ import com.techcomfort.landvaultbackend.common.geojson.GeoJsonFeatureCollectionD
 import com.techcomfort.landvaultbackend.inventory.dto.PlotDetailDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PlotDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PriceTierDto;
+import com.techcomfort.landvaultbackend.inventory.dto.PriceTierImpactDto;
+import com.techcomfort.landvaultbackend.inventory.dto.PriceTierUpdateDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PublicationDto;
+import com.techcomfort.landvaultbackend.inventory.dto.UpdateBlockRequest;
+import com.techcomfort.landvaultbackend.inventory.dto.UpdatePriceTierRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.VerificationCheckDto;
+import com.techcomfort.landvaultbackend.inventory.internal.service.InventoryEditService;
 import com.techcomfort.landvaultbackend.inventory.internal.service.PortalEstateQueryService;
 import com.techcomfort.landvaultbackend.inventory.internal.service.PortalEstateService;
 import jakarta.validation.Valid;
@@ -39,6 +44,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -48,7 +54,7 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * A tenant's own estate inventory — creation and reads. Conflict detection
+ * A tenant's own estate inventory — creation, reads and edits. Conflict detection
  * is slice 4.
  * <p>
  * <strong>Two permissions, not one.</strong> Writes need
@@ -80,6 +86,7 @@ public class PortalEstateController {
 
     private final PortalEstateService service;
     private final PortalEstateQueryService queryService;
+    private final InventoryEditService editService;
 
     // --- reads ---
 
@@ -336,6 +343,68 @@ public class PortalEstateController {
     public ResponseEntity<PriceTierDto> createPriceTier(
             @PathVariable UUID id, @Valid @RequestBody CreatePriceTierRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED).body(service.createPriceTier(id, request));
+    }
+
+    @Operation(summary = "Rename a block",
+            description = """
+                    Requires `portal.estates.manage`. Changes a block's `name` and/or `label`; a \
+                    field left out is unchanged. Nothing depends on the name beyond display, so \
+                    this is a low-risk edit — but names stay unique within the estate.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "The block as it now stands"),
+            @ApiResponse(responseCode = "400", description = "A blank name", content = @Content()),
+            @ApiResponse(responseCode = "404", description = "No such estate, or no such block on it", content = @Content()),
+            @ApiResponse(responseCode = "409", description = "Another block on this estate already has that name", content = @Content())
+    })
+    @PutMapping("/{id}/blocks/{blockId}")
+    @PreAuthorize("hasAuthority('portal.estates.manage')")
+    public ResponseEntity<BlockDto> updateBlock(
+            @PathVariable UUID id, @PathVariable UUID blockId, @Valid @RequestBody UpdateBlockRequest request) {
+        return ResponseEntity.ok(editService.updateBlock(id, blockId, request));
+    }
+
+    @Operation(summary = "Change a tier's price, label or size",
+            description = """
+                    Requires `portal.estates.manage`. Fields left out are unchanged.
+
+                    **One edit reprices every plot on the tier** — that is what tiers are for. A \
+                    buyer who has already reserved keeps the price captured when they took the \
+                    hold; nothing here reaches into a reservation or transaction.
+
+                    **A size change reaches available plots only.** Size is what appears on a \
+                    deed, and a reservation locks price but not size, so reserved and sold plots \
+                    keep theirs. The response says how many plots changed and how many kept the \
+                    old size, by status. Call `GET .../impact` first to see the reach.
+
+                    `tierType` and `currency` cannot change — a different value is a different \
+                    tier. Sending the current value is accepted.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "The tier, and what a size change reached"),
+            @ApiResponse(responseCode = "400", description = "`TIER_TYPE_IMMUTABLE`, `TIER_CURRENCY_IMMUTABLE`, "
+                    + "or a size on a UNIT_TYPE tier", content = @Content()),
+            @ApiResponse(responseCode = "404", description = "No such estate, or no such tier on it", content = @Content()),
+            @ApiResponse(responseCode = "409", description = "Another tier on this estate already has that size", content = @Content())
+    })
+    @PutMapping("/{id}/price-tiers/{tierId}")
+    @PreAuthorize("hasAuthority('portal.estates.manage')")
+    public ResponseEntity<PriceTierUpdateDto> updatePriceTier(
+            @PathVariable UUID id, @PathVariable UUID tierId, @Valid @RequestBody UpdatePriceTierRequest request) {
+        return ResponseEntity.ok(editService.updatePriceTier(id, tierId, request));
+    }
+
+    @Operation(summary = "Preview what a tier edit would reach",
+            description = """
+                    Requires `portal.estates.view`. How many plots point at this tier, by status — \
+                    "this affects 120 plots, 8 of which are reserved". Statuses with no plots are \
+                    absent rather than zero.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Plot counts for the tier"),
+            @ApiResponse(responseCode = "404", description = "No such estate, or no such tier on it", content = @Content())
+    })
+    @GetMapping("/{id}/price-tiers/{tierId}/impact")
+    @PreAuthorize("hasAuthority('portal.estates.view')")
+    public ResponseEntity<PriceTierImpactDto> priceTierImpact(@PathVariable UUID id, @PathVariable UUID tierId) {
+        return ResponseEntity.ok(editService.priceTierImpact(id, tierId));
     }
 
     /** A batch: a real estate has hundreds of plots and one request each would be unusable. */

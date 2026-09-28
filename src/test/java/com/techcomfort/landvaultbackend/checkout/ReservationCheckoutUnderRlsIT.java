@@ -381,6 +381,45 @@ class ReservationCheckoutUnderRlsIT {
                 .isEqualTo("RESERVED");
     }
 
+    /**
+     * The double-sale bug: a transaction used to leave its reservation
+     * ACTIVE, so 45 minutes later the sweeper treated the hold as abandoned
+     * and put the plot back on the market while its purchase was pending.
+     */
+    @Test
+    void aHoldWithAPurchaseInProgressIsNeverSweptBackIntoThePool() {
+        ReservationDto reservation = reserve(buyer, plotId);
+        createTransaction(buyer, reservation.id(), "outright", null);
+
+        execute("UPDATE reservations SET expires_at = now() - interval '1 minute' WHERE id = '"
+                + reservation.id() + "'");
+        sweeper.sweep();
+
+        assertThat(plotStatus(plotId))
+                .as("a plot whose purchase is pending must stay held — releasing it is a double sale")
+                .isEqualTo("RESERVED");
+        assertThat(reservationStatus(reservation.id())).isEqualTo("ACTIVE");
+        assertThat(attemptReserve(verifiedBuyer(), plotId).getStatusCode())
+                .as("and a second buyer cannot take it")
+                .isEqualTo(HttpStatus.CONFLICT);
+    }
+
+    /** The same hole through the other door: the buyer cancelling the hold. */
+    @Test
+    void aBuyerCannotCancelAHoldWithAPurchaseInProgress() {
+        ReservationDto reservation = reserve(buyer, plotId);
+        createTransaction(buyer, reservation.id(), "outright", null);
+
+        ResponseEntity<String> response = restTemplate.exchange(
+                "/api/reservations/" + reservation.id(), HttpMethod.DELETE,
+                new HttpEntity<>(bearer(buyer.token())), String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody()).contains("PURCHASE_IN_PROGRESS");
+        assertThat(plotStatus(plotId)).isEqualTo("RESERVED");
+        assertThat(reservationStatus(reservation.id())).isEqualTo("ACTIVE");
+    }
+
     @Test
     void aSecondTransactionAgainstOneHoldIsRefused() {
         ReservationDto reservation = reserve(buyer, plotId);

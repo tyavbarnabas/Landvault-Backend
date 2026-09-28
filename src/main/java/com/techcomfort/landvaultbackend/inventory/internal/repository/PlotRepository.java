@@ -3,9 +3,11 @@ package com.techcomfort.landvaultbackend.inventory.internal.repository;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.Plot;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.math.BigDecimal;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -31,6 +33,46 @@ public interface PlotRepository extends JpaRepository<Plot, UUID>, JpaSpecificat
             GROUP BY p.estateId, p.status
             """)
     List<Object[]> countGroupedByEstateIdAndStatus(@Param("estateIds") Collection<UUID> estateIds);
+
+    /**
+     * Plot counts per status for one tier — what a tier edit would reach
+     * (IE-2). Same {@code [status, count]} shape as the estate-level query.
+     */
+    @Query("""
+            SELECT p.status, COUNT(p)
+            FROM Plot p
+            WHERE p.priceTierId = :tierId
+            GROUP BY p.status
+            """)
+    List<Object[]> countGroupedByStatusForTier(@Param("tierId") UUID tierId);
+
+    /**
+     * A tier size change, applied to <strong>available plots only</strong>
+     * (IE-4): a reserved or sold plot's size is what its buyer agreed to, and
+     * the reservation captures price but not size.
+     * <p>
+     * One statement rather than load-and-save, and that is the concurrency
+     * guarantee: a plot being reserved at this instant holds its row lock,
+     * so this waits, re-checks the status against the committed row, and
+     * skips it if it is now {@code RESERVED}. Returns how many were updated.
+     * <p>
+     * Native, and so {@code deleted = false} is spelled out rather than
+     * inherited from {@code @SQLRestriction}. It runs under the caller's
+     * row-level security, which is what confines it to their own tenant.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(value = """
+            UPDATE plots
+               SET nominal_size_sqm = :sizeSqm,
+                   updated_at = now(),
+                   updated_by = :actor
+             WHERE price_tier_id = :tierId
+               AND deleted = false
+               AND status IN ('AVAILABLE_DEV', 'AVAILABLE_INV')
+            """, nativeQuery = true)
+    int resizeAvailablePlotsOnTier(@Param("tierId") UUID tierId,
+                                   @Param("sizeSqm") BigDecimal sizeSqm,
+                                   @Param("actor") String actor);
 
     /** Only plots that actually have a boundary — the rest have nothing to draw. */
     List<Plot> findByEstateIdAndFootprintIsNotNull(UUID estateId);

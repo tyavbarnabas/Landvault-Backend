@@ -3598,3 +3598,116 @@ deployment step": there is now an endpoint to change the bootstrap password.
 **Login is still not blocked on `mustChangePassword`** — that remains
 deliberate, since blocking both it and `mustSetUpTwoFa` while neither can be
 satisfied is an unrecoverable account.
+
+## A pending purchase keeps its hold — the double-sale bug, and why not `converted`
+
+Found while reviewing the inventory-editing stories, not by a test: opening a
+transaction left its reservation `ACTIVE`. Forty-five minutes later the expiry
+sweep treated the hold as abandoned and **returned the plot to the pool while
+its purchase was still pending** — a second buyer could then reserve and start
+buying the same plot. The buyer's own `DELETE /api/reservations/{id}` had the
+same hole. Every existing test passed, because none of them expired or
+cancelled a hold *after* opening a transaction.
+
+**The fix: a hold with a transaction behind it is never released** — the
+sweeper skips it, and a buyer's cancel is refused with `PURCHASE_IN_PROGRESS`
+(409). Abandoning a pending purchase is a transaction-level action, and no
+such route exists yet.
+
+**Why not mark the reservation `converted` instead**, which was the first
+idea: the frontend already defines `converted` as *finance verified the
+payment and the plot is sold* (`reservationService.ts`, `convertReservation`).
+Using it for an unpaid transaction would report a plot as sold that isn't —
+the enum's own Javadoc says nothing in `checkout` sets it, and that stays
+true.
+
+**Row locks, not a check-then-act.** Opening a transaction, the buyer's
+cancel and the sweep all take `PESSIMISTIC_WRITE` on the reservation row
+before deciding, and the "does a transaction exist?" check is a separate
+statement run *after* the lock is held — under `READ COMMITTED` that sees
+anything committed while it waited. A transaction and an expiry racing for
+the same hold therefore serialize: either the transaction commits first and
+the sweep skips the hold, or the sweep closes it first and the transaction
+is refused as expired.
+
+**Known cost, accepted:** such a reservation stays `ACTIVE` with a past
+`expires_at`, so the sweep's candidate query keeps selecting (and locking)
+it every minute until finance exists to move it on. Harmless at today's
+volume; revisit when finance lands, which is also when these holds finally
+get a real terminal state.
+
+`aHoldWithAPurchaseInProgressIsNeverSweptBackIntoThePool` was proven red by
+removing the sweeper's check.
+
+## Inventory editing, slice 1: tier price, label and size; block names
+
+`PUT /api/portal/estates/{id}/price-tiers/{tierId}`,
+`GET .../price-tiers/{tierId}/impact`, `PUT .../blocks/{blockId}`. Plot
+footprint correction and tier reassignment are slice 2; status changes, bulk
+updates, plot withdrawal and tier retirement are slice 3. Every field in the
+PUT bodies is optional — left out means unchanged.
+
+### A reservation captures price but not size — so a size change reaches available plots only
+
+`reservations`/`transactions` store `base_price`, `corner_premium_pct`,
+`total_price` and `currency`, and **no size**. `plots.nominal_size_sqm` is
+copied from the tier at creation and read live after that — and it is what
+appears on a deed. Pushing a tier size change to every plot would leave a
+buyer who reserved a "500 sqm" plot at a locked price holding a "450 sqm" one.
+
+So a size change is **one native `UPDATE` restricted to `AVAILABLE_DEV`/
+`AVAILABLE_INV`** (`PlotRepository.resizeAvailablePlotsOnTier`). One
+statement, not load-and-save, because that is the concurrency guarantee: a
+plot being reserved at the same instant holds its row lock, and the update
+waits, re-checks the status and skips it. The response reports how many
+plots changed and, by status, how many kept the previous size.
+
+**The follow-on problem, and changeset 060.** A plot skipped because it was
+held would later return to the pool still carrying the *old* size while its
+tier says the new one. `landvault_release_plot` now resets a `LAND_SIZE`
+plot's size from its tier as it releases it (`UNIT_TYPE` plots keep their
+override). It reads the tier `FOR SHARE`: a size edit holds the tier row's
+lock (the tier is saved and flushed *before* the plots are touched), so a
+release racing an edit waits and reads the new size rather than the old.
+
+**Follow-up, not built:** capturing size on the reservation itself would be
+more correct, but it touches the reservation model for one edge case.
+
+### `tierType` and `currency` are immutable
+
+A different type or currency is a different tier, not an edit. The PUT
+accepts the *current* value (so a client can echo a tier back) and refuses a
+different one with `TIER_TYPE_IMMUTABLE`/`TIER_CURRENCY_IMMUTABLE` (400) —
+refused, never silently dropped, because an ignored field reads as success.
+To fix a tier that is wrong in that way: create a new tier and move the plots
+(slice 2's IE-10).
+
+### Price changes need no new protection
+
+A buyer's price is captured on the reservation and copied to the transaction;
+nothing recomputes it. The edit does not touch either table.
+`aBuyerWhoReservedKeepsTheirCapturedPrice` proves it through the real
+endpoint (the older `repricingTheTierAfterAHold...` test used raw SQL).
+
+### Audit, and the no-op rule
+
+Every edit writes one audit entry (`estate.price_tier_updated`,
+`estate.block_updated`) with the previous and new values in the free-text
+`detail` column — there is no structured previous-value field, so the text is
+the record. An edit that changes nothing writes nothing, the same rule
+publish/unpublish follow.
+
+### Permission follow-up
+
+Edits sit behind `portal.estates.manage` (Executive Director, surveyor).
+**A surveyor can therefore reprice an estate while a sales manager cannot.**
+Splitting price editing into its own slug needs a seeded permission and a
+frontend change — not done here. The impact preview is a read and uses
+`portal.estates.view`.
+
+### Note for slice 3: retiring a tier cannot reuse `deleted`
+
+Tiers are soft-deleted via `@SQLRestriction`, so a "deleted" tier vanishes
+from every lookup and its plots lose their price entirely. Retirement needs
+its own column (e.g. `retired_at`), with the existing plots keeping their
+reference.

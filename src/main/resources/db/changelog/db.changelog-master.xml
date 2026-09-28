@@ -65,6 +65,7 @@
     <include file="changes/057-create-estate-refund-and-default-terms.xml" relativeToChangelogFile="true"/>
     <include file="changes/058-enable-rls-disclosure-tables.xml" relativeToChangelogFile="true"/>
     <include file="changes/059-add-disclosure-to-marketplace-views.xml" relativeToChangelogFile="true"/>
+    <include file="changes/060-release-plot-resyncs-tier-size.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

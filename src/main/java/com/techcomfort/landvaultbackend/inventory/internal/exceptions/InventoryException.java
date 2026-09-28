@@ -108,6 +108,32 @@ public abstract class InventoryException extends RuntimeException {
     }
 
     /**
+     * An edit to a field that cannot change — a tier's type or currency. A
+     * different value there is a different tier, not an edit to this one.
+     * Refused explicitly rather than ignored: a silently dropped field reads
+     * as success.
+     */
+    public static class ImmutableField extends InventoryException {
+
+        private final String code;
+        private final String detail;
+
+        public ImmutableField(String code, String detail) {
+            this.code = code;
+            this.detail = detail;
+        }
+
+        public String code() {
+            return code;
+        }
+
+        @Override
+        public String getMessage() {
+            return detail;
+        }
+    }
+
+    /**
      * A request that contradicts the tier/plot rules — a {@code LAND_SIZE}
      * tier with no size, a branch that isn't the caller's, a title recorded
      * twice. Surfaced as a clean 400 rather than letting a database

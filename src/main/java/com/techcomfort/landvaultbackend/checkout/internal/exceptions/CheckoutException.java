@@ -47,6 +47,17 @@ public sealed class CheckoutException extends RuntimeException {
         }
     }
 
+    /**
+     * The buyer tried to cancel a hold a transaction has already been opened
+     * against. Letting it go would return the plot to the pool while a
+     * purchase of it is pending — a double sale.
+     */
+    public static final class PurchaseInProgress extends CheckoutException {
+        public PurchaseInProgress() {
+            super("A purchase is in progress on this reservation, so it cannot be cancelled.");
+        }
+    }
+
     /** No such transaction for this buyer — also what another buyer's looks like. */
     public static final class TransactionNotFound extends CheckoutException {
         public TransactionNotFound() {

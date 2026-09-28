@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        A plot returning to the pool takes its tier's CURRENT size.
+
+        Inventory editing (slice 1) lets a developer change a LAND_SIZE tier's
+        size, and deliberately applies it only to available plots: a reserved
+        plot's nominal_size_sqm is what the buyer agreed to, and the
+        reservation captures price but not size. Without this, a hold that
+        later ends would put the plot back on sale still carrying the OLD
+        size while its tier says the new one - two identical plots on one tier
+        disagreeing, permanently.
+
+        Only LAND_SIZE plots are resynced. A UNIT_TYPE tier has no size of its
+        own; its plots carry an explicit override that must not be touched.
+
+        CREATE OR REPLACE with the identical signature, so the EXECUTE grants
+        made in 054 survive (unlike the drop-and-recreate 047 needed). 054 is
+        applied and is not edited in place.
+    -->
+    <changeSet id="060-release-plot-resyncs-tier-size" author="landvault">
+        <sql splitStatements="false"><![CDATA[
+            CREATE OR REPLACE FUNCTION landvault_release_plot(
+                p_plot_id uuid, p_restore_status varchar, p_actor varchar)
+            RETURNS boolean
+            LANGUAGE plpgsql
+            SECURITY DEFINER
+            SET search_path = public, pg_temp
+            AS $$
+            DECLARE
+                v_tier_type varchar;
+                v_tier_size numeric;
+            BEGIN
+                -- The status is caller-supplied, so it is validated here
+                -- rather than trusted. Without this, a definer function that
+                -- writes plots.status would be a way to mark any held plot
+                -- SOLD without a payment, from a buyer's own session.
+                IF p_restore_status NOT IN ('AVAILABLE_DEV', 'AVAILABLE_INV') THEN
+                    RAISE EXCEPTION 'landvault_release_plot: refusing to set plot status to %',
+                        p_restore_status;
+                END IF;
+
+                -- FOR SHARE on the tier: a size edit in flight holds the tier
+                -- row's lock, so this waits for it to commit and then reads
+                -- the NEW size. Without the lock, a release racing a size
+                -- edit could read the old size, return the plot to the pool
+                -- after the edit's plot UPDATE had already skipped it (it was
+                -- still RESERVED then), and leave it permanently out of step.
+                SELECT pt.tier_type, pt.size_sqm
+                  INTO v_tier_type, v_tier_size
+                  FROM plots p
+                  JOIN price_tiers pt ON pt.id = p.price_tier_id
+                 WHERE p.id = p_plot_id
+                   FOR SHARE OF pt;
+
+                UPDATE plots p
+                   SET status = p_restore_status,
+                       nominal_size_sqm = CASE WHEN v_tier_type = 'LAND_SIZE'
+                                               THEN v_tier_size
+                                               ELSE p.nominal_size_sqm END,
+                       updated_at = now(),
+                       updated_by = p_actor
+                 WHERE p.id = p_plot_id
+                   AND p.deleted = false
+                   AND p.status = 'RESERVED';
+
+                RETURN FOUND;
+            END;
+            $$;
+        ]]></sql>
+        <rollback>
+            <sql splitStatements="false"><![CDATA[
+                CREATE OR REPLACE FUNCTION landvault_release_plot(
+                    p_plot_id uuid, p_restore_status varchar, p_actor varchar)
+                RETURNS boolean
+                LANGUAGE plpgsql
+                SECURITY DEFINER
+                SET search_path = public, pg_temp
+                AS $$
+                BEGIN
+                    IF p_restore_status NOT IN ('AVAILABLE_DEV', 'AVAILABLE_INV') THEN
+                        RAISE EXCEPTION 'landvault_release_plot: refusing to set plot status to %',
+                            p_restore_status;
+                    END IF;
+
+                    UPDATE plots p
+                       SET status = p_restore_status,
+                           updated_at = now(),
+                           updated_by = p_actor
+                     WHERE p.id = p_plot_id
+                       AND p.deleted = false
+                       AND p.status = 'RESERVED';
+
+                    RETURN FOUND;
+                END;
+                $$;
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

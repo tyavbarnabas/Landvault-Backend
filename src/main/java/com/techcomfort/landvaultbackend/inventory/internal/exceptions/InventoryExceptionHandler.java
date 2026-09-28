@@ -57,6 +57,11 @@ public class InventoryExceptionHandler {
                 .body(ErrorResponse.of(ex.getMessage(), "PLOT_OUTSIDE_ESTATE"));
     }
 
+    @ExceptionHandler(InventoryException.ImmutableField.class)
+    public ResponseEntity<ErrorResponse> handleImmutableField(InventoryException.ImmutableField ex) {
+        return ResponseEntity.badRequest().body(ErrorResponse.of(ex.getMessage(), ex.code()));
+    }
+
     @ExceptionHandler(InventoryException.InvalidRequest.class)
     public ResponseEntity<ErrorResponse> handleInvalidRequest(InventoryException.InvalidRequest ex) {
         return ResponseEntity.badRequest().body(ErrorResponse.of(ex.getMessage(), "INVALID_REQUEST"));

@@ -51,7 +51,10 @@ public class TransactionService {
     @Transactional
     public TransactionDto create(UUID buyerUserId, CreateTransactionRequest request) {
         Reservation reservation = reservationRepository
-                .findByIdAndBuyerUserId(request.reservationId(), buyerUserId)
+                // Locked: the sweeper and a cancel lock the same row before
+                // ending a hold, so the hold cannot be released between the
+                // checks below and this transaction committing.
+                .findLockedByIdAndBuyerUserId(request.reservationId(), buyerUserId)
                 .orElseThrow(CheckoutException.ReservationNotFound::new);
 
         if (reservation.getStatus() != ReservationStatus.ACTIVE) {
