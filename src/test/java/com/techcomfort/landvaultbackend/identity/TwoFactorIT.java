@@ -166,6 +166,11 @@ class TwoFactorIT {
         assertThat(verified.getBody()).isNotNull();
         assertThat(verified.getBody().user().twoFAEnabled()).isTrue();
         assertThat(verified.getBody().user().recoveryCodesRemaining()).isEqualTo(10);
+        // RT-2: completing the second step sets the cookie exactly as login does.
+        assertThat(RefreshCookies.header(verified)).contains("HttpOnly", "SameSite=Strict", "Path=/api/auth");
+        assertThat(restTemplate.postForEntity("/api/auth/refresh",
+                RefreshCookies.presenting(RefreshCookies.of(verified)), String.class).getStatusCode())
+                .isEqualTo(HttpStatus.OK);
 
         ResponseEntity<MeResponse> me = restTemplate.exchange(
                 "/api/me", HttpMethod.GET, new HttpEntity<>(bearer(verified.getBody().token())), MeResponse.class);
@@ -328,10 +333,12 @@ class TwoFactorIT {
     void aUserWithoutTwoFactorSeesNoChange() {
         String email = register();
 
-        AuthResponse login = loginExpectingTokens(email);
+        ResponseEntity<AuthResponse> loginResponse = restTemplate.postForEntity(
+                "/api/auth/login", new LoginRequest(email, PASSWORD), AuthResponse.class);
+        AuthResponse login = loginResponse.getBody();
 
         assertThat(login.token()).isNotBlank();
-        assertThat(login.refreshToken()).isNotBlank();
+        assertThat(RefreshCookies.of(loginResponse)).isNotBlank();
         assertThat(login.user().twoFAEnabled()).isFalse();
         assertThat(login.user().recoveryCodesRemaining()).isZero();
         assertThat(restTemplate.exchange("/api/me", HttpMethod.GET,

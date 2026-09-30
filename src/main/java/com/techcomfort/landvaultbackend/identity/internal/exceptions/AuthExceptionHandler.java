@@ -53,6 +53,18 @@ public class AuthExceptionHandler {
                 .body(ErrorResponse.of("Refresh token is invalid or expired.", "INVALID_REFRESH_TOKEN"));
     }
 
+    @ExceptionHandler(AuthException.MissingRefreshToken.class)
+    public ResponseEntity<ErrorResponse> handleMissingRefreshToken() {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(ErrorResponse.of("No session to refresh. Sign in.", "REFRESH_TOKEN_MISSING"));
+    }
+
+    @ExceptionHandler(AuthException.OriginNotAllowed.class)
+    public ResponseEntity<ErrorResponse> handleOriginNotAllowed() {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ErrorResponse.of("This request did not come from an allowed origin.", "ORIGIN_NOT_ALLOWED"));
+    }
+
     // 400, not 401: this isn't a failed authentication of a session, it's a
     // bad input to a public endpoint. One message for every failure mode —
     // see AuthException.InvalidOrExpiredResetCode.

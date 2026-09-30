@@ -34,3 +34,9 @@ springdoc:
     enabled: true
   swagger-ui:
     enabled: true
+
+# Local development runs over plain http. Everywhere else the refresh cookie
+# is Secure; see the base config.
+app:
+  refresh-token:
+    cookie-secure: false

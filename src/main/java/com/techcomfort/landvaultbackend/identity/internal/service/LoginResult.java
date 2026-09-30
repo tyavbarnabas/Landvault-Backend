@@ -11,10 +11,10 @@ import com.techcomfort.landvaultbackend.identity.dto.TwoFactorChallengeResponse;
  * is populated, so the JSON a client sees is either {@link AuthResponse} or
  * {@link TwoFactorChallengeResponse}, never this.
  */
-public record LoginResult(AuthResponse authResponse, TwoFactorChallengeResponse challenge) {
+public record LoginResult(IssuedSession session, TwoFactorChallengeResponse challenge) {
 
-    static LoginResult completed(AuthResponse authResponse) {
-        return new LoginResult(authResponse, null);
+    static LoginResult completed(IssuedSession session) {
+        return new LoginResult(session, null);
     }
 
     static LoginResult pendingTwoFactor(TwoFactorChallengeResponse challenge) {

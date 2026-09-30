@@ -84,7 +84,7 @@ class AuthServicePasswordResetTest {
                 CODE_TTL, MAX_ATTEMPTS, 3, Duration.ofMinutes(15), "noreply@example.com");
         authService = new AuthService(
                 userRepository, roleRepository, permissionRepository, userRoleRepository,
-                refreshTokenRepository, passwordEncoder, jwtService, jwtProperties, tenancyApi,
+                refreshTokenRepository, passwordEncoder, jwtService, jwtProperties, AuthServiceRefreshTest.REFRESH_TOKEN_PROPERTIES, tenancyApi,
                 otpCodeRepository, otpDeliveryService, otpProperties, auditApi,
                 twoFaChallengeRepository, recoveryCodeRepository, TWO_FA_PROPERTIES,
                 // No KYC record for these users: the login response reads

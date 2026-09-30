@@ -50,6 +50,18 @@ public abstract class AuthException extends RuntimeException {
     }
 
     /**
+     * No refresh cookie at all — distinct from {@link InvalidRefreshToken}
+     * so the frontend can tell "never signed in here" from "session ended".
+     * Reveals nothing: the caller already knows whether it sent a cookie.
+     */
+    public static class MissingRefreshToken extends AuthException {
+    }
+
+    /** A cookie-authenticated route called from an origin outside the allowed list — see {@code OriginGuard}. */
+    public static class OriginNotAllowed extends AuthException {
+    }
+
+    /**
      * Deliberately one exception for every password-reset failure: no code
      * was ever requested, the code expired, it was already used, its attempt
      * limit is exhausted, the code is simply wrong, or the email matches no

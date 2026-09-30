@@ -2,7 +2,6 @@ package com.techcomfort.landvaultbackend.identity.internal.service;
 
 import com.techcomfort.landvaultbackend.audit.AuditApi;
 import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
-import com.techcomfort.landvaultbackend.identity.dto.AuthResponse;
 import com.techcomfort.landvaultbackend.identity.dto.RecoveryCodesResponse;
 import com.techcomfort.landvaultbackend.identity.dto.TwoFaSetupResponse;
 import com.techcomfort.landvaultbackend.identity.dto.TwoFaVerifyRequest;
@@ -123,7 +122,7 @@ public class TwoFactorService {
      * be replayed even inside its short lifetime.
      */
     @Transactional(noRollbackFor = {AuthException.InvalidTwoFactorCode.class, AuthException.TwoFactorLockedOut.class})
-    public AuthResponse verify(TwoFaVerifyRequest request) {
+    public IssuedSession verify(TwoFaVerifyRequest request) {
         TwoFaChallenge challenge = twoFaChallengeRepository.findByTokenHash(OtpCodes.hash(request.challengeToken()))
                 .orElseThrow(AuthException.InvalidOrExpiredChallenge::new);
         if (challenge.getConsumedAt() != null || challenge.getExpiresAt().isBefore(Instant.now())) {

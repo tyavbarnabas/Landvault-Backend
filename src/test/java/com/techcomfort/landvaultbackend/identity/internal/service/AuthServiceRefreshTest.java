@@ -1,8 +1,6 @@
 package com.techcomfort.landvaultbackend.identity.internal.service;
 
 import com.techcomfort.landvaultbackend.audit.AuditApi;
-import com.techcomfort.landvaultbackend.identity.dto.RefreshRequest;
-import com.techcomfort.landvaultbackend.identity.dto.RefreshResponse;
 import com.techcomfort.landvaultbackend.identity.internal.domain.RefreshToken;
 import com.techcomfort.landvaultbackend.identity.internal.exceptions.AuthException;
 import com.techcomfort.landvaultbackend.identity.internal.domain.User;
@@ -16,6 +14,7 @@ import com.techcomfort.landvaultbackend.identity.internal.repository.UserReposit
 import com.techcomfort.landvaultbackend.identity.internal.repository.UserRoleRepository;
 import com.techcomfort.landvaultbackend.identity.internal.security.AccessTokenIssue;
 import com.techcomfort.landvaultbackend.identity.internal.security.JwtProperties;
+import com.techcomfort.landvaultbackend.identity.internal.security.RefreshTokenProperties;
 import com.techcomfort.landvaultbackend.identity.internal.security.JwtService;
 import com.techcomfort.landvaultbackend.identity.internal.security.TwoFaProperties;
 import com.techcomfort.landvaultbackend.tenancy.TenancyApi;
@@ -70,6 +69,9 @@ class AuthServiceRefreshTest {
     private static final TwoFaProperties TWO_FA_PROPERTIES = new TwoFaProperties(
             "bGFuZHZhdWx0LXRlc3Qtb25seS1rZXktMzJieXRlcyE=", 1, 5, Duration.ofMinutes(15), Duration.ofMinutes(5), 10);
 
+    static final RefreshTokenProperties REFRESH_TOKEN_PROPERTIES = new RefreshTokenProperties(
+            "lv_refresh", true, "Strict", "/api/auth", Duration.ofSeconds(10), Duration.ofDays(30));
+
     private AuthService authService;
 
     @BeforeEach
@@ -79,7 +81,7 @@ class AuthServiceRefreshTest {
                 Duration.ofMinutes(10), 5, 3, Duration.ofMinutes(15), "noreply@example.com");
         authService = new AuthService(
                 userRepository, roleRepository, permissionRepository, userRoleRepository,
-                refreshTokenRepository, passwordEncoder, jwtService, jwtProperties, tenancyApi,
+                refreshTokenRepository, passwordEncoder, jwtService, jwtProperties, REFRESH_TOKEN_PROPERTIES, tenancyApi,
                 otpCodeRepository, otpDeliveryService, otpProperties, auditApi,
                 twoFaChallengeRepository, recoveryCodeRepository, TWO_FA_PROPERTIES,
                 // No KYC record for these users: the login response reads
@@ -119,10 +121,10 @@ class AuthServiceRefreshTest {
         when(jwtService.issueAccessToken(any(), any(), any(), anyBoolean(), any(), any()))
                 .thenReturn(new AccessTokenIssue("new-access-token", Instant.now().plus(Duration.ofMinutes(15))));
 
-        RefreshResponse response = authService.refresh(new RefreshRequest("whatever-raw-token"));
+        RefreshResult result = authService.refresh("whatever-raw-token");
 
-        assertThat(response.token()).isEqualTo("new-access-token");
-        assertThat(response.refreshToken()).isNotBlank();
+        assertThat(result.response().token()).isEqualTo("new-access-token");
+        assertThat(result.refreshToken()).isNotBlank();
         verify(refreshTokenRepository, never()).delete(any());
         verify(refreshTokenRepository, never()).findByUserIdAndRevokedAtIsNull(any());
     }
@@ -136,7 +138,7 @@ class AuthServiceRefreshTest {
         when(refreshTokenRepository.findByTokenHash(anyString())).thenReturn(Optional.of(revoked));
         when(refreshTokenRepository.findByUserIdAndRevokedAtIsNull(userId)).thenReturn(List.of());
 
-        assertThatThrownBy(() -> authService.refresh(new RefreshRequest("stolen-token")))
+        assertThatThrownBy(() -> authService.refresh("stolen-token"))
                 .isInstanceOf(AuthException.InvalidRefreshToken.class);
 
         verify(refreshTokenRepository).findByUserIdAndRevokedAtIsNull(userId);
@@ -162,7 +164,7 @@ class AuthServiceRefreshTest {
         when(refreshTokenRepository.rotateIfActive(eq(existing.getId()), any(), any())).thenReturn(0);
         when(refreshTokenRepository.findByUserIdAndRevokedAtIsNull(userId)).thenReturn(List.of());
 
-        assertThatThrownBy(() -> authService.refresh(new RefreshRequest("raced-token")))
+        assertThatThrownBy(() -> authService.refresh("raced-token"))
                 .isInstanceOf(AuthException.InvalidRefreshToken.class);
 
         ArgumentCaptor<RefreshToken> deleted = ArgumentCaptor.forClass(RefreshToken.class);
@@ -180,7 +182,7 @@ class AuthServiceRefreshTest {
 
         when(refreshTokenRepository.findByTokenHash(anyString())).thenReturn(Optional.of(expired));
 
-        assertThatThrownBy(() -> authService.refresh(new RefreshRequest("expired-token")))
+        assertThatThrownBy(() -> authService.refresh("expired-token"))
                 .isInstanceOf(AuthException.InvalidRefreshToken.class);
 
         verify(refreshTokenRepository, never()).findByUserIdAndRevokedAtIsNull(any());
@@ -199,7 +201,7 @@ class AuthServiceRefreshTest {
         when(userRepository.findById(userId)).thenReturn(Optional.of(user));
         when(tenancyApi.isTenantActive(tenantId)).thenReturn(false);
 
-        assertThatThrownBy(() -> authService.refresh(new RefreshRequest("whatever-raw-token")))
+        assertThatThrownBy(() -> authService.refresh("whatever-raw-token"))
                 .isInstanceOf(AuthException.TenantNotActive.class);
 
         // Rejected before any write — the presented token is left exactly
@@ -212,7 +214,86 @@ class AuthServiceRefreshTest {
     void unknownTokenHashIsRejected() {
         when(refreshTokenRepository.findByTokenHash(anyString())).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> authService.refresh(new RefreshRequest("never-issued")))
+        assertThatThrownBy(() -> authService.refresh("never-issued"))
                 .isInstanceOf(AuthException.InvalidRefreshToken.class);
+    }
+    @Test
+    void noCookieIsReportedAsMissingRatherThanInvalid() {
+        assertThatThrownBy(() -> authService.refresh(null))
+                .isInstanceOf(AuthException.MissingRefreshToken.class);
+        assertThatThrownBy(() -> authService.refresh("  "))
+                .isInstanceOf(AuthException.MissingRefreshToken.class);
+        verify(refreshTokenRepository, never()).findByTokenHash(any());
+    }
+
+    /** A second tab presenting the token another tab just rotated: a sibling, not a family revoke. */
+    @Test
+    void aJustRotatedTokenWithALiveSuccessorGetsASiblingInsteadOfRevokingTheFamily() {
+        UUID userId = UUID.randomUUID();
+        RefreshToken rotated = activeToken(userId);
+        rotated.setRevokedAt(Instant.now().minusSeconds(2));
+        rotated.setReplacedBy(UUID.randomUUID());
+        User user = User.builder().id(userId).firstName("A").lastName("B").email("a@b.com").build();
+
+        when(refreshTokenRepository.findByTokenHash(anyString())).thenReturn(Optional.of(rotated));
+        when(refreshTokenRepository.countRotatedSinceWithLiveSuccessor(eq(rotated.getId()), any())).thenReturn(1L);
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(refreshTokenRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(userRoleRepository.findByUserId(userId)).thenReturn(List.of());
+        when(jwtService.issueAccessToken(any(), any(), any(), anyBoolean(), any(), any()))
+                .thenReturn(new AccessTokenIssue("sibling-access-token", Instant.now().plus(Duration.ofMinutes(15))));
+
+        RefreshResult result = authService.refresh("second-tab-token");
+
+        assertThat(result.response().token()).isEqualTo("sibling-access-token");
+        assertThat(result.refreshToken()).isNotBlank();
+        verify(refreshTokenRepository, never()).findByUserIdAndRevokedAtIsNull(any());
+        // Already rotated: nothing to swap, and the chain is left as the winner wrote it.
+        verify(refreshTokenRepository, never()).rotateIfActive(any(), any(), any());
+    }
+
+    /** Two tabs at the same instant: the loser of the swap keeps its token when inside the window. */
+    @Test
+    void losingTheRotationRaceInsideTheGraceWindowKeepsTheSibling() {
+        UUID userId = UUID.randomUUID();
+        RefreshToken existing = activeToken(userId);
+        User user = User.builder().id(userId).firstName("A").lastName("B").email("a@b.com").build();
+
+        when(refreshTokenRepository.findByTokenHash(anyString())).thenReturn(Optional.of(existing));
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(refreshTokenRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(refreshTokenRepository.rotateIfActive(eq(existing.getId()), any(), any())).thenReturn(0);
+        when(refreshTokenRepository.countRotatedSinceWithLiveSuccessor(eq(existing.getId()), any())).thenReturn(1L);
+        when(userRoleRepository.findByUserId(userId)).thenReturn(List.of());
+        when(jwtService.issueAccessToken(any(), any(), any(), anyBoolean(), any(), any()))
+                .thenReturn(new AccessTokenIssue("access", Instant.now().plus(Duration.ofMinutes(15))));
+
+        assertThat(authService.refresh("simultaneous-token").refreshToken()).isNotBlank();
+
+        verify(refreshTokenRepository, never()).delete(any());
+        verify(refreshTokenRepository, never()).findByUserIdAndRevokedAtIsNull(any());
+    }
+
+    /** The grace path is not a side door past the tenant-status gate. */
+    @Test
+    void theGracePathStillRefusesASuspendedTenantsStaffBeforeWritingAnything() {
+        UUID userId = UUID.randomUUID();
+        UUID tenantId = UUID.randomUUID();
+        RefreshToken rotated = activeToken(userId);
+        rotated.setRevokedAt(Instant.now().minusSeconds(2));
+        rotated.setReplacedBy(UUID.randomUUID());
+        User user = User.builder().id(userId).firstName("A").lastName("B").email("a@b.com").build();
+        user.setTenantId(tenantId);
+
+        when(refreshTokenRepository.findByTokenHash(anyString())).thenReturn(Optional.of(rotated));
+        when(refreshTokenRepository.countRotatedSinceWithLiveSuccessor(eq(rotated.getId()), any())).thenReturn(1L);
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(tenancyApi.isTenantActive(tenantId)).thenReturn(false);
+
+        assertThatThrownBy(() -> authService.refresh("second-tab-token"))
+                .isInstanceOf(AuthException.TenantNotActive.class);
+
+        verify(refreshTokenRepository, never()).save(any());
+        verify(jwtService, never()).issueAccessToken(any(), any(), any(), anyBoolean(), any(), any());
     }
 }

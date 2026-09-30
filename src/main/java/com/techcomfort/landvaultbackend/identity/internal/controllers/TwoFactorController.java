@@ -7,6 +7,8 @@ import com.techcomfort.landvaultbackend.identity.dto.TwoFaCodeRequest;
 import com.techcomfort.landvaultbackend.identity.dto.TwoFaSetupResponse;
 import com.techcomfort.landvaultbackend.identity.dto.TwoFaVerifyRequest;
 import com.techcomfort.landvaultbackend.identity.internal.security.AccessTokenClaims;
+import com.techcomfort.landvaultbackend.identity.internal.security.RefreshTokenCookies;
+import com.techcomfort.landvaultbackend.identity.internal.service.IssuedSession;
 import com.techcomfort.landvaultbackend.identity.internal.service.TwoFactorService;
 import jakarta.validation.Valid;
 import com.techcomfort.landvaultbackend.common.OpenApiConfig;
@@ -18,6 +20,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -41,6 +44,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class TwoFactorController {
 
     private final TwoFactorService twoFactorService;
+    private final RefreshTokenCookies refreshTokenCookies;
 
     @Operation(
             summary = "Start TOTP enrolment (does NOT enable 2FA)",
@@ -100,7 +104,8 @@ public class TwoFactorController {
                     period; the lock is time-based, not permanent, because a TOTP user cannot \
                     request a fresh code the way a password-reset user can.""")
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Access and refresh tokens"),
+            @ApiResponse(responseCode = "200", description = "Access token in the body; refresh token "
+                    + "set as an HttpOnly cookie"),
             @ApiResponse(responseCode = "400", description = "Bad, expired or already-used challenge, "
                     + "or a wrong code", content = @Content()),
             @ApiResponse(responseCode = "423", description = "Locked out after repeated failures",
@@ -109,7 +114,10 @@ public class TwoFactorController {
     @SecurityRequirements
     @PostMapping("/verify")
     public ResponseEntity<AuthResponse> verify(@Valid @RequestBody TwoFaVerifyRequest request) {
-        return ResponseEntity.ok(twoFactorService.verify(request));
+        IssuedSession session = twoFactorService.verify(request);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.SET_COOKIE, refreshTokenCookies.issue(session.refreshToken()).toString())
+                .body(session.response());
     }
 
     @Operation(

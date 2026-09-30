@@ -7,7 +7,6 @@ import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.identity.dto.AuthResponse;
 import com.techcomfort.landvaultbackend.identity.dto.ForgotPasswordRequest;
 import com.techcomfort.landvaultbackend.identity.dto.LoginRequest;
-import com.techcomfort.landvaultbackend.identity.dto.RefreshRequest;
 import com.techcomfort.landvaultbackend.identity.dto.RefreshResponse;
 import com.techcomfort.landvaultbackend.identity.dto.RegisterRequest;
 import com.techcomfort.landvaultbackend.identity.dto.ResetPasswordRequest;
@@ -250,16 +249,23 @@ class PasswordResetIT {
     @Test
     void resetRevokesExistingRefreshTokens() {
         String email = register();
-        AuthResponse session = login(email, OLD_PASSWORD).getBody();
-        assertThat(session).isNotNull();
+        String original = RefreshCookies.of(login(email, OLD_PASSWORD));
+        // Rotated once, so `original` would be inside the grace window —
+        // the reset must still leave no way back in through it.
+        String refreshToken = RefreshCookies.of(restTemplate.postForEntity(
+                "/api/auth/refresh", RefreshCookies.presenting(original), RefreshResponse.class));
 
         requestCode(email);
         assertThat(resetPassword(email, onlyDeliveredCode(), NEW_PASSWORD).getStatusCode()).isEqualTo(HttpStatus.OK);
 
         ResponseEntity<RefreshResponse> refreshed = restTemplate.postForEntity(
-                "/api/auth/refresh", new RefreshRequest(session.refreshToken()), RefreshResponse.class);
+                "/api/auth/refresh", RefreshCookies.presenting(refreshToken), RefreshResponse.class);
         assertThat(refreshed.getStatusCode())
                 .as("a refresh token issued before the reset must no longer work")
+                .isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(restTemplate.postForEntity("/api/auth/refresh",
+                RefreshCookies.presenting(original), RefreshResponse.class).getStatusCode())
+                .as("a just-rotated token gets no grace once the reset revoked its successor")
                 .isEqualTo(HttpStatus.UNAUTHORIZED);
     }
 

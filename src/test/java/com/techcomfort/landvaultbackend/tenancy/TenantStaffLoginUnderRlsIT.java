@@ -3,7 +3,7 @@ package com.techcomfort.landvaultbackend.tenancy;
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.identity.dto.AuthResponse;
 import com.techcomfort.landvaultbackend.identity.dto.LoginRequest;
-import com.techcomfort.landvaultbackend.identity.dto.RefreshRequest;
+import com.techcomfort.landvaultbackend.identity.RefreshCookies;
 import com.techcomfort.landvaultbackend.identity.dto.RefreshResponse;
 import com.techcomfort.landvaultbackend.identity.dto.RegisterRequest;
 import com.techcomfort.landvaultbackend.identity.dto.TenantScopeResponse;
@@ -134,11 +134,11 @@ class TenantStaffLoginUnderRlsIT {
     @Test
     void refreshAlsoWorksForTenantStaff() {
         Fixture fixture = tenantStaff();
-        AuthResponse session = restTemplate.postForEntity(
-                "/api/auth/login", new LoginRequest(fixture.email(), PASSWORD), AuthResponse.class).getBody();
+        String refreshToken = RefreshCookies.of(restTemplate.postForEntity(
+                "/api/auth/login", new LoginRequest(fixture.email(), PASSWORD), AuthResponse.class));
 
         ResponseEntity<RefreshResponse> refreshed = restTemplate.postForEntity(
-                "/api/auth/refresh", new RefreshRequest(session.refreshToken()), RefreshResponse.class);
+                "/api/auth/refresh", RefreshCookies.presenting(refreshToken), RefreshResponse.class);
 
         assertThat(refreshed.getStatusCode())
                 .as("refresh() calls the same lookup, before any scope exists")

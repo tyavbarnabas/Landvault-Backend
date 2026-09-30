@@ -786,6 +786,10 @@ rotation; the loser deletes its own orphaned token and triggers the same
 family-revocation path as reuse of a revoked token, rather than forking a
 divergent branch.
 
+**Amended by the cookie slice**: inside a short grace window, losing that
+race (or presenting a just-rotated token) is no longer theft — see "The
+refresh token lives in an `HttpOnly` cookie" below.
+
 **Gotcha worth knowing before touching `AuthService.refresh()`**: its
 `@Transactional` is `noRollbackFor = AuthException.InvalidRefreshToken.class`,
 and that's load-bearing, not incidental. The theft-detection and lost-race
@@ -796,6 +800,163 @@ revocation those branches exist to make stick. This was a real bug caught
 by the Testcontainers integration test, not the mocked unit tests (mocks
 don't roll back anything, so they couldn't have caught it) — a reminder
 that the integration test isn't redundant with the unit tests here.
+
+## The refresh token lives in an `HttpOnly` cookie, never a body
+
+**The refresh flow had never worked before this.** The frontend posted to
+`/api/auth/refresh` with no body expecting a cookie; the backend required
+`{ refreshToken }` in the body; the frontend never stored what login
+returned. Every refresh failed, so every session silently ended at the
+15-minute access-token expiry.
+
+**Why a cookie rather than browser storage.** A refresh token is a 30-day
+credential. In `localStorage` any script on the page — a compromised
+dependency, an analytics tag, an XSS flaw — can read it and use it from its
+own machine for a month. In an `HttpOnly` cookie, JavaScript cannot read it
+at all; XSS can still act as the user while the page is open, but nothing
+persistent is stolen. The access token stays in the body (short-lived, a
+different trade-off, out of scope).
+
+- Set by **login, `/2fa/verify`, register and refresh**; `HttpOnly`,
+  `SameSite=Strict`, `Path=/api/auth`, `Max-Age` = the refresh TTL.
+  **It appears in no response body** — `AuthResponse`/`RefreshResponse` have
+  no such field, and `RefreshTokenCookieIT` asserts on the raw JSON.
+  The service hands the raw token to the controller through `IssuedSession`/
+  `RefreshResult`, internal records that are never serialised.
+- Attributes are configuration (`app.refresh-token.*`). **`cookie-secure` is
+  `true` in the base config and `false` only in `application-dev.yml`** —
+  Safari doesn't reliably treat `http://localhost` as secure, so dev turns it
+  off explicitly rather than relying on the browser. A deployment that forgets
+  to configure it gets the safe value.
+- `/api/auth/refresh` takes **no body** and reads the cookie.
+  `REFRESH_TOKEN_MISSING` (no cookie) and `INVALID_REFRESH_TOKEN` are distinct
+  401s so the frontend can tell "never signed in" from "session ended".
+- **Only the transport changed.** Hashing, rotation, `replaced_by` and the
+  family revoke are exactly as before, apart from the grace window below.
+
+### `SameSite=Strict`, same-site deployment assumed — and why that is not the whole CSRF story
+
+The cookie is only ever sent by the app's own fetch calls, so `Lax` gains
+nothing. **The deployment assumption is that frontend and API share a site**
+(`landvault.com` + `api.landvault.com`, or one origin). Note that *site* is
+the registrable domain, not the host: a Vercel frontend on a custom
+`app.landvault.com` is same-site; one on `*.vercel.app` is not.
+
+**`SameSite` alone is not a CSRF defence here, because every subdomain is the
+same site.** A compromised `blog.landvault.com` on a hosted CMS, or any future
+subdomain serving user content, passes it. So refresh and logout also run
+**`OriginGuard`**: a request whose `Origin` is not in `app.cors.allowed-origins`
+(the list CORS uses) gets 403 `ORIGIN_NOT_ALLOWED`.
+
+- **Absent `Origin` is allowed** — browsers always send it on a cross-site
+  POST, so its absence means a non-browser client (curl, Postman, a test),
+  which cannot carry a victim's cookie. Present-but-unlisted is refused,
+  including the literal `null` that sandboxed pages send.
+- **Why an Origin check rather than CSRF tokens**: the realistic impact of a
+  forged refresh is a rotated cookie in the victim's own browser (CORS stops
+  the attacker reading the new access token), and of a forged logout a
+  forced sign-out. A token mechanism would be disproportionate.
+- **What it adds over CORS, verified rather than assumed**: Spring's CORS
+  processor already rejects foreign origins server-side, so a foreign-origin
+  test passes with the guard disabled. It treats the server's own origin as
+  same-origin and lets it through, though. Only
+  `aSameOriginRequestThatIsNotOnTheAllowedListIsRefusedByTheOriginCheckItself`
+  goes red without the guard. The guard also means CSRF protection doesn't
+  depend on the CORS config staying as strict as it is.
+- **This makes the deployment question a config value.** If the frontend
+  ever moves cross-site: `cookie-same-site: None` (which requires
+  `cookie-secure: true`) and add that origin to the allowed list. The Origin
+  check already covers CSRF in that case.
+- **Consequence for a one-origin deployment**: the allowed list must then
+  contain the API's own public origin. Swagger UI in dev (served from
+  `:8080`) is refused on refresh/logout for this reason; use Postman.
+
+### The rotation grace window: two tabs are not a thief
+
+With a cookie, two tabs whose access tokens expire together send **the same
+cookie**. One rotates it; the other presents an already-rotated token, which
+theft detection read as a stolen copy and revoked every session. Signed out of
+everything for having two tabs open, in ordinary use. The frontend's
+single-flight refresh is per tab and cannot help; `navigator.locks` fixes the
+common case client-side. The server side is **`app.refresh-token.reuse-grace`
+(10s)**, which also covers a retry after a dropped response, which no
+client-side lock can prevent.
+
+**"Return the current token" was the spec and is impossible**: only hashes are
+stored, and storing the raw value to allow it would undo the hashing. Instead
+a qualifying request gets a **sibling** — a fresh refresh token and access
+token, with the chain left exactly as the winner wrote it. The browser keeps
+whichever `Set-Cookie` lands last; both are valid, and the other expires
+unused. This deliberately loosens theft detection by the window's width: a
+thief replaying within those seconds also gets a token. Auth0's reuse interval
+and Okta's grace period accept the same trade-off. **Widening it widens the
+replay window; it is a security parameter.**
+
+**It applies only to tokens retired *by rotation*, and that condition is the
+important part.** `revoked_at` is set five ways: rotation, family revoke,
+logout, password reset, change-password. A check of "revoked in the last few
+seconds" alone would let someone replay a token straight after the user
+logged out or reset their password. So `countRotatedSinceWithLiveSuccessor`
+requires all three: the token has a successor (`replaced_by`), was retired
+within the window, **and that successor is still live**. Logout/reset/change
+revoke the successor, so the old token stops qualifying. Proven red by dropping
+the live-successor condition (both replay tests return 200).
+
+It runs on both routes a duplicate arrives by — after the winner committed
+(already revoked) and at the same instant (`rotateIfActive` returns 0, then
+the grace query reads committed state as a fresh statement). The tenant-status
+gate still runs before anything is written on the grace path.
+
+### Logout ends one session — and replaying a logged-out token is still theft
+
+`POST /api/auth/logout` is public (it must work once the access token has
+expired), Origin-checked, always 204, and always clears the cookie with the
+same attributes it was set with (a browser only removes a matching cookie).
+It revokes **only the presented token**, so a phone stays signed in when a
+laptop logs out. Revoked with an atomic `UPDATE … WHERE revoked_at IS NULL`,
+not load-then-save — Hibernate writes every column, so a load-then-save
+racing a refresh would overwrite the rotation's `replaced_by` with null.
+
+**Presenting a logged-out token afterwards revokes every session**, because
+it is a revoked token replayed — the theft signal — and the browser already
+cleared its copy. Found by `logoutEndsOneSessionAndLeavesTheOtherDeviceSignedIn`
+going red when it checked the laptop before the phone. Left as is: rotation
+and theft detection were out of scope, and it is the correct reading. The
+one benign way to hit it — a tab mid-refresh at the instant another tab logs
+out — is narrow, and `navigator.locks` around both calls closes it.
+
+**"Family" means every one of the user's sessions**, not one device's chain:
+`revokeTokenFamily` revokes all their live tokens. Theft on one device signs
+out all of them — correct, and worth knowing before reading "family" as
+"device".
+
+### `device`, `user_agent`, `ip_address`
+
+`user_agent` is now populated at issue time (read from the request context,
+**truncated to the column's 255** so a long browser string can't turn a login
+into a 500 — tested). `device` stays null (it would mean parsing that string),
+and so does `ip_address` (personal data under NDPR; collecting it is its own
+decision). A session list in Settings has a browser string to show, not a
+device name.
+
+### Cleanup: `RefreshTokenCleanupJob`
+
+Rotation writes a row per refresh and nothing removed them. Hourly, rows
+expired more than **`cleanup-retention` (30d)** ago are hard-deleted — kept
+that long so a recent theft can still be investigated. These are dead
+credentials, not domain history, so the never-hard-delete rule doesn't apply.
+
+- **No platform scope**, unlike the reservation sweeper: `refresh_tokens`
+  carries no RLS policy, so there is nothing for a scope to unlock.
+- **The `replaced_by` self-FK is protected in the query, not by an ordering
+  assumption.** "A successor always expires after its predecessor" is true
+  only while the TTL never shrinks; after a shortening a live predecessor can
+  point at an expired successor, and a plain cutoff delete then fails on the
+  FK every run, forever. The `DELETE` carries `NOT EXISTS (a surviving row
+  whose replaced_by is this one)`, and is one statement, so rows deleted
+  together may reference each other. Proven red by removing the `NOT EXISTS`
+  (FK violation). Deleting old rows cannot weaken theft detection: that reads
+  the presented token's own row, and a deleted one is long expired anyway.
 
 ## One `otp_codes` table, discriminated by purpose
 

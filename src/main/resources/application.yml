@@ -129,6 +129,28 @@ app:
     secret: ${JWT_SECRET}
     access-token-ttl: 15m
     refresh-token-ttl: 30d
+  # The refresh token's cookie, grace window and retention — see AGENTS.md.
+  refresh-token:
+    cookie-name: lv_refresh
+    # True everywhere except the dev profile. Safari does not reliably treat
+    # http://localhost as secure for cookies, so dev turns it off explicitly
+    # rather than relying on the browser.
+    cookie-secure: true
+    # Strict: the cookie is only ever sent by the app's own fetch calls. The
+    # Origin check (OriginGuard) covers what SameSite cannot — subdomains
+    # are the same site. Moving the frontend cross-site means None here
+    # (which requires cookie-secure), and the Origin check already covers it.
+    cookie-same-site: Strict
+    # Only refresh and logout need it; not sent on every API call.
+    cookie-path: /api/auth
+    # A token rotated this recently, whose successor is still live, gets a
+    # sibling instead of a family revoke (a second tab or a retried request).
+    # A security parameter: widening it widens the replay window for a thief.
+    reuse-grace: 10s
+    # Rows are deleted this long after expiry, not at it, so a recent theft
+    # can still be investigated.
+    cleanup-retention: 30d
+    cleanup-interval: 1h
   cors:
     # ~/landvault's Vite dev server default — see its AGENTS.md.
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:8443}

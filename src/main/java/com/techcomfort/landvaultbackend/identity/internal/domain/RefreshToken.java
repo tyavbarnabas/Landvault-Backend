@@ -17,11 +17,9 @@ import java.util.UUID;
 
 /**
  * A session's refresh token — stores only {@code tokenHash}, never the raw
- * token. {@code replacedBy} chains rotations.
- * <p>
- * TODO: the frontend currently holds the access token in localStorage (a
- * flagged XSS exposure). Moving refresh tokens to httpOnly cookies is the
- * intended direction, pending backend cookie/CORS decisions not settled yet.
+ * token, which travels only in an {@code HttpOnly} cookie. {@code replacedBy}
+ * chains rotations. {@code device} and {@code ipAddress} are never populated;
+ * see AGENTS.md.
  */
 @Getter
 @Setter

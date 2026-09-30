@@ -65,6 +65,9 @@ public class SecurityConfig {
             "/api/auth/login",
             "/api/auth/register",
             "/api/auth/refresh",
+            // Cookie-authenticated, not bearer: must work once the access
+            // token has expired. Guarded by OriginGuard instead.
+            "/api/auth/logout",
             "/api/auth/forgot-password",
             "/api/auth/reset-password",
             "/api/auth/2fa/verify",

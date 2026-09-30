@@ -7,11 +7,14 @@ import com.techcomfort.landvaultbackend.identity.dto.ChangePasswordRequest;
 import com.techcomfort.landvaultbackend.identity.dto.ForgotPasswordRequest;
 import com.techcomfort.landvaultbackend.identity.dto.LoginRequest;
 import com.techcomfort.landvaultbackend.identity.dto.MessageResponse;
-import com.techcomfort.landvaultbackend.identity.dto.RefreshRequest;
 import com.techcomfort.landvaultbackend.identity.dto.RefreshResponse;
 import com.techcomfort.landvaultbackend.identity.dto.RegisterRequest;
 import com.techcomfort.landvaultbackend.identity.dto.ResetPasswordRequest;
+import com.techcomfort.landvaultbackend.identity.internal.security.OriginGuard;
+import com.techcomfort.landvaultbackend.identity.internal.security.RefreshTokenCookies;
 import com.techcomfort.landvaultbackend.identity.internal.service.AuthService;
+import com.techcomfort.landvaultbackend.identity.internal.service.IssuedSession;
+import com.techcomfort.landvaultbackend.identity.internal.service.RefreshResult;
 import com.techcomfort.landvaultbackend.identity.internal.service.LoginResult;
 import com.techcomfort.landvaultbackend.common.OpenApiConfig;
 import io.swagger.v3.oas.annotations.Operation;
@@ -20,7 +23,9 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -29,8 +34,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * register, login, refresh — the credential step only — plus password
- * reset; see AuthService. Every route here is public, but note that
+ * register, login, refresh, logout — the credential step only — plus password
+ * reset; see AuthService. The refresh token only ever travels in an
+ * {@code HttpOnly} cookie (RefreshTokenCookies), never a body. Every route here is public, but note that
  * {@code /api/auth/**} is <em>not</em> a wildcard in
  * {@code SecurityConfig}: the 2FA slice replaced it with one entry per
  * route, because {@code /api/auth/2fa/setup|confirm|disable} must require a
@@ -45,9 +51,13 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
 
     private final AuthService authService;
+    private final RefreshTokenCookies refreshTokenCookies;
+    private final OriginGuard originGuard;
 
-    public AuthController(AuthService authService) {
+    public AuthController(AuthService authService, RefreshTokenCookies refreshTokenCookies, OriginGuard originGuard) {
         this.authService = authService;
+        this.refreshTokenCookies = refreshTokenCookies;
+        this.originGuard = originGuard;
     }
 
     @Operation(
@@ -62,8 +72,9 @@ public class AuthController {
 
                     Email is unique across the whole platform, case-insensitively.""")
     @ApiResponses({
-            @ApiResponse(responseCode = "201", description = "Created; the response carries an access "
-                    + "token, a refresh token and the user's permission slugs"),
+            @ApiResponse(responseCode = "201", description = "Created; the body carries an access "
+                    + "token and the user's permission slugs, and the refresh token is set as an "
+                    + "HttpOnly cookie — never in the body"),
             @ApiResponse(responseCode = "400", description = "Validation failed; see `fieldErrors`",
                     content = @io.swagger.v3.oas.annotations.media.Content()),
             @ApiResponse(responseCode = "409", description = "That email already has an account",
@@ -71,7 +82,10 @@ public class AuthController {
     })
     @PostMapping("/register")
     public ResponseEntity<AuthResponse> register(@Valid @RequestBody RegisterRequest request) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(authService.register(request));
+        IssuedSession session = authService.register(request);
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .header(HttpHeaders.SET_COOKIE, refreshTokenCookies.issue(session.refreshToken()).toString())
+                .body(session.response());
     }
 
     /**
@@ -86,7 +100,8 @@ public class AuthController {
             description = """
                     **Two different 200 responses, and a client must handle both.**
 
-                    - Two-factor off → `AuthResponse`: access token, refresh token, user.
+                    - Two-factor off → `AuthResponse`: access token and user, with the refresh \
+                    token set as an `HttpOnly` cookie (never in the body).
                     - Two-factor on → `TwoFactorChallengeResponse`: `twoFactorRequired`, a \
                     `challengeToken` and its expiry, and nothing else. \
                     **No tokens are issued at this point.** Exchange the challenge plus a TOTP or \
@@ -120,33 +135,78 @@ public class AuthController {
     @PostMapping("/login")
     public ResponseEntity<?> login(@Valid @RequestBody LoginRequest request) {
         LoginResult result = authService.login(request);
-        return ResponseEntity.ok(result.requiresTwoFactor() ? result.challenge() : result.authResponse());
+        if (result.requiresTwoFactor()) {
+            return ResponseEntity.ok(result.challenge());
+        }
+        return ResponseEntity.ok()
+                .header(HttpHeaders.SET_COOKIE, refreshTokenCookies.issue(result.session().refreshToken()).toString())
+                .body(result.session().response());
     }
 
     @Operation(
-            summary = "Exchange a refresh token for a new access token",
+            summary = "Exchange the refresh cookie for a new access token",
             description = """
-                    **Refresh tokens rotate.** Each call issues a new one and revokes the token you \
-                    presented, chaining them together. Always store the token this returns; the old \
-                    one stops working immediately.
+                    **Send no body.** The refresh token lives in an `HttpOnly` cookie scoped to \
+                    `/api/auth`; the browser attaches it (`credentials: "include"`). A new access \
+                    token comes back in the body and a new cookie replaces the old one.
 
-                    **Presenting an already-revoked token revokes the entire family** and forces a \
-                    fresh login. That is theft detection, not a bug: a token used after the \
-                    legitimate client already rotated past it means somebody has a copy. Concurrent \
-                    refreshes of the same token are resolved in the database, so exactly one wins and \
-                    the loser triggers the same path — single-flight your refresh calls.
+                    **Refresh tokens rotate.** Each call retires the token presented. Presenting a \
+                    retired token again **revokes every session the user has** and forces a fresh \
+                    login — that is theft detection. The one exception is a short grace window: a \
+                    token rotated a few seconds ago whose replacement is still live (a second tab, \
+                    a retried request) gets a fresh token instead. Serialise refreshes across tabs \
+                    anyway.
+
+                    A missing cookie (`REFRESH_TOKEN_MISSING`) and a bad one \
+                    (`INVALID_REFRESH_TOKEN`) are distinct 401s, so a client can tell "never \
+                    signed in" from "session ended". A request from an origin outside the allowed \
+                    list is refused.
 
                     A suspended tenant's staff are refused here too, so a session cannot outlive its \
                     company's suspension by more than the access token's 15 minutes.""")
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "New access token and new refresh token"),
-            @ApiResponse(responseCode = "401", description = "Unknown, expired or already-used token. "
-                    + "If already used, every token for that user is now revoked",
+            @ApiResponse(responseCode = "200", description = "New access token; new refresh cookie set"),
+            @ApiResponse(responseCode = "401", description = "`REFRESH_TOKEN_MISSING`, or "
+                    + "`INVALID_REFRESH_TOKEN` (unknown, expired or already used — if already used "
+                    + "outside the grace window, every token for that user is now revoked)",
+                    content = @io.swagger.v3.oas.annotations.media.Content()),
+            @ApiResponse(responseCode = "403", description = "`ORIGIN_NOT_ALLOWED`, or `TENANT_NOT_ACTIVE`",
                     content = @io.swagger.v3.oas.annotations.media.Content())
     })
     @PostMapping("/refresh")
-    public ResponseEntity<RefreshResponse> refresh(@Valid @RequestBody RefreshRequest request) {
-        return ResponseEntity.ok(authService.refresh(request));
+    public ResponseEntity<RefreshResponse> refresh(HttpServletRequest httpRequest) {
+        originGuard.requireAllowedOrigin(httpRequest);
+        RefreshResult result = authService.refresh(refreshTokenCookies.read(httpRequest).orElse(null));
+        return ResponseEntity.ok()
+                .header(HttpHeaders.SET_COOKIE, refreshTokenCookies.issue(result.refreshToken()).toString())
+                .body(result.response());
+    }
+
+    /**
+     * Public, cookie-authenticated: it must work with an expired access
+     * token. Always 204, and always clears the cookie.
+     */
+    @Operation(
+            summary = "Sign out this device",
+            description = """
+                    Revokes the refresh token in the cookie and clears the cookie. **Only this \
+                    session ends** — the same account signed in elsewhere stays signed in.
+
+                    Needs no access token, so it works after one has expired. Always 204, whether \
+                    or not there was a live session to end. An access token already issued rides \
+                    out its remaining lifetime, up to 15 minutes; discard it client-side.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "204", description = "Signed out; cookie cleared"),
+            @ApiResponse(responseCode = "403", description = "`ORIGIN_NOT_ALLOWED`",
+                    content = @io.swagger.v3.oas.annotations.media.Content())
+    })
+    @PostMapping("/logout")
+    public ResponseEntity<Void> logout(HttpServletRequest httpRequest) {
+        originGuard.requireAllowedOrigin(httpRequest);
+        authService.logout(refreshTokenCookies.read(httpRequest).orElse(null));
+        return ResponseEntity.noContent()
+                .header(HttpHeaders.SET_COOKIE, refreshTokenCookies.clear().toString())
+                .build();
     }
 
     /**

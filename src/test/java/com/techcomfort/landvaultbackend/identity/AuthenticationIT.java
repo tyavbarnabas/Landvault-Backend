@@ -5,7 +5,6 @@ import com.techcomfort.landvaultbackend.identity.dto.AuthResponse;
 import com.techcomfort.landvaultbackend.identity.dto.ChangePasswordRequest;
 import com.techcomfort.landvaultbackend.identity.dto.LoginRequest;
 import com.techcomfort.landvaultbackend.identity.dto.MeResponse;
-import com.techcomfort.landvaultbackend.identity.dto.RefreshRequest;
 import com.techcomfort.landvaultbackend.identity.dto.RefreshResponse;
 import com.techcomfort.landvaultbackend.identity.dto.RegisterRequest;
 import org.junit.jupiter.api.Test;
@@ -58,6 +57,15 @@ class AuthenticationIT {
     @org.springframework.beans.factory.annotation.Autowired
     private TestRestTemplate restTemplate;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+
+    /** Moves a rotation outside the grace window, so reuse reads as theft again. */
+    private void backdateRotation(String rawRefreshToken) {
+        jdbcTemplate.update("UPDATE refresh_tokens SET revoked_at = revoked_at - interval '1 hour' WHERE token_hash = ?",
+                RefreshCookies.hash(rawRefreshToken));
+    }
+
     @Test
     void registerLoginProtectedEndpointRefreshAndCallAgain() {
         String email = "ada+" + UUID.randomUUID() + "@example.com";
@@ -78,7 +86,7 @@ class AuthenticationIT {
         AuthResponse loggedIn = loginResponse.getBody();
         assertThat(loggedIn).isNotNull();
         String accessToken = loggedIn.token();
-        String refreshToken = loggedIn.refreshToken();
+        String refreshToken = RefreshCookies.of(loginResponse);
 
         // The roles claim must carry Role.code verbatim (lowercase, no
         // transformation) — this is AuthService.loadContext's behavior,
@@ -96,24 +104,28 @@ class AuthenticationIT {
         assertThat(meResponse.getBody().permissions()).contains("client.dashboard.view");
 
         ResponseEntity<RefreshResponse> refreshResponse = restTemplate.postForEntity(
-                "/api/auth/refresh", new RefreshRequest(refreshToken), RefreshResponse.class);
+                "/api/auth/refresh", RefreshCookies.presenting(refreshToken), RefreshResponse.class);
         assertThat(refreshResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
         RefreshResponse rotated = refreshResponse.getBody();
         assertThat(rotated).isNotNull();
         assertThat(rotated.token()).isNotEqualTo(accessToken);
-        assertThat(rotated.refreshToken()).isNotEqualTo(refreshToken);
+        String rotatedRefreshToken = RefreshCookies.of(refreshResponse);
+        assertThat(rotatedRefreshToken).isNotEqualTo(refreshToken);
 
         ResponseEntity<MeResponse> meAgain = callMe(rotated.token());
         assertThat(meAgain.getStatusCode()).isEqualTo(HttpStatus.OK);
 
-        // The old refresh token was rotated out — reuse must now fail
-        // (and, per the theft-detection rule, take the new one with it).
+        // The old refresh token was rotated out — reuse outside the grace
+        // window must now fail (and, per the theft-detection rule, take the
+        // new one with it). Backdated rather than slept past: the window is
+        // configuration, and a test must not wait on a clock.
+        backdateRotation(refreshToken);
         ResponseEntity<RefreshResponse> reuseOldToken = restTemplate.postForEntity(
-                "/api/auth/refresh", new RefreshRequest(refreshToken), RefreshResponse.class);
+                "/api/auth/refresh", RefreshCookies.presenting(refreshToken), RefreshResponse.class);
         assertThat(reuseOldToken.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
 
         ResponseEntity<RefreshResponse> reuseRotatedToken = restTemplate.postForEntity(
-                "/api/auth/refresh", new RefreshRequest(rotated.refreshToken()), RefreshResponse.class);
+                "/api/auth/refresh", RefreshCookies.presenting(rotatedRefreshToken), RefreshResponse.class);
         assertThat(reuseRotatedToken.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
     }
 
@@ -198,10 +210,11 @@ class AuthenticationIT {
         String original = "correct horse battery staple";
         String replacement = "a completely different passphrase";
 
-        AuthResponse registered = restTemplate.postForEntity("/api/auth/register",
+        ResponseEntity<AuthResponse> registerResponse = restTemplate.postForEntity("/api/auth/register",
                 new RegisterRequest("Ada", "L", email, "+2348000000000", original, "NG", Currency.NGN),
-                AuthResponse.class).getBody();
-        String refreshToken = registered.refreshToken();
+                AuthResponse.class);
+        AuthResponse registered = registerResponse.getBody();
+        String refreshToken = RefreshCookies.of(registerResponse);
 
         // A wrong current password is refused, and is refused the same way
         // a bad password at login is.
@@ -236,7 +249,7 @@ class AuthenticationIT {
         // before the change is NOT severed — it rides out its 15 minutes —
         // which is why this asserts on refresh and not on /api/me.
         assertThat(restTemplate.postForEntity("/api/auth/refresh",
-                new RefreshRequest(refreshToken), String.class).getStatusCode())
+                RefreshCookies.presenting(refreshToken), String.class).getStatusCode())
                 .as("no new session can be minted from a pre-change refresh token")
                 .isEqualTo(HttpStatus.UNAUTHORIZED);
     }

@@ -8,7 +8,6 @@ import com.techcomfort.landvaultbackend.identity.dto.AuthUserResponse;
 import com.techcomfort.landvaultbackend.identity.dto.ChangePasswordRequest;
 import com.techcomfort.landvaultbackend.identity.dto.ForgotPasswordRequest;
 import com.techcomfort.landvaultbackend.identity.dto.LoginRequest;
-import com.techcomfort.landvaultbackend.identity.dto.RefreshRequest;
 import com.techcomfort.landvaultbackend.identity.dto.RefreshResponse;
 import com.techcomfort.landvaultbackend.identity.dto.RegisterRequest;
 import com.techcomfort.landvaultbackend.identity.dto.ResetPasswordRequest;
@@ -36,6 +35,7 @@ import com.techcomfort.landvaultbackend.identity.internal.security.AccessTokenIs
 import com.techcomfort.landvaultbackend.identity.internal.security.TenantScopeResolver;
 import com.techcomfort.landvaultbackend.identity.internal.security.JwtProperties;
 import com.techcomfort.landvaultbackend.identity.internal.security.JwtService;
+import com.techcomfort.landvaultbackend.identity.internal.security.RefreshTokenProperties;
 import com.techcomfort.landvaultbackend.identity.internal.security.RoleClaim;
 import com.techcomfort.landvaultbackend.identity.internal.security.TwoFaProperties;
 import com.techcomfort.landvaultbackend.tenancy.TenancyApi;
@@ -43,9 +43,12 @@ import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.http.HttpHeaders;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -76,6 +79,9 @@ public class AuthService {
     private static final String BUYER_ROLE_CODE = "buyer";
     private static final String SUPER_ADMIN_ROLE_CODE = "super_admin";
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    // refresh_tokens.user_agent is varchar(255); browser strings can exceed
+    // it, and an overlong one must not turn a login into a 500.
+    private static final int USER_AGENT_MAX_LENGTH = 255;
 
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
@@ -85,6 +91,7 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final JwtProperties jwtProperties;
+    private final RefreshTokenProperties refreshTokenProperties;
     private final TenancyApi tenancyApi;
     private final OtpCodeRepository otpCodeRepository;
     private final OtpDeliveryService otpDeliveryService;
@@ -113,7 +120,7 @@ public class AuthService {
     }
 
     @Transactional
-    public AuthResponse register(RegisterRequest request) {
+    public IssuedSession register(RegisterRequest request) {
         if (userRepository.existsByEmailIgnoreCase(request.email())) {
             throw new AuthException.EmailAlreadyRegistered();
         }
@@ -223,20 +230,35 @@ public class AuthService {
     // to fail this request. Spring's default @Transactional behavior rolls
     // back on any unchecked exception, which would silently undo exactly
     // the revocation those branches exist to make stick.
+    //
+    // The rotation grace window (AGENTS.md) is the one deliberate loosening:
+    // a token rotated moments ago whose successor is still live is a second
+    // tab or a retried request, not a thief, and gets a sibling token instead
+    // of a family revoke. It applies on both routes a duplicate can arrive by
+    // — after the winner committed (already revoked below) or at the same
+    // instant (rotateIfActive losing). Outside the window, or for a token
+    // retired any other way, reuse is still theft.
     @Transactional(noRollbackFor = AuthException.InvalidRefreshToken.class)
-    public RefreshResponse refresh(RefreshRequest request) {
-        String hash = hashRefreshToken(request.refreshToken());
+    public RefreshResult refresh(String rawRefreshToken) {
+        if (rawRefreshToken == null || rawRefreshToken.isBlank()) {
+            throw new AuthException.MissingRefreshToken();
+        }
+        String hash = hashRefreshToken(rawRefreshToken);
         RefreshToken existing = refreshTokenRepository.findByTokenHash(hash)
                 .orElseThrow(AuthException.InvalidRefreshToken::new);
 
         if (existing.getExpiresAt().isBefore(Instant.now())) {
             throw new AuthException.InvalidRefreshToken();
         }
+        boolean graceReplay = false;
         if (existing.getRevokedAt() != null) {
-            // A revoked token was presented again — theft signal. Revoke
-            // the whole family and force re-login. See AGENTS.md.
-            revokeTokenFamily(existing.getUserId());
-            throw new AuthException.InvalidRefreshToken();
+            if (!withinRotationGrace(existing)) {
+                // A revoked token was presented again — theft signal. Revoke
+                // the whole family and force re-login. See AGENTS.md.
+                revokeTokenFamily(existing.getUserId());
+                throw new AuthException.InvalidRefreshToken();
+            }
+            graceReplay = true;
         }
 
         User user = userRepository.findById(existing.getUserId())
@@ -251,15 +273,24 @@ public class AuthService {
         RawRefreshToken newRefresh = issueRefreshToken(user.getId());
         RefreshToken savedNewToken = refreshTokenRepository.save(newRefresh.entity());
 
-        int rotated = refreshTokenRepository.rotateIfActive(existing.getId(), Instant.now(), savedNewToken.getId());
-        if (rotated == 0) {
-            // Lost a concurrent rotation race for the same token — someone
-            // else (or another in-flight request) already rotated it.
-            // Don't leave our freshly issued token as an orphaned,
-            // divergent branch of the family.
-            refreshTokenRepository.delete(savedNewToken);
-            revokeTokenFamily(existing.getUserId());
-            throw new AuthException.InvalidRefreshToken();
+        if (!graceReplay) {
+            int rotated = refreshTokenRepository.rotateIfActive(existing.getId(), Instant.now(), savedNewToken.getId());
+            if (rotated == 0) {
+                // Lost a concurrent rotation race for the same token. Inside
+                // the grace window that is two tabs refreshing at once, and
+                // our new token stands as a sibling of the winner's. Outside
+                // it, don't leave an orphaned, divergent branch of the family.
+                if (!withinRotationGrace(existing)) {
+                    refreshTokenRepository.delete(savedNewToken);
+                    revokeTokenFamily(existing.getUserId());
+                    throw new AuthException.InvalidRefreshToken();
+                }
+                graceReplay = true;
+            }
+        }
+        if (graceReplay) {
+            log.info("Refresh token for user {} re-presented within the rotation grace window; issued a sibling token",
+                    user.getId());
         }
 
         List<UserRole> assignments = userRoleRepository.findByUserId(user.getId());
@@ -267,7 +298,30 @@ public class AuthService {
         AccessTokenIssue accessToken = jwtService.issueAccessToken(
                 user.getId(), user.getEmail(), user.getTenantId(), ctx.platformStaff(), ctx.roleClaims(), ctx.permissions());
 
-        return new RefreshResponse(accessToken.token(), newRefresh.rawToken());
+        return new RefreshResult(new RefreshResponse(accessToken.token()), newRefresh.rawToken());
+    }
+
+    /**
+     * Revokes exactly the presented token — never the family, so signing out
+     * on one device leaves the others signed in. Silent in every case (no
+     * cookie, unknown, already revoked): logout has nothing to report, and it
+     * must never trip theft detection.
+     */
+    @Transactional
+    public void logout(String rawRefreshToken) {
+        if (rawRefreshToken == null || rawRefreshToken.isBlank()) {
+            return;
+        }
+        refreshTokenRepository.findByTokenHash(hashRefreshToken(rawRefreshToken)).ifPresent(token -> {
+            if (refreshTokenRepository.revokeIfActive(token.getId(), Instant.now()) == 1) {
+                log.info("Session ended by logout for user {}", token.getUserId());
+            }
+        });
+    }
+
+    private boolean withinRotationGrace(RefreshToken token) {
+        Instant rotatedAfter = Instant.now().minus(refreshTokenProperties.reuseGrace());
+        return refreshTokenRepository.countRotatedSinceWithLiveSuccessor(token.getId(), rotatedAfter) > 0;
     }
 
     /**
@@ -430,7 +484,7 @@ public class AuthService {
     // Package-private: TwoFactorService completes a two-step login by calling
     // this once the second factor verifies. Not public — issuing tokens stays
     // inside this module's service package.
-    AuthResponse issueAuthResponse(User user, List<UserRole> assignments) {
+    IssuedSession issueAuthResponse(User user, List<UserRole> assignments) {
         RoleAssignmentContext ctx = loadContext(assignments);
         AccessTokenIssue accessToken = jwtService.issueAccessToken(
                 user.getId(), user.getEmail(), user.getTenantId(), ctx.platformStaff(), ctx.roleClaims(), ctx.permissions());
@@ -476,7 +530,7 @@ public class AuthService {
                 ctx.superAdmin() ? "super_admin" : "client",
                 ctx.permissions());
 
-        return new AuthResponse(userResponse, accessToken.token(), refresh.rawToken());
+        return new IssuedSession(new AuthResponse(userResponse, accessToken.token()), refresh.rawToken());
     }
 
     /**
@@ -528,9 +582,28 @@ public class AuthService {
                 .userId(userId)
                 .tokenHash(hashRefreshToken(raw))
                 .expiresAt(Instant.now().plus(jwtProperties.refreshTokenTtl()))
+                .userAgent(currentUserAgent())
                 .build();
 
         return new RawRefreshToken(raw, entity);
+    }
+
+    /**
+     * The calling browser's User-Agent, truncated to the column, or null
+     * outside a request. Read from the request context rather than threaded
+     * through every signature that issues a token. {@code device} and
+     * {@code ip_address} stay null: a device name needs parsing this string,
+     * and an IP address is personal data whose collection is its own decision.
+     */
+    private static String currentUserAgent() {
+        if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes)) {
+            return null;
+        }
+        String userAgent = attributes.getRequest().getHeader(HttpHeaders.USER_AGENT);
+        if (userAgent == null || userAgent.isBlank()) {
+            return null;
+        }
+        return userAgent.length() > USER_AGENT_MAX_LENGTH ? userAgent.substring(0, USER_AGENT_MAX_LENGTH) : userAgent;
     }
 
     // Deterministic (unlike BCrypt) so a presented token can be looked up

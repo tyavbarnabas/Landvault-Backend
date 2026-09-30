@@ -9,7 +9,8 @@ Base path convention below: `/api/...`. Auth: `Authorization: Bearer <token>` on
 |---|---|---|---|
 | POST | `/api/auth/login` | `{ email, password }` | `{ user: AuthUser, token }` |
 | POST | `/api/auth/register` | `RegisterInput` | `{ user: AuthUser, token }` |
-| POST | `/api/auth/refresh` | (cookie or stored refresh token) | `{ token }` |
+| POST | `/api/auth/refresh` | **no body** — the `lv_refresh` cookie | `{ token }` + a new cookie |
+| POST | `/api/auth/logout` | **no body** — the `lv_refresh` cookie | 204, cookie cleared |
 | POST | `/api/auth/forgot-password` | `{ email }` | `{ message }` — always 200, always the same body |
 | POST | `/api/auth/reset-password` | `{ email, code, newPassword }` | `{ message }` |
 | POST | `/api/auth/2fa/setup` | — (authenticated) | `{ secret, otpAuthUri }` — does **not** enable 2FA |
@@ -17,6 +18,18 @@ Base path convention below: `/api/...`. Auth: `Authorization: Bearer <token>` on
 | POST | `/api/auth/2fa/verify` | `{ challengeToken, code }` | `AuthResponse` — the second login step |
 | POST | `/api/auth/2fa/disable` | `{ code }` (authenticated) | `{ message }` |
 | POST | `/api/auth/2fa/recovery-codes/regenerate` | `{ code }` (authenticated) | `{ recoveryCodes }` |
+
+### Refresh token: `HttpOnly` cookie only — frontend changes required (built)
+
+The refresh token is set by login, register, `/2fa/verify` and refresh as an `HttpOnly; SameSite=Strict; Path=/api/auth` cookie named `lv_refresh`, and **appears in no response body**. See AGENTS.md for why.
+
+- **`authService.ts`**: remove `refreshToken` from the login/verify response type; never store one. Every auth call needs `credentials: "include"` so the browser keeps the cookie (login, register, 2FA verify — not just refresh).
+- **`apiClient.ts`**: refresh already sends no body with `credentials: "include"` — keep that. Remove the TODOs that assumed a body.
+- **Two 401s from refresh**: `REFRESH_TOKEN_MISSING` (never signed in on this browser) vs `INVALID_REFRESH_TOKEN` (session ended — including theft detection having revoked every session). Either way: **sign out cleanly, do not retry, do not loop.**
+- **Serialise refresh across tabs with `navigator.locks`** (e.g. `navigator.locks.request("lv-refresh", …)`), and take the same lock around logout. The per-tab single-flight isn't enough on its own. The server's 10-second grace window keeps two racing tabs signed in, but the lock is the primary fix.
+- **Logout**: call `POST /api/auth/logout` (Origin-checked, needs no access token), then drop the access token locally. It ends **this** browser's session only; the access token still works server-side for up to 15 minutes, so discard it.
+- **Login, `/2fa/verify` and change-password return 401 as an answer, not an expired session.** Only change-password passes `skipAuthRefresh` today; login and 2FA verify must too, or a typo triggers a refresh attempt and can sign the user out.
+- **Origin**: requests must come from an origin in the backend's `CORS_ALLOWED_ORIGINS` (default `http://localhost:8443`). The Vite dev server matches. A different port or host gets 403 `ORIGIN_NOT_ALLOWED` on refresh/logout.
 
 `AuthUser`: `{ name, email, phone, country, currency, kycStatus, kycType, twoFAEnabled, role: "client"|"super_admin", permissions: string[] }`
 
