@@ -46,6 +46,9 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, UUID
             + "AND rt.revokedAt >= :rotatedAfter AND successor.revokedAt IS NULL")
     long countRotatedSinceWithLiveSuccessor(@Param("id") UUID id, @Param("rotatedAfter") Instant rotatedAfter);
 
+    /** Fresh read of whether a token was retired by rotation — only that is a theft signal. */
+    long countByIdAndReplacedByIsNotNull(UUID id);
+
     /**
      * Logout's revoke — atomic for the same reason as rotation: a
      * load-then-save racing a concurrent refresh would write back a null

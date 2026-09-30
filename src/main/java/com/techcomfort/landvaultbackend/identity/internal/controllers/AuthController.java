@@ -148,7 +148,10 @@ public class AuthController {
             description = """
                     **Send no body.** The refresh token lives in an `HttpOnly` cookie scoped to \
                     `/api/auth`; the browser attaches it (`credentials: "include"`). A new access \
-                    token comes back in the body and a new cookie replaces the old one.
+                    token **and the current user** come back in the body — the same \
+                    `{ user, token }` shape as login — and a new cookie replaces the old one. \
+                    **This is how a page load restores a session**: `REFRESH_TOKEN_MISSING` means \
+                    nobody is signed in on this browser.
 
                     **Refresh tokens rotate.** Each call retires the token presented. Presenting a \
                     retired token again **revokes every session the user has** and forces a fresh \
@@ -162,15 +165,17 @@ public class AuthController {
                     signed in" from "session ended". A request from an origin outside the allowed \
                     list is refused.
 
-                    A suspended tenant's staff are refused here too, so a session cannot outlive its \
-                    company's suspension by more than the access token's 15 minutes.""")
+                    A suspended or deactivated account, and a suspended tenant's staff, are refused \
+                    here exactly as at login, so a session cannot outlive either by more than the \
+                    access token's 15 minutes.""")
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "New access token; new refresh cookie set"),
+            @ApiResponse(responseCode = "200", description = "`{ user, token }`; new refresh cookie set"),
             @ApiResponse(responseCode = "401", description = "`REFRESH_TOKEN_MISSING`, or "
                     + "`INVALID_REFRESH_TOKEN` (unknown, expired or already used — if already used "
                     + "outside the grace window, every token for that user is now revoked)",
                     content = @io.swagger.v3.oas.annotations.media.Content()),
-            @ApiResponse(responseCode = "403", description = "`ORIGIN_NOT_ALLOWED`, or `TENANT_NOT_ACTIVE`",
+            @ApiResponse(responseCode = "403", description = "`ORIGIN_NOT_ALLOWED`, `ACCOUNT_SUSPENDED`, "
+                    + "`ACCOUNT_DEACTIVATED` or `TENANT_NOT_ACTIVE`",
                     content = @io.swagger.v3.oas.annotations.media.Content())
     })
     @PostMapping("/refresh")
@@ -274,13 +279,16 @@ public class AuthController {
 
                     **This is not a reset, and the difference is what it verifies.** A reset proves                     control of a mailbox; this proves knowledge of the password being replaced —                     which is what a change-password screen actually means. It also works on a                     deployment with no mail configured, so a freshly bootstrapped Super Admin can                     retire a temporary credential that has passed through an environment variable                     and a shell history.
 
-                    On success every refresh token is revoked and `mustChangePassword` is cleared.
+                    On success every **other** session's refresh token is revoked, this browser gets \
+                    a fresh refresh cookie (so it stays signed in), and `mustChangePassword` is \
+                    cleared.
 
                     **"Sessions revoked" means refresh tokens.** An access token already issued                     rides out its remaining lifetime, up to 15 minutes — the same accepted                     trade-off as password reset and tenant suspension. Do not present this as                     instant severance.
 
                     The new password carries the same rule as registration: a password acceptable                     when the account was created does not become unacceptable when it is changed.""")
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Changed; refresh tokens revoked"),
+            @ApiResponse(responseCode = "200", description = "Changed; other sessions revoked, a fresh "
+                    + "refresh cookie set for this one"),
             @ApiResponse(responseCode = "401", description = "The current password is wrong — the "
                     + "same response a bad password gets at login",
                     content = @io.swagger.v3.oas.annotations.media.Content())
@@ -292,8 +300,9 @@ public class AuthController {
     public ResponseEntity<MessageResponse> changePassword(@Valid @RequestBody ChangePasswordRequest request) {
         TenantScope scope = TenantContext.get().orElseThrow(() -> new IllegalStateException(
                 "No TenantContext for an authenticated request — TenantContextFilter should have set one."));
-        authService.changePassword(scope.userId(), request);
-        return ResponseEntity.ok(new MessageResponse(
-                "Your password has been changed. Other sessions will need to sign in again."));
+        String thisDevice = authService.changePassword(scope.userId(), request);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.SET_COOKIE, refreshTokenCookies.issue(thisDevice).toString())
+                .body(new MessageResponse("Your password has been changed. Other sessions will need to sign in again."));
     }
 }

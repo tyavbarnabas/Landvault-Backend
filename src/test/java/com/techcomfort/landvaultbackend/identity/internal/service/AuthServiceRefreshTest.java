@@ -4,6 +4,7 @@ import com.techcomfort.landvaultbackend.audit.AuditApi;
 import com.techcomfort.landvaultbackend.identity.internal.domain.RefreshToken;
 import com.techcomfort.landvaultbackend.identity.internal.exceptions.AuthException;
 import com.techcomfort.landvaultbackend.identity.internal.domain.User;
+import com.techcomfort.landvaultbackend.identity.internal.enums.UserStatus;
 import com.techcomfort.landvaultbackend.identity.internal.repository.OtpCodeRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.RecoveryCodeRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.TwoFaChallengeRepository;
@@ -124,16 +125,34 @@ class AuthServiceRefreshTest {
         RefreshResult result = authService.refresh("whatever-raw-token");
 
         assertThat(result.response().token()).isEqualTo("new-access-token");
+        assertThat(result.response().user().email()).isEqualTo("a@b.com");
         assertThat(result.refreshToken()).isNotBlank();
         verify(refreshTokenRepository, never()).delete(any());
         verify(refreshTokenRepository, never()).findByUserIdAndRevokedAtIsNull(any());
     }
 
+    /** A token ended by logout/reset/password change: refused, but nobody else is signed out. */
     @Test
-    void presentingAnAlreadyRevokedTokenRevokesTheWholeFamily() {
+    void aTokenEndedWithoutRotationIsRefusedWithoutRevokingTheFamily() {
+        UUID userId = UUID.randomUUID();
+        RefreshToken ended = activeToken(userId);
+        ended.setRevokedAt(Instant.now().minus(Duration.ofMinutes(1)));
+
+        when(refreshTokenRepository.findByTokenHash(anyString())).thenReturn(Optional.of(ended));
+
+        assertThatThrownBy(() -> authService.refresh("logged-out-token"))
+                .isInstanceOf(AuthException.InvalidRefreshToken.class);
+
+        verify(refreshTokenRepository, never()).findByUserIdAndRevokedAtIsNull(any());
+        verify(refreshTokenRepository, never()).save(any());
+    }
+
+    @Test
+    void presentingAnAlreadyRotatedTokenRevokesTheWholeFamily() {
         UUID userId = UUID.randomUUID();
         RefreshToken revoked = activeToken(userId);
         revoked.setRevokedAt(Instant.now().minus(Duration.ofMinutes(1)));
+        revoked.setReplacedBy(UUID.randomUUID());
 
         when(refreshTokenRepository.findByTokenHash(anyString())).thenReturn(Optional.of(revoked));
         when(refreshTokenRepository.findByUserIdAndRevokedAtIsNull(userId)).thenReturn(List.of());
@@ -160,8 +179,9 @@ class AuthServiceRefreshTest {
             rt.setId(newTokenId);
             return rt;
         });
-        // Someone else won the race for this token.
+        // Someone else won the race for this token, by rotating it.
         when(refreshTokenRepository.rotateIfActive(eq(existing.getId()), any(), any())).thenReturn(0);
+        when(refreshTokenRepository.countByIdAndReplacedByIsNotNull(existing.getId())).thenReturn(1L);
         when(refreshTokenRepository.findByUserIdAndRevokedAtIsNull(userId)).thenReturn(List.of());
 
         assertThatThrownBy(() -> authService.refresh("raced-token"))
@@ -294,6 +314,24 @@ class AuthServiceRefreshTest {
                 .isInstanceOf(AuthException.TenantNotActive.class);
 
         verify(refreshTokenRepository, never()).save(any());
+        verify(jwtService, never()).issueAccessToken(any(), any(), any(), anyBoolean(), any(), any());
+    }
+    /** Login refused a suspended account; refresh used not to look. Refused before any write. */
+    @Test
+    void aSuspendedAccountCannotRefreshAndItsTokenIsLeftUntouched() {
+        UUID userId = UUID.randomUUID();
+        RefreshToken existing = activeToken(userId);
+        User user = User.builder().id(userId).firstName("A").lastName("B").email("a@b.com")
+                .status(UserStatus.SUSPENDED).build();
+
+        when(refreshTokenRepository.findByTokenHash(anyString())).thenReturn(Optional.of(existing));
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+
+        assertThatThrownBy(() -> authService.refresh("whatever-raw-token"))
+                .isInstanceOf(AuthException.AccountNotActive.class);
+
+        verify(refreshTokenRepository, never()).save(any());
+        verify(refreshTokenRepository, never()).rotateIfActive(any(), any(), any());
         verify(jwtService, never()).issueAccessToken(any(), any(), any(), anyBoolean(), any(), any());
     }
 }

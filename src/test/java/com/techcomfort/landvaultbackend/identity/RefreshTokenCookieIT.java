@@ -137,6 +137,40 @@ class RefreshTokenCookieIT {
         assertThat(refresh(RefreshCookies.of(refreshed)).getStatusCode()).isEqualTo(HttpStatus.OK);
     }
 
+    /** One call restores a whole session on page load: the same user login returns. */
+    @Test
+    void refreshReturnsTheCurrentUserAlongsideTheToken() {
+        String email = register();
+        String token = loginCookie(email);
+
+        ResponseEntity<RefreshResponse> refreshed = restTemplate.postForEntity(
+                "/api/auth/refresh", RefreshCookies.presenting(token), RefreshResponse.class);
+
+        assertThat(refreshed.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(refreshed.getBody().token()).isNotBlank();
+        assertThat(refreshed.getBody().user().email()).isEqualToIgnoringCase(email);
+        assertThat(refreshed.getBody().user().name()).isEqualTo("Ada L");
+        assertThat(refreshed.getBody().user().role()).isEqualTo("client");
+        assertThat(refreshed.getBody().user().permissions()).contains("client.dashboard.view");
+    }
+
+    /** Suspended after signing in: the existing session can no longer be renewed, and the token is untouched. */
+    @Test
+    void aSuspendedAccountCannotRenewAnExistingSession() {
+        String email = register();
+        String token = loginCookie(email);
+        setStatus(email, "SUSPENDED");
+
+        ResponseEntity<String> refused = refresh(token);
+
+        assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(refused.getBody()).contains("ACCOUNT_SUSPENDED");
+        setStatus(email, "ACTIVE");
+        assertThat(refresh(token).getStatusCode())
+                .as("refused before any write: the same token still works once reinstated")
+                .isEqualTo(HttpStatus.OK);
+    }
+
     @Test
     void aMissingCookieAndABadCookieAreDistinct401s() {
         ResponseEntity<String> missing = restTemplate.postForEntity("/api/auth/refresh", null, String.class);
@@ -228,6 +262,32 @@ class RefreshTokenCookieIT {
         assertThat(refresh(original).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
     }
 
+    /** The device that changed the password stays signed in; every other session ends. */
+    @Test
+    void changingThePasswordKeepsThisDeviceSignedInAndEndsTheOthers() {
+        String email = register();
+        String otherDevice = loginCookie(email);
+        ResponseEntity<AuthResponse> login = restTemplate.postForEntity(
+                "/api/auth/login", new LoginRequest(email, PASSWORD), AuthResponse.class);
+        String thisDevice = RefreshCookies.of(login);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(login.getBody().token());
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        ResponseEntity<String> changed = restTemplate.exchange("/api/auth/change-password", HttpMethod.POST,
+                new HttpEntity<>(new ChangePasswordRequest(PASSWORD, "a completely different passphrase"), headers),
+                String.class);
+
+        assertThat(changed.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(RefreshCookies.header(changed)).contains("HttpOnly", "SameSite=Strict", "Path=/api/auth");
+        String reissued = RefreshCookies.of(changed);
+        assertThat(reissued).isNotEqualTo(thisDevice);
+        // Realistic order: the other device (a phone still holding its old
+        // cookie) refreshes first, and only then does this device.
+        assertThat(refresh(otherDevice).getStatusCode()).as("other sessions end").isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(refresh(reissued).getStatusCode()).as("this device stays signed in").isEqualTo(HttpStatus.OK);
+    }
+
     // --- the Origin check ---
 
     @Test
@@ -297,12 +357,11 @@ class RefreshTokenCookieIT {
         assertThat(RefreshCookies.header(loggedOut))
                 .startsWith(RefreshCookies.NAME + "=;")
                 .contains("Max-Age=0", "HttpOnly", "SameSite=Strict", "Path=/api/auth", "Secure");
-        assertThat(refresh(phone).getStatusCode()).isEqualTo(HttpStatus.OK);
-        // Checked last on purpose: a logged-out token presented again is a
-        // revoked token replayed — the theft signal — so it revokes every
-        // session, the phone's included. The browser cleared its cookie, so
-        // only a copy can present it.
+        // Laptop first on purpose: a logged-out token presented again is
+        // refused, but it was ended, not rotated past, so it is not a theft
+        // signal and must not take the phone down with it.
         assertThat(refresh(laptop).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(refresh(phone).getStatusCode()).isEqualTo(HttpStatus.OK);
     }
 
     @Test
@@ -378,6 +437,10 @@ class RefreshTokenCookieIT {
     private void backdateRotation(String rawToken) {
         jdbcTemplate.update("UPDATE refresh_tokens SET revoked_at = revoked_at - interval '1 hour' WHERE token_hash = ?",
                 RefreshCookies.hash(rawToken));
+    }
+
+    private void setStatus(String email, String status) {
+        jdbcTemplate.update("UPDATE users SET status = ? WHERE lower(email) = lower(?)", status, email);
     }
 
     private UUID userIdOf(String email) {

@@ -9,7 +9,7 @@ Base path convention below: `/api/...`. Auth: `Authorization: Bearer <token>` on
 |---|---|---|---|
 | POST | `/api/auth/login` | `{ email, password }` | `{ user: AuthUser, token }` |
 | POST | `/api/auth/register` | `RegisterInput` | `{ user: AuthUser, token }` |
-| POST | `/api/auth/refresh` | **no body** — the `lv_refresh` cookie | `{ token }` + a new cookie |
+| POST | `/api/auth/refresh` | **no body** — the `lv_refresh` cookie | `{ user: AuthUser, token }` + a new cookie |
 | POST | `/api/auth/logout` | **no body** — the `lv_refresh` cookie | 204, cookie cleared |
 | POST | `/api/auth/forgot-password` | `{ email }` | `{ message }` — always 200, always the same body |
 | POST | `/api/auth/reset-password` | `{ email, code, newPassword }` | `{ message }` |
@@ -24,6 +24,9 @@ Base path convention below: `/api/...`. Auth: `Authorization: Bearer <token>` on
 The refresh token is set by login, register, `/2fa/verify` and refresh as an `HttpOnly; SameSite=Strict; Path=/api/auth` cookie named `lv_refresh`, and **appears in no response body**. See AGENTS.md for why.
 
 - **`authService.ts`**: remove `refreshToken` from the login/verify response type; never store one. Every auth call needs `credentials: "include"` so the browser keeps the cookie (login, register, 2FA verify — not just refresh).
+- **Restoring a session on page load**: call refresh once at startup. `{ user, token }` back means signed in, with the same `user` login returns. `REFRESH_TOKEN_MISSING` means nobody is signed in on this browser. Don't start as the mock user when connected to a real backend.
+- **Refresh can also return 403** `ACCOUNT_SUSPENDED` / `ACCOUNT_DEACTIVATED` / `TENANT_NOT_ACTIVE`: sign out and show the reason.
+- **Change-password sets a fresh cookie** for this browser, so the user stays signed in here. Other devices are signed out at their next refresh.
 - **`apiClient.ts`**: refresh already sends no body with `credentials: "include"` — keep that. Remove the TODOs that assumed a body.
 - **Two 401s from refresh**: `REFRESH_TOKEN_MISSING` (never signed in on this browser) vs `INVALID_REFRESH_TOKEN` (session ended — including theft detection having revoked every session). Either way: **sign out cleanly, do not retry, do not loop.**
 - **Serialise refresh across tabs with `navigator.locks`** (e.g. `navigator.locks.request("lv-refresh", …)`), and take the same lock around logout. The per-tab single-flight isn't enough on its own. The server's 10-second grace window keeps two racing tabs signed in, but the lock is the primary fix.

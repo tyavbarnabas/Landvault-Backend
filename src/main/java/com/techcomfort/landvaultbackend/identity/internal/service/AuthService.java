@@ -252,9 +252,17 @@ public class AuthService {
         }
         boolean graceReplay = false;
         if (existing.getRevokedAt() != null) {
+            if (existing.getReplacedBy() == null) {
+                // Ended on purpose — logout, password reset or change, or an
+                // earlier theft revoke — not rotated past. A dead session, not a
+                // theft signal: revoking the family here would sign out the
+                // fresh session of whoever just changed their password, the
+                // moment their phone refreshed with its old cookie. See AGENTS.md.
+                throw new AuthException.InvalidRefreshToken();
+            }
             if (!withinRotationGrace(existing)) {
-                // A revoked token was presented again — theft signal. Revoke
-                // the whole family and force re-login. See AGENTS.md.
+                // Rotated, and presented again after the owner moved on — the
+                // theft signal. Revoke the whole family and force re-login.
                 revokeTokenFamily(existing.getUserId());
                 throw new AuthException.InvalidRefreshToken();
             }
@@ -263,9 +271,14 @@ public class AuthService {
 
         User user = userRepository.findById(existing.getUserId())
                 .orElseThrow(AuthException.InvalidRefreshToken::new);
-        // Same tenant-status gate as login() — checked before any write
-        // below, so a rejection here leaves the presented refresh token
-        // exactly as it was (not rotated, not revoked). See AGENTS.md.
+        // The same two gates as login(), checked before any write below, so
+        // a rejection leaves the presented refresh token exactly as it was
+        // (not rotated, not revoked). Without the account gate a suspended
+        // user kept renewing an existing session for the refresh TTL, since
+        // only login ever looked at their status. See AGENTS.md.
+        if (user.getStatus() == UserStatus.SUSPENDED || user.getStatus() == UserStatus.DEACTIVATED) {
+            throw new AuthException.AccountNotActive(user.getStatus());
+        }
         if (user.getTenantId() != null && !tenancyApi.isTenantActive(user.getTenantId())) {
             throw new AuthException.TenantNotActive();
         }
@@ -282,7 +295,11 @@ public class AuthService {
                 // it, don't leave an orphaned, divergent branch of the family.
                 if (!withinRotationGrace(existing)) {
                     refreshTokenRepository.delete(savedNewToken);
-                    revokeTokenFamily(existing.getUserId());
+                    // Same rule as above, read fresh: only a rotation is theft.
+                    // A concurrent logout or password change ended it instead.
+                    if (refreshTokenRepository.countByIdAndReplacedByIsNotNull(existing.getId()) > 0) {
+                        revokeTokenFamily(existing.getUserId());
+                    }
                     throw new AuthException.InvalidRefreshToken();
                 }
                 graceReplay = true;
@@ -298,7 +315,11 @@ public class AuthService {
         AccessTokenIssue accessToken = jwtService.issueAccessToken(
                 user.getId(), user.getEmail(), user.getTenantId(), ctx.platformStaff(), ctx.roleClaims(), ctx.permissions());
 
-        return new RefreshResult(new RefreshResponse(accessToken.token()), newRefresh.rawToken());
+        // The user comes back too, built exactly as login builds it, so one
+        // call restores a session on page load. Read fresh, never cached:
+        // permissions, KYC status and the 2FA flags change server-side.
+        return new RefreshResult(
+                new RefreshResponse(buildUserResponse(user, ctx), accessToken.token()), newRefresh.rawToken());
     }
 
     /**
@@ -451,7 +472,7 @@ public class AuthService {
      * already authenticated, so there is no account to enumerate.
      */
     @Transactional
-    public void changePassword(UUID userId, ChangePasswordRequest request) {
+    public String changePassword(UUID userId, ChangePasswordRequest request) {
         User user = userRepository.findById(userId)
                 .orElseThrow(AuthException.InvalidCredentials::new);
 
@@ -474,11 +495,20 @@ public class AuthService {
         // and never describe this as instant.
         revokeTokenFamily(user.getId());
 
+        // ...then a fresh session for this device only. Without it the tab
+        // the change was made in signed itself out at its next refresh, while
+        // the response told the user only *other* sessions would. The caller
+        // just proved the current password on a live session, which is what
+        // login would have asked for. Issued after the revoke, so it survives it.
+        RawRefreshToken thisDevice = issueRefreshToken(user.getId());
+        refreshTokenRepository.save(thisDevice.entity());
+
         auditApi.record(AuditEntryRequest.of(
                 user.getId(), "auth.password_changed", "user", user.getId(), user.getTenantId(),
-                "Password changed using the current password; refresh tokens revoked."));
+                "Password changed using the current password; other sessions' refresh tokens revoked."));
 
-        log.info("Password changed for user {}; refresh tokens revoked", user.getId());
+        log.info("Password changed for user {}; other sessions' refresh tokens revoked", user.getId());
+        return thisDevice.rawToken();
     }
 
     // Package-private: TwoFactorService completes a two-step login by calling
@@ -492,6 +522,11 @@ public class AuthService {
         RawRefreshToken refresh = issueRefreshToken(user.getId());
         refreshTokenRepository.save(refresh.entity());
 
+        return new IssuedSession(new AuthResponse(buildUserResponse(user, ctx), accessToken.token()), refresh.rawToken());
+    }
+
+    /** The {@code AuthUser} shape — shared by login, register, 2FA verify and refresh so they can never disagree. */
+    private AuthUserResponse buildUserResponse(User user, RoleAssignmentContext ctx) {
         boolean twoFaConfirmed = Boolean.TRUE.equals(user.getTwoFaEnabled()) && user.getTwoFaConfirmedAt() != null;
         // Only query when 2FA is actually on — no extra round trip for the
         // overwhelming majority of logins.
@@ -504,7 +539,7 @@ public class AuthService {
         TenantScope scope = TenantScopeResolver.resolveBaseScope(
                 user.getId(), user.getTenantId(), ctx.platformStaff(), ctx.roleClaims());
 
-        AuthUserResponse userResponse = new AuthUserResponse(
+        return new AuthUserResponse(
                 user.getFirstName() + " " + user.getLastName(),
                 user.getEmail(),
                 scope.tenantId(),
@@ -529,8 +564,6 @@ public class AuthService {
                 recoveryCodesRemaining,
                 ctx.superAdmin() ? "super_admin" : "client",
                 ctx.permissions());
-
-        return new IssuedSession(new AuthResponse(userResponse, accessToken.token()), refresh.rawToken());
     }
 
     /**

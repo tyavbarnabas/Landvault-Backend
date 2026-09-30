@@ -49,4 +49,21 @@ class SwaggerDevProfileIT {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).contains("\"openapi\"");
     }
+
+    /**
+     * Swagger UI is served by the app itself, so its calls carry the app's
+     * own Origin. Under dev that origin is allowed, so refresh gets past the
+     * Origin check and fails only for the missing cookie — not with 403.
+     */
+    @Test
+    void swaggerUisOwnOriginMayCallRefreshUnderDev() {
+        org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+        headers.set(org.springframework.http.HttpHeaders.ORIGIN, "http://localhost:8080");
+
+        ResponseEntity<String> response = restTemplate.postForEntity(
+                "/api/auth/refresh", new org.springframework.http.HttpEntity<>(headers), String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(response.getBody()).contains("REFRESH_TOKEN_MISSING");
+    }
 }

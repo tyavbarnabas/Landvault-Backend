@@ -770,7 +770,9 @@ marks the presented one `revoked_at`, and sets its `replaced_by` to the new
 row's id — a chain, not an overwrite.
 
 **Theft detection is why refresh tokens are stored at all**: if an
-already-`revoked_at` token is ever presented again, that's a signal the
+already-*rotated* token (`replaced_by` set) is ever presented again — narrowed
+from "any revoked token" by the cookie slice, see "Only a rotated token is a
+theft signal" below — that's a signal the
 token was stolen and used after the legitimate client already rotated past
 it. The correct response is to revoke the *entire token family* for that
 user (walk the `replaced_by` chain, or simply revoke every non-expired
@@ -868,8 +870,12 @@ subdomain serving user content, passes it. So refresh and logout also run
   `cookie-secure: true`) and add that origin to the allowed list. The Origin
   check already covers CSRF in that case.
 - **Consequence for a one-origin deployment**: the allowed list must then
-  contain the API's own public origin. Swagger UI in dev (served from
-  `:8080`) is refused on refresh/logout for this reason; use Postman.
+  contain the API's own public origin. The same applies to Swagger UI, which
+  is served by the app itself: `application-dev.yml` appends
+  `http://localhost:${SERVER_PORT}` to the allowed origins so Swagger can call
+  refresh and logout. Dev only — the base config never lists the API's own
+  origin. Open Swagger at `localhost`, not `127.0.0.1`, or the Origin won't
+  match.
 
 ### The rotation grace window: two tabs are not a thief
 
@@ -907,7 +913,7 @@ It runs on both routes a duplicate arrives by — after the winner committed
 the grace query reads committed state as a fresh statement). The tenant-status
 gate still runs before anything is written on the grace path.
 
-### Logout ends one session — and replaying a logged-out token is still theft
+### Logout ends one session
 
 `POST /api/auth/logout` is public (it must work once the access token has
 expired), Origin-checked, always 204, and always clears the cookie with the
@@ -917,18 +923,58 @@ laptop logs out. Revoked with an atomic `UPDATE … WHERE revoked_at IS NULL`,
 not load-then-save — Hibernate writes every column, so a load-then-save
 racing a refresh would overwrite the rotation's `replaced_by` with null.
 
-**Presenting a logged-out token afterwards revokes every session**, because
-it is a revoked token replayed — the theft signal — and the browser already
-cleared its copy. Found by `logoutEndsOneSessionAndLeavesTheOtherDeviceSignedIn`
-going red when it checked the laptop before the phone. Left as is: rotation
-and theft detection were out of scope, and it is the correct reading. The
-one benign way to hit it — a tab mid-refresh at the instant another tab logs
-out — is narrow, and `navigator.locks` around both calls closes it.
-
 **"Family" means every one of the user's sessions**, not one device's chain:
-`revokeTokenFamily` revokes all their live tokens. Theft on one device signs
-out all of them — correct, and worth knowing before reading "family" as
+`revokeTokenFamily` revokes all their live tokens. Real theft on one device
+signs out all of them — correct, and worth knowing before reading "family" as
 "device".
+
+### Only a rotated token is a theft signal
+
+Theft detection originally fired on **any** revoked token presented again.
+That was wrong, and it surfaced when change-password started re-issuing the
+current device's cookie (below): the user's phone, still holding its now-revoked
+cookie, refreshes, "theft" revokes the family — including the fresh session on
+the device that just changed the password. The same was already true after a
+password reset (a phone refreshing killed every post-reset login) and after
+logout.
+
+**The rule now**: only a token retired **by rotation** (`replaced_by` set) and
+presented outside the grace window revokes the family. That is the actual
+signal — someone used the token after its owner had moved on. A token ended on
+purpose (logout, reset, change-password, or an earlier family revoke; all leave
+`replaced_by` null) just gets `INVALID_REFRESH_TOKEN`: a dead session, nobody
+else signed out. The lost-race branch applies the same rule, reading
+`replaced_by` fresh, since a concurrent logout can be what beat it. Decided
+with the user; real theft is caught exactly as before, and what is given up —
+treating a stolen copy of an already-dead token as an alarm — cost legitimate
+users their sessions and protected nothing, since the token was already dead.
+Pinned by `changingThePasswordKeepsThisDeviceSignedInAndEndsTheOthers` and
+`logoutEndsOneSessionAndLeavesTheOtherDeviceSignedIn` (checks the logged-out
+laptop first), both proven red without the rule.
+
+### Refresh returns the user, and checks the account like login does
+
+`/api/auth/refresh` returns `{ user, token }` — the same user object as
+login, built by the same method (`buildUserResponse`), read fresh on every call.
+**This is how the frontend restores a session on page load**: one call, and
+`REFRESH_TOKEN_MISSING` means nobody is signed in. Storing the user
+client-side was rejected (stale permissions/KYC/2FA flags, and one more thing
+a script can read); a fuller `/api/me` was rejected (needs a live access token,
+so an expired one costs three round trips).
+
+**Refresh also refuses `SUSPENDED`/`DEACTIVATED` accounts**
+(`ACCOUNT_SUSPENDED`/`ACCOUNT_DEACTIVATED`, 403), before any write. Found
+while adding the user to the response: only login ever checked account status,
+so a suspended user already signed in could keep renewing for the full refresh
+TTL. Now bounded to the access token's 15 minutes, same as tenant suspension.
+
+### Change-password keeps this device signed in
+
+It revokes every refresh token, **then issues a fresh cookie for the calling
+device**. Previously the current tab signed itself out at its next refresh,
+while the response said only *other* sessions would. The caller has just
+proved the current password on a live session — what login would ask for — so
+re-issuing is safe. Bearer-authenticated, so no Origin check is needed.
 
 ### `device`, `user_agent`, `ip_address`
 
@@ -3741,7 +3787,8 @@ than restated — a password acceptable when an account was created does not
 become unacceptable when it is changed, the same reasoning
 `ResetPasswordRequest` already records.
 
-On success: refresh tokens revoked, `mustChangePassword` cleared, an audit
+On success: every other session's refresh tokens revoked, a fresh cookie for
+this device (see the cookie section), `mustChangePassword` cleared, an audit
 entry written. A wrong current password returns the same
 `InvalidCredentials` a bad password gets at login — nothing about it warrants
 its own code. No timing-equalisation dummy hash is needed here, unlike
