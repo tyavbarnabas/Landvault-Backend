@@ -9,6 +9,7 @@ import com.techcomfort.landvaultbackend.conflicts.ConflictPublicationCheck;
 import com.techcomfort.landvaultbackend.marketplace.EstateEligibility;
 import com.techcomfort.landvaultbackend.marketplace.MarketplaceApi;
 import com.techcomfort.landvaultbackend.inventory.dto.BlockDto;
+import com.techcomfort.landvaultbackend.inventory.dto.AddEstateBoundaryRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreateBlockRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreateEstateRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreateEstateTitleRequest;
@@ -17,6 +18,8 @@ import com.techcomfort.landvaultbackend.inventory.dto.CreatePlotsRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreatePriceTierRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreateVerificationCheckRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateDto;
+import com.techcomfort.landvaultbackend.inventory.dto.UpdateEstateRequest;
+import com.techcomfort.landvaultbackend.inventory.dto.EstateBoundaryDto;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateTitleDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PlotDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PriceTierDto;
@@ -157,6 +160,180 @@ public class PortalEstateService {
         return toDto(estate, amenities);
     }
 
+    /**
+     * Adds a boundary to an estate created without one — the way back for an
+     * estate BG-1 keeps off the marketplace. Only when there is no boundary
+     * yet: changing an existing one would need its own design (re-checking
+     * every plot and every overlap it used to satisfy), and is not offered.
+     * <p>
+     * Same order as creation, and the same transaction: parse, check every
+     * existing plot sits inside, save, then run overlap detection, so an
+     * estate gaining a boundary is compared against other companies' land
+     * before it can be listed. An already-published estate returns to the
+     * marketplace on its own if it now passes every condition; a HIGH
+     * overlap keeps it off, and the response says so.
+     */
+    @Transactional
+    public EstateBoundaryDto addBoundary(UUID estateId, AddEstateBoundaryRequest request) {
+        TenantScope scope = currentScope();
+        Estate estate = requireOwnedEstate(estateId, requireTenant(scope));
+        if (estate.getFootprint() != null) {
+            throw new InventoryException.BoundaryAlreadySet();
+        }
+
+        Polygon footprint = geoJsonParser.parse(request.footprint(), "footprint");
+        if (footprint == null) {
+            throw new InventoryException.InvalidGeometry("footprint", "A boundary is required.");
+        }
+
+        List<String> outside = geometry.plotsOutside(estateId, footprint);
+        if (!outside.isEmpty()) {
+            throw new InventoryException.PlotOutsideEstate(
+                    "These plots fall outside the boundary you've supplied: " + String.join("; ", outside)
+                            + ". Check the boundary, or correct those plots first.");
+        }
+
+        estate.setFootprint(footprint);
+        // Through the repository, so a constraint violation is still
+        // translated rather than escaping as a 500 — see AGENTS.md.
+        estateRepository.saveAndFlush(estate);
+
+        int conflicts = conflictDetection.detectForEstateBoundary(estateId);
+        ConflictPublicationCheck check = conflictDetection.publicationCheckFor(estateId);
+        BigDecimal area = geometry.areaInSquareMetres(footprint);
+
+        auditApi.record(AuditEntryRequest.of(
+                scope.userId(), "estate.boundary_added", "estate", estateId, estate.getTenantId(),
+                "Boundary added to estate '" + estate.getName() + "' (" + area + " sqm); "
+                        + conflicts + " live conflict(s) after detection."));
+        log.info("Boundary added to estate {} by actor {}; {} live conflict(s)", estateId, scope.userId(), conflicts);
+
+        return new EstateBoundaryDto(estateId, area, check.blocked(), check.blockReason(), check.warningConflictCount());
+    }
+
+    /**
+     * Edits an estate's plain fields. Left out means unchanged; an edit that
+     * changes nothing writes nothing. Three fields are refused rather than
+     * ignored, because each carries consequences a plain edit must not: the
+     * boundary (overlap detection, BG-1 — its own route), publication (the
+     * eligibility gate — its own routes) and the branch (every plot's RLS
+     * branch wall — not supported).
+     * <p>
+     * A rename regenerates the slug, with the same per-tenant uniqueness as
+     * creation. A corner-premium change reprices every corner plot at once
+     * (prices are computed on read); buyers who already reserved keep the
+     * price captured on their reservation.
+     */
+    @Transactional
+    public EstateDto updateEstate(UUID estateId, UpdateEstateRequest request) {
+        TenantScope scope = currentScope();
+        UUID tenantId = requireTenant(scope);
+        Estate estate = requireOwnedEstate(estateId, tenantId);
+
+        if (request.footprint() != null) {
+            throw new InventoryException.ImmutableField("BOUNDARY_NOT_EDITABLE_HERE",
+                    "An estate's boundary is added with POST /api/portal/estates/{id}/boundary, which runs the "
+                            + "overlap check. It can't be changed through an estate update.");
+        }
+        if (request.published() != null) {
+            throw new InventoryException.ImmutableField("PUBLICATION_NOT_EDITABLE_HERE",
+                    "Use POST /api/portal/estates/{id}/publish or /unpublish — publishing checks every condition.");
+        }
+        if (request.branchId() != null && !request.branchId().equals(estate.getBranchId())) {
+            throw new InventoryException.ImmutableField("BRANCH_NOT_EDITABLE",
+                    "Moving an estate to another branch isn't supported.");
+        }
+
+        List<String> changes = new ArrayList<>();
+
+        if (request.name() != null) {
+            if (request.name().isBlank()) {
+                throw new InventoryException.InvalidRequest("An estate name cannot be blank.");
+            }
+            String name = request.name().trim();
+            if (!name.equals(estate.getName())) {
+                String slug = slugify(name);
+                if (!slug.equalsIgnoreCase(estate.getSlug())
+                        && estateRepository.existsByTenantIdAndSlugIgnoreCaseAndIdNot(tenantId, slug, estateId)) {
+                    throw new InventoryException.DuplicateRecord(
+                            "An estate with a name matching '" + slug + "' already exists for this tenant.");
+                }
+                changes.add("name '" + estate.getName() + "' -> '" + name + "'");
+                estate.setName(name);
+                estate.setSlug(slug);
+            }
+        }
+        if (request.state() != null) {
+            if (request.state().isBlank()) {
+                throw new InventoryException.InvalidRequest("An estate's state cannot be cleared.");
+            }
+            changeText(changes, "state", estate.getState(), request.state(), estate::setState);
+        }
+        changeText(changes, "description", estate.getDescription(), request.description(), estate::setDescription);
+        changeText(changes, "area", estate.getArea(), request.area(), estate::setArea);
+        changeText(changes, "city", estate.getCity(), request.city(), estate::setCity);
+        changeText(changes, "address", estate.getAddress(), request.address(), estate::setAddress);
+
+        if (request.cornerPremiumPct() != null && (estate.getCornerPremiumPct() == null
+                || request.cornerPremiumPct().compareTo(estate.getCornerPremiumPct()) != 0)) {
+            changes.add("corner premium " + (estate.getCornerPremiumPct() == null ? "none"
+                    : estate.getCornerPremiumPct().toPlainString() + "%") + " -> "
+                    + request.cornerPremiumPct().toPlainString() + "%");
+            estate.setCornerPremiumPct(request.cornerPremiumPct());
+        }
+        if (request.intent() != null) {
+            EstateIntent intent = request.intent().isBlank() ? null : EstateIntent.fromValue(request.intent());
+            if (intent != estate.getIntent()) {
+                changes.add("intent " + (estate.getIntent() == null ? "none" : estate.getIntent().getValue())
+                        + " -> " + (intent == null ? "none" : intent.getValue()));
+                estate.setIntent(intent);
+            }
+        }
+
+        List<EstateAmenity> current = estateAmenityRepository.findByEstateIdOrderByNameAsc(estateId);
+        List<String> existingAmenities = current.stream().map(EstateAmenity::getName).toList();
+        List<String> amenities = existingAmenities;
+        if (request.amenities() != null) {
+            List<String> wanted = request.amenities().stream()
+                    .filter(a -> a != null && !a.isBlank()).map(String::trim).distinct().toList();
+            if (!Set.copyOf(wanted).equals(Set.copyOf(existingAmenities))) {
+                // Hard-deleted: an amenity is a description, not history, and
+                // the (estate, name) unique constraint counts soft-deleted rows,
+                // so a soft-deleted one could never be added back.
+                estateAmenityRepository.deleteAll(current.stream().filter(a -> !wanted.contains(a.getName())).toList());
+                estateAmenityRepository.flush();
+                saveAmenities(estate, wanted.stream().filter(a -> !existingAmenities.contains(a)).toList());
+                changes.add("amenities " + existingAmenities + " -> " + wanted);
+                amenities = wanted;
+            }
+        }
+
+        if (changes.isEmpty()) {
+            return toDto(estate, amenities);
+        }
+        // saveAndFlush: a lost race on the slug's unique constraint surfaces
+        // here as a translated 409 rather than at commit.
+        estateRepository.saveAndFlush(estate);
+        auditApi.record(AuditEntryRequest.of(
+                scope.userId(), "estate.updated", "estate", estateId, estate.getTenantId(),
+                "Estate '" + estate.getName() + "' changed: " + String.join("; ", changes) + "."));
+        log.info("Estate {} updated by {}", estateId, scope.userId());
+        return toDto(estate, amenities);
+    }
+
+    /** Null leaves it; blank clears it; anything else is trimmed and set if different. */
+    private static void changeText(List<String> changes, String field, String current, String requested,
+                                   java.util.function.Consumer<String> setter) {
+        if (requested == null) {
+            return;
+        }
+        String value = requested.isBlank() ? null : requested.trim();
+        if (!java.util.Objects.equals(value, current)) {
+            changes.add(field + " '" + (current == null ? "" : current) + "' -> '" + (value == null ? "" : value) + "'");
+            setter.accept(value);
+        }
+    }
+
     // --- block ---
 
     @Transactional
@@ -286,6 +463,11 @@ public class PortalEstateService {
                 .orElseThrow(() -> new InventoryException.RelatedRecordNotFound(
                         "Price tier " + request.priceTierId() + " does not belong to this estate."));
 
+        if (tier.getRetiredAt() != null) {
+            throw new InventoryException.ImmutableField("TIER_RETIRED",
+                    "Plot " + request.plotNumber() + ": tier '" + (tier.getLabel() == null ? tier.getId() : tier.getLabel())
+                            + "' is retired and accepts no new plots.");
+        }
         if (request.blockId() != null
                 && blockRepository.findByIdAndEstateId(request.blockId(), estate.getId()).isEmpty()) {
             throw new InventoryException.RelatedRecordNotFound(
@@ -307,8 +489,7 @@ public class PortalEstateService {
                 .isCorner(Boolean.TRUE.equals(request.isCorner()))
                 .status(PlotStatus.fromValue(request.status()))
                 .intent(request.intent() == null ? null : PlotIntent.fromValue(request.intent()))
-                .propertyType(request.propertyType() == null
-                        ? PropertyType.LAND : PropertyType.fromValue(request.propertyType()))
+                .propertyType(propertyTypeFor(tier, request))
                 .listingIntent(request.listingIntent() == null
                         ? ListingIntent.FOR_SALE : ListingIntent.fromValue(request.listingIntent()))
                 .orientation(request.orientation() == null
@@ -323,6 +504,32 @@ public class PortalEstateService {
         plot.setTenantId(estate.getTenantId());
         plot.setBranchId(estate.getBranchId());
         return plot;
+    }
+
+    /**
+     * A plot's property type follows its tier: a land-size tier prices bare
+     * land, a unit-type tier prices a built product. Derived when the request
+     * leaves it out — which is what file import and most callers do — and
+     * refused when it contradicts the tier, rather than storing a land plot
+     * priced as a 3-bedroom terrace.
+     */
+    static PropertyType propertyTypeFor(PriceTier tier, CreatePlotRequest request) {
+        PropertyType expected = expectedPropertyType(tier);
+        if (request.propertyType() == null) {
+            return expected;
+        }
+        PropertyType requested = PropertyType.fromValue(request.propertyType());
+        if (requested != expected) {
+            throw new InventoryException.ImmutableField("PROPERTY_TYPE_MISMATCH",
+                    "Plot " + request.plotNumber() + " is '" + requested.getValue() + "' but its tier is a "
+                            + tier.getTierType().getValue() + " tier, which prices "
+                            + (expected == PropertyType.LAND ? "bare land" : "a built unit") + ".");
+        }
+        return requested;
+    }
+
+    static PropertyType expectedPropertyType(PriceTier tier) {
+        return tier.getTierType() == TierType.UNIT_TYPE ? PropertyType.BUILT : PropertyType.LAND;
     }
 
     /**
@@ -532,6 +739,14 @@ public class PortalEstateService {
             reasons.add("Declare what a buyer gets back if they withdraw, and how long it takes, "
                     + "before listing this estate.");
         }
+        if (!eligibility.hasBoundary()) {
+            // BG-1. Before the conflict check because it is what makes that
+            // check meaningful: with no boundary there is nothing to compare,
+            // and "no conflict" would be an absence of evidence.
+            codes.add("PUBLICATION_BOUNDARY_MISSING");
+            reasons.add("Add this estate's boundary before listing it. Without one, it can't be checked "
+                    + "against neighbouring land, and buyers can't see where it is.");
+        }
         if (conflicts.blocked()) {
             codes.add("PUBLICATION_CONFLICT_OUTSTANDING");
             reasons.add(conflicts.blockReason());
@@ -632,7 +847,7 @@ public class PortalEstateService {
 
     private static PriceTierDto toDto(PriceTier tier) {
         return new PriceTierDto(tier.getId(), tier.getEstateId(), tier.getTierType().getValue(),
-                tier.getSizeSqm(), tier.getPrice(), tier.getCurrency(), tier.getLabel());
+                tier.getSizeSqm(), tier.getPrice(), tier.getCurrency(), tier.getLabel(), tier.getRetiredAt());
     }
 
     private static PlotDto toDto(Plot plot) {

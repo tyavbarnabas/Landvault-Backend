@@ -94,6 +94,14 @@ public class PriceTier extends AbstractEntity {
     private Currency currency;
 
     /**
+     * Set when the tier stops accepting new plots (IE-5). Never the same as
+     * {@code deleted}: a deleted tier would vanish from every lookup and its
+     * plots would lose their price. Existing plots keep a retired tier.
+     */
+    @Column(name = "retired_at")
+    private java.time.Instant retiredAt;
+
+    /**
      * Display name, e.g. "Standard 250". Optional for a {@code LAND_SIZE}
      * tier, where {@link #sizeSqm} already identifies it — but it is what
      * carries the meaning for a {@code UNIT_TYPE} tier.

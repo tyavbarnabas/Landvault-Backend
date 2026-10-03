@@ -17,6 +17,8 @@ public interface EstateRepository extends JpaRepository<Estate, UUID>, JpaSpecif
     // a "Palm Grove".
     boolean existsByTenantIdAndSlugIgnoreCase(UUID tenantId, String slug);
 
+    boolean existsByTenantIdAndSlugIgnoreCaseAndIdNot(UUID tenantId, String slug, UUID id);
+
     Optional<Estate> findByIdAndTenantId(UUID id, UUID tenantId);
 
     /**

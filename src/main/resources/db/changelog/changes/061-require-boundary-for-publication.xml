@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        BG-1: AN ESTATE MUST HAVE A BOUNDARY TO BE LISTED.
+
+        Conflict detection compares estate boundaries across companies, and
+        plot boundaries only within one estate. An estate with no footprint
+        therefore never meets another company's land at all — publishing
+        without one was a way around the anti-fraud check the whole gate
+        exists to enforce.
+
+        Its own boolean beside the others (has_boundary), so the publish
+        endpoint names the condition that failed, as PB-3 requires.
+
+        NO GRANDFATHERING, deliberately unlike fees_declaration_exempt (056).
+        Exempting a listing from disclosure was usefulness over principle;
+        exempting a boundary-less listing from this rule would keep the hole
+        open for exactly the estates it exists to catch. An estate already
+        published without a boundary drops off the marketplace with its
+        `published` flag untouched, and returns as soon as a boundary is
+        added and it passes detection.
+
+        CREATE OR REPLACE: the dependent marketplace_* views join this one,
+        and replacing is permitted because every existing column keeps its
+        name, type and position — has_boundary is appended at the end.
+    -->
+    <changeSet id="061-require-boundary-for-publication" author="landvault">
+        <sql><![CDATA[
+            CREATE OR REPLACE VIEW marketplace_estate_eligibility WITH (security_barrier = true) AS
+            SELECT
+                e.id                                   AS estate_id,
+                e.published                            AS published,
+                (o.verification_state = 'VERIFIED')    AS tenant_verified,
+                o.marketplace_publishing               AS tenant_entitled,
+                (o.status = 'ACTIVE')                  AS tenant_active,
+                -- CASE short-circuits, so the conflict function — the only
+                -- expensive term — runs last, and only for estates that
+                -- already pass every cheap condition.
+                CASE
+                    WHEN e.published
+                     AND o.verification_state = 'VERIFIED'
+                     AND o.marketplace_publishing
+                     AND o.status = 'ACTIVE'
+                     AND (e.fees_declared_at IS NOT NULL OR e.fees_declaration_exempt)
+                     AND (e.fees_declaration_exempt OR EXISTS (
+                            SELECT 1 FROM estate_refund_terms rt
+                             WHERE rt.estate_id = e.id AND rt.deleted = false))
+                     AND e.footprint IS NOT NULL
+                    THEN (SELECT s.blocking_count FROM landvault_estate_conflict_summary(e.id) s) = 0
+                    ELSE false
+                END                                    AS eligible,
+                -- Declaring an EMPTY schedule counts: an estate with no
+                -- extra charges may list, but by saying so. Silence does
+                -- not, and the two are different facts.
+                (e.fees_declared_at IS NOT NULL OR e.fees_declaration_exempt) AS fees_declared,
+                -- RF-4: a developer who will not state what a buyer gets
+                -- back does not get a listing. Its own boolean beside the
+                -- others so the publish endpoint can name which one failed.
+                (e.fees_declaration_exempt OR EXISTS (
+                        SELECT 1 FROM estate_refund_terms rt
+                         WHERE rt.estate_id = e.id AND rt.deleted = false)) AS refund_terms_declared,
+                -- BG-1: an estate with no boundary is invisible to conflict
+                -- detection, so listing without one would be a way around
+                -- it. No exemption for estates already published: an
+                -- exempt boundary-less listing is exactly the hole.
+                (e.footprint IS NOT NULL)              AS has_boundary
+            FROM estates e
+            JOIN organizations o ON o.id = e.tenant_id AND o.deleted = false
+            WHERE e.deleted = false;
+        
+        ]]></sql>
+        <rollback>
+            <!-- 059's definition, verbatim. -->
+            <![CDATA[
+            CREATE OR REPLACE VIEW marketplace_estate_eligibility WITH (security_barrier = true) AS
+            SELECT
+                e.id                                   AS estate_id,
+                e.published                            AS published,
+                (o.verification_state = 'VERIFIED')    AS tenant_verified,
+                o.marketplace_publishing               AS tenant_entitled,
+                (o.status = 'ACTIVE')                  AS tenant_active,
+                -- CASE short-circuits, so the conflict function — the only
+                -- expensive term — runs last, and only for estates that
+                -- already pass every cheap condition.
+                CASE
+                    WHEN e.published
+                     AND o.verification_state = 'VERIFIED'
+                     AND o.marketplace_publishing
+                     AND o.status = 'ACTIVE'
+                     AND (e.fees_declared_at IS NOT NULL OR e.fees_declaration_exempt)
+                     AND (e.fees_declaration_exempt OR EXISTS (
+                            SELECT 1 FROM estate_refund_terms rt
+                             WHERE rt.estate_id = e.id AND rt.deleted = false))
+                    THEN (SELECT s.blocking_count FROM landvault_estate_conflict_summary(e.id) s) = 0
+                    ELSE false
+                END                                    AS eligible,
+                -- Declaring an EMPTY schedule counts: an estate with no
+                -- extra charges may list, but by saying so. Silence does
+                -- not, and the two are different facts.
+                (e.fees_declared_at IS NOT NULL OR e.fees_declaration_exempt) AS fees_declared,
+                -- RF-4: a developer who will not state what a buyer gets
+                -- back does not get a listing. Its own boolean beside the
+                -- others so the publish endpoint can name which one failed.
+                (e.fees_declaration_exempt OR EXISTS (
+                        SELECT 1 FROM estate_refund_terms rt
+                         WHERE rt.estate_id = e.id AND rt.deleted = false)) AS refund_terms_declared
+            FROM estates e
+            JOIN organizations o ON o.id = e.tenant_id AND o.deleted = false
+            WHERE e.deleted = false;
+        
+            ]]>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

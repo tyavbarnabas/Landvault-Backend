@@ -48,4 +48,8 @@ public class EstateEligibilityView {
 
     @Column(name = "refund_terms_declared")
     private boolean refundTermsDeclared;
+
+    /** BG-1, changeset 061. No grandfathering. */
+    @Column(name = "has_boundary")
+    private boolean hasBoundary;
 }

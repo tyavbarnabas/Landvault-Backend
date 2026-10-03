@@ -51,6 +51,35 @@ public class InventoryExceptionHandler {
                 .body(new ErrorResponse(ex.getMessage(), "INVALID_GEOMETRY", Map.of(ex.field(), ex.getMessage())));
     }
 
+    @ExceptionHandler(InventoryException.BoundaryAlreadySet.class)
+    public ResponseEntity<ErrorResponse> handleBoundaryAlreadySet(InventoryException.BoundaryAlreadySet ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of(ex.getMessage(), "BOUNDARY_ALREADY_SET"));
+    }
+
+    @ExceptionHandler(InventoryException.PlotNotEditable.class)
+    public ResponseEntity<ErrorResponse> handlePlotNotEditable(InventoryException.PlotNotEditable ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of(ex.getMessage(), "PLOT_NOT_EDITABLE"));
+    }
+
+    /**
+     * 422 with the import report as the body — deliberately not the usual
+     * error shape: the report is the useful answer, and it already lists
+     * every problem with a code and a message.
+     */
+    @ExceptionHandler(InventoryException.ImportRejected.class)
+    public ResponseEntity<com.techcomfort.landvaultbackend.inventory.dto.PlotImportReportDto> handleImportRejected(
+            InventoryException.ImportRejected ex) {
+        return ResponseEntity.unprocessableContent().body(ex.report());
+    }
+
+    @ExceptionHandler(InventoryException.PlotHasHistory.class)
+    public ResponseEntity<ErrorResponse> handlePlotHasHistory(InventoryException.PlotHasHistory ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of(ex.getMessage(), "PLOT_HAS_HISTORY"));
+    }
+
     @ExceptionHandler(InventoryException.PlotOutsideEstate.class)
     public ResponseEntity<ErrorResponse> handlePlotOutsideEstate(InventoryException.PlotOutsideEstate ex) {
         return ResponseEntity.badRequest()

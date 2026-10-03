@@ -1,5 +1,24 @@
 package com.techcomfort.landvaultbackend.inventory.internal.controllers;
 
+import com.techcomfort.landvaultbackend.inventory.dto.AddEstateBoundaryRequest;
+import com.techcomfort.landvaultbackend.inventory.dto.UpdateEstateRequest;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import com.techcomfort.landvaultbackend.inventory.dto.PlotStatusChangeDto;
+import com.techcomfort.landvaultbackend.inventory.dto.ChangePlotStatusRequest;
+import com.techcomfort.landvaultbackend.inventory.dto.BulkPlotStatusRequest;
+import java.io.IOException;
+import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.bind.annotation.RequestPart;
+import org.springframework.http.MediaType;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ContentDisposition;
+import com.techcomfort.landvaultbackend.inventory.internal.service.PlotImportService;
+import com.techcomfort.landvaultbackend.inventory.dto.PlotImportReportDto;
+import com.techcomfort.landvaultbackend.inventory.dto.PlotTierChangeDto;
+import com.techcomfort.landvaultbackend.inventory.dto.PlotBoundaryDto;
+import com.techcomfort.landvaultbackend.inventory.dto.MovePlotTierRequest;
+import com.techcomfort.landvaultbackend.inventory.dto.CorrectPlotBoundaryRequest;
+import com.techcomfort.landvaultbackend.inventory.dto.EstateBoundaryDto;
 import com.techcomfort.landvaultbackend.common.PageResponse;
 import com.techcomfort.landvaultbackend.common.PageResponses;
 import com.techcomfort.landvaultbackend.inventory.dto.BlockDto;
@@ -87,6 +106,7 @@ public class PortalEstateController {
     private final PortalEstateService service;
     private final PortalEstateQueryService queryService;
     private final InventoryEditService editService;
+    private final PlotImportService importService;
 
     // --- reads ---
 
@@ -256,15 +276,73 @@ public class PortalEstateController {
         return ResponseEntity.status(HttpStatus.CREATED).body(service.createEstate(request));
     }
 
+    @Operation(summary = "Update an estate's details",
+            description = """
+                    Requires `portal.estates.manage`. Name, description, area, city, state, address, \
+                    corner premium, intent and amenities. **Every field is optional — left out means \
+                    unchanged**; a blank text field clears it (except `name` and `state`, which can't be \
+                    cleared). `amenities` replaces the whole list.
+
+                    **A corner-premium change reprices every corner plot at once**, including on the \
+                    live marketplace. Buyers who already reserved keep the price they agreed to.
+
+                    Refused, never silently ignored: `footprint` (use `POST .../boundary`, which runs the \
+                    overlap check), `published` (use publish/unpublish), and a different `branchId`.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "The estate as it now stands"),
+            @ApiResponse(responseCode = "400", description = "A refused field, a blank name or state, or an invalid value", content = @Content()),
+            @ApiResponse(responseCode = "404", description = "No such estate, or not yours", content = @Content()),
+            @ApiResponse(responseCode = "409", description = "Another of your estates already has a matching name", content = @Content())
+    })
+    @PutMapping("/{id}")
+    @PreAuthorize("hasAuthority('portal.estates.manage')")
+    public ResponseEntity<EstateDto> updateEstate(@PathVariable UUID id, @Valid @RequestBody UpdateEstateRequest request) {
+        return ResponseEntity.ok(service.updateEstate(id, request));
+    }
+
+    @Operation(summary = "Add a boundary to an estate that has none",
+            description = """
+                    Requires `portal.estates.manage`. For an estate created before its survey was \
+                    ready. **An estate cannot be published without a boundary**, so this is how one \
+                    becomes listable.
+
+                    GeoJSON `Polygon`, coordinates in **`[longitude, latitude]`** order — the same \
+                    rules as creating an estate.
+
+                    Only when the estate has **no** boundary yet; changing an existing one is not \
+                    supported (409 `BOUNDARY_ALREADY_SET`). Every plot that already has a boundary \
+                    must sit inside the new one, or the request is refused naming the plots that \
+                    don't, and nothing is saved.
+
+                    **Checked immediately for overlaps** with every other estate on the platform; \
+                    the response says whether that blocks publication. An estate that was already \
+                    published returns to the marketplace on its own if it now passes every \
+                    condition.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Boundary added; overlap result included"),
+            @ApiResponse(responseCode = "400", description = "Not a usable polygon (`INVALID_GEOMETRY`), "
+                    + "or existing plots fall outside it (`PLOT_OUTSIDE_ESTATE`)", content = @Content()),
+            @ApiResponse(responseCode = "404", description = "No such estate, or not yours", content = @Content()),
+            @ApiResponse(responseCode = "409", description = "`BOUNDARY_ALREADY_SET`", content = @Content())
+    })
+    @PostMapping("/{id}/boundary")
+    @PreAuthorize("hasAuthority('portal.estates.manage')")
+    public ResponseEntity<EstateBoundaryDto> addBoundary(
+            @PathVariable UUID id, @Valid @RequestBody AddEstateBoundaryRequest request) {
+        return ResponseEntity.ok(service.addBoundary(id, request));
+    }
+
     /** PB-1..PB-3. Refused with the specific failing condition(s) named. */
     @Operation(summary = "Publish an estate to the marketplace",
             description = """
                     Requires `portal.estates.manage`. A deliberate action, never a side effect of \
                     creating or editing an estate.
 
-                    **Refused unless all five conditions hold**, and the refusal names every one \
+                    **Refused unless every condition holds**, and the refusal names every one \
                     that failed: your company is verified; it holds the `marketplacePublishing` \
-                    entitlement; its status is active; and no conflict blocks the estate.
+                    entitlement; its status is active; a fee schedule and refund terms are \
+                    declared; the estate has a boundary; and no conflict blocks it. \
+                    `GET /api/portal/estates/{id}` shows each condition without attempting a publish.
 
                     A **`medium`** conflict does not refuse — it comes back as \
                     `warningConflictCount` on success.
@@ -361,6 +439,236 @@ public class PortalEstateController {
     public ResponseEntity<BlockDto> updateBlock(
             @PathVariable UUID id, @PathVariable UUID blockId, @Valid @RequestBody UpdateBlockRequest request) {
         return ResponseEntity.ok(editService.updateBlock(id, blockId, request));
+    }
+
+    @Operation(summary = "Correct a plot's boundary",
+            description = """
+                    Requires `portal.estates.manage`. Replaces the boundary of an **available** plot \
+                    — for example one entered with two coordinates transposed. Reserved and sold \
+                    plots are refused (`PLOT_NOT_EDITABLE`): their boundary is what a buyer agreed to.
+
+                    GeoJSON `Polygon`, coordinates in **`[longitude, latitude]`** order. Must sit \
+                    inside the estate's boundary when the estate has one. A boundary can be \
+                    replaced but not removed.
+
+                    The surveyed area is **recomputed** from the new boundary, and plot overlap \
+                    detection re-runs for the estate: an overlap the correction removes resolves \
+                    on its own, and one it creates is recorded. The response gives the count of \
+                    overlapping plot pairs before and after.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Corrected; area and overlap counts included"),
+            @ApiResponse(responseCode = "400", description = "Not a usable polygon (`INVALID_GEOMETRY`), "
+                    + "or outside the estate (`PLOT_OUTSIDE_ESTATE`)", content = @Content()),
+            @ApiResponse(responseCode = "404", description = "No such estate, or no such plot on it", content = @Content()),
+            @ApiResponse(responseCode = "409", description = "`PLOT_NOT_EDITABLE`: reserved or sold", content = @Content())
+    })
+    @PutMapping("/{id}/plots/{plotId}/boundary")
+    @PreAuthorize("hasAuthority('portal.estates.manage')")
+    public ResponseEntity<PlotBoundaryDto> correctPlotBoundary(
+            @PathVariable UUID id, @PathVariable UUID plotId, @Valid @RequestBody CorrectPlotBoundaryRequest request) {
+        return ResponseEntity.ok(editService.correctPlotBoundary(id, plotId, request));
+    }
+
+    @Operation(summary = "Move a plot to a different price tier",
+            description = """
+                    Requires `portal.estates.manage`. For an **available** plot that was put in the \
+                    wrong tier. Changes its **price** and, for a land-size tier, its **nominal size** \
+                    — the size on the deed. Reserved and sold plots are refused (`PLOT_NOT_EDITABLE`); \
+                    a buyer's agreed price and size never change.
+
+                    The target tier must be on the same estate and in the **same currency** \
+                    (`TIER_CURRENCY_MISMATCH` otherwise).
+
+                    - Moving to a **land-size** tier: the plot takes that tier's size. \
+                    `nominalSizeSqmOverride` is refused.
+                    - Moving to a **unit-type** tier: the plot keeps its current size, or takes \
+                    `nominalSizeSqmOverride` if given.
+
+                    The response shows price and size before and after.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Moved; before and after included"),
+            @ApiResponse(responseCode = "400", description = "Different currency, or an override with a land-size tier", content = @Content()),
+            @ApiResponse(responseCode = "404", description = "No such estate, plot or tier on it", content = @Content()),
+            @ApiResponse(responseCode = "409", description = "`PLOT_NOT_EDITABLE`: reserved or sold", content = @Content())
+    })
+    @PutMapping("/{id}/plots/{plotId}/tier")
+    @PreAuthorize("hasAuthority('portal.estates.manage')")
+    public ResponseEntity<PlotTierChangeDto> movePlotToTier(
+            @PathVariable UUID id, @PathVariable UUID plotId, @Valid @RequestBody MovePlotTierRequest request) {
+        return ResponseEntity.ok(editService.movePlotToTier(id, plotId, request));
+    }
+
+    @Operation(summary = "Download a plot-file template for this estate",
+            description = """
+                    Requires `portal.estates.view`. A GeoJSON file to edit rather than documentation \
+                    to read: two example plots **inside this estate's boundary**, this estate's real \
+                    tier labels, and the properties the import reads (`plot_number`, `block`, `tier`, \
+                    `corner`). Coordinates are `[longitude, latitude]` in WGS 84 — **not UTM \
+                    metres**, which is what Nigerian survey software usually produces.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "A `.geojson` file"),
+            @ApiResponse(responseCode = "404", description = "No such estate, or not yours", content = @Content())
+    })
+    @GetMapping(value = "/{id}/plots/import/template", produces = "application/geo+json")
+    @PreAuthorize("hasAuthority('portal.estates.view')")
+    public ResponseEntity<String> plotImportTemplate(@PathVariable UUID id) {
+        PlotImportService.TemplateFile template = importService.template(id);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        ContentDisposition.attachment().filename(template.fileName()).build().toString())
+                .contentType(MediaType.parseMediaType("application/geo+json"))
+                .body(template.content());
+    }
+
+    @Operation(summary = "Preview a plot file — find every problem, write nothing",
+            description = """
+                    Requires `portal.estates.manage`. Upload a GeoJSON `FeatureCollection`, one \
+                    `Feature` per plot (at most 500). Returns **one report** for the whole file: \
+                    errors that would stop the import, warnings that wouldn't (plots overlapping \
+                    each other), the blocks that would be created and how many plots each tier gets.
+
+                    A preview is **not a promise**: the import checks everything again.
+
+                    Which property carries what is configurable; the defaults match the template. \
+                    `tier` matches a tier's label, or a land tier's size in sqm. Every imported \
+                    plot gets `status` (`available-dev` or `available-inv`).""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "The report; `canImport` says whether the import would proceed"),
+            @ApiResponse(responseCode = "400", description = "An invalid `status`", content = @Content()),
+            @ApiResponse(responseCode = "404", description = "No such estate, or not yours", content = @Content())
+    })
+    @PostMapping(value = "/{id}/plots/import/preview", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasAuthority('portal.estates.manage')")
+    public ResponseEntity<PlotImportReportDto> previewPlotImport(
+            @PathVariable UUID id,
+            @RequestPart("file") MultipartFile file,
+            @RequestParam(defaultValue = "plot_number") String plotNumberProperty,
+            @RequestParam(defaultValue = "block") String blockProperty,
+            @RequestParam(defaultValue = "tier") String tierProperty,
+            @RequestParam(defaultValue = "corner") String cornerProperty,
+            @RequestParam(defaultValue = "available-dev") String status) throws IOException {
+        return ResponseEntity.ok(importService.preview(id, file.getBytes(), new PlotImportService.Options(
+                plotNumberProperty, blockProperty, tierProperty, cornerProperty, status)));
+    }
+
+    @Operation(summary = "Import plots from a file — all or nothing",
+            description = """
+                    Requires `portal.estates.manage`. Same file and options as the preview. \
+                    **Everything is checked again**; if the file has any error, nothing is created \
+                    and the report comes back with HTTP 422. Otherwise every plot is created in one \
+                    go, missing blocks are created, and overlap detection runs once for the estate \
+                    — overlaps are recorded for review, never a reason to refuse.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Imported; the report includes `createdCount`"),
+            @ApiResponse(responseCode = "400", description = "An invalid `status`", content = @Content()),
+            @ApiResponse(responseCode = "404", description = "No such estate, or not yours", content = @Content()),
+            @ApiResponse(responseCode = "422", description = "The file has errors; nothing was created. Body is the report.")
+    })
+    @PostMapping(value = "/{id}/plots/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasAuthority('portal.estates.manage')")
+    public ResponseEntity<PlotImportReportDto> importPlots(
+            @PathVariable UUID id,
+            @RequestPart("file") MultipartFile file,
+            @RequestParam(defaultValue = "plot_number") String plotNumberProperty,
+            @RequestParam(defaultValue = "block") String blockProperty,
+            @RequestParam(defaultValue = "tier") String tierProperty,
+            @RequestParam(defaultValue = "corner") String cornerProperty,
+            @RequestParam(defaultValue = "available-dev") String status) throws IOException {
+        return ResponseEntity.ok(importService.importPlots(id, file.getBytes(), file.getOriginalFilename(),
+                new PlotImportService.Options(plotNumberProperty, blockProperty, tierProperty, cornerProperty, status)));
+    }
+
+    @Operation(summary = "Withhold a plot, or return it to the market",
+            description = """
+                    Requires `portal.estates.manage`. Takes an **available** plot off the market \
+                    (`withheld`) — a survey dispute, a staff allocation — or puts a withheld one back.
+
+                    - `withheld` — from `available-dev` or `available-inv`.
+                    - `available` — back to **the variant it had** before being withheld. Development \
+                    and investment plots are never flattened into one.
+                    - `available-dev` / `available-inv` — set the variant explicitly.
+
+                    **Never `reserved` or `sold`** — only checkout reaches those. A reserved or sold \
+                    plot is refused (`PLOT_NOT_EDITABLE`). On the public marketplace a withheld plot \
+                    shows as unavailable. Returning a land plot to the market takes its tier's current \
+                    size.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Changed, or already in that status (nothing recorded)"),
+            @ApiResponse(responseCode = "400", description = "Not one of the allowed statuses", content = @Content()),
+            @ApiResponse(responseCode = "404", description = "No such estate, or no such plot on it", content = @Content()),
+            @ApiResponse(responseCode = "409", description = "`PLOT_NOT_EDITABLE`: reserved or sold", content = @Content())
+    })
+    @PutMapping("/{id}/plots/{plotId}/status")
+    @PreAuthorize("hasAuthority('portal.estates.manage')")
+    public ResponseEntity<PlotStatusChangeDto> changePlotStatus(
+            @PathVariable UUID id, @PathVariable UUID plotId, @Valid @RequestBody ChangePlotStatusRequest request) {
+        return ResponseEntity.ok(editService.changePlotStatus(id, plotId, request));
+    }
+
+    @Operation(summary = "Change many plots' status at once",
+            description = """
+                    Requires `portal.estates.manage`. Same statuses as the single-plot route, for up to \
+                    500 plots — a phase launch in one action.
+
+                    **Skip and report, never all or nothing**: one reserved plot doesn't block a \
+                    200-plot launch; it comes back in `skipped` with the reason. Each plot is \
+                    checked **at the moment it is changed**, so a buyer reserving a plot at the same \
+                    instant keeps their hold. `dryRun: true` reports what would change without \
+                    changing anything — but the real request re-checks every plot regardless.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "What changed and what was skipped, with reasons"),
+            @ApiResponse(responseCode = "400", description = "Not one of the allowed statuses, or more than 500 plots", content = @Content()),
+            @ApiResponse(responseCode = "404", description = "No such estate, or not yours", content = @Content())
+    })
+    @PostMapping("/{id}/plots/status")
+    @PreAuthorize("hasAuthority('portal.estates.manage')")
+    public ResponseEntity<PlotStatusChangeDto> changePlotStatuses(
+            @PathVariable UUID id, @Valid @RequestBody BulkPlotStatusRequest request) {
+        return ResponseEntity.ok(editService.changePlotStatuses(id, request));
+    }
+
+    @Operation(summary = "Withdraw a plot that was never sold, reserved or disputed",
+            description = """
+                    Requires `portal.estates.manage`. Removes a plot entered by mistake. **Only a plot \
+                    with no history**: never reserved or bought (in any state, including an expired \
+                    hold) and never part of a boundary conflict. Anything else is refused \
+                    (`PLOT_HAS_HISTORY`) — withhold it instead. The plot number can then be reused.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "204", description = "Withdrawn"),
+            @ApiResponse(responseCode = "404", description = "No such estate, or no such plot on it", content = @Content()),
+            @ApiResponse(responseCode = "409", description = "`PLOT_NOT_EDITABLE` (reserved/sold) or `PLOT_HAS_HISTORY`", content = @Content())
+    })
+    @DeleteMapping("/{id}/plots/{plotId}")
+    @PreAuthorize("hasAuthority('portal.estates.manage')")
+    public ResponseEntity<Void> withdrawPlot(@PathVariable UUID id, @PathVariable UUID plotId) {
+        editService.withdrawPlot(id, plotId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @Operation(summary = "Retire a tier — no new plots may join it",
+            description = """
+                    Requires `portal.estates.manage`. Stops new plots being created on, imported into or \
+                    moved to the tier. **Existing plots keep it**, and available ones stay on sale at \
+                    its price — to take them off the market, withhold them. Undo with `reinstate`.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "The tier, with `retiredAt` set"),
+            @ApiResponse(responseCode = "404", description = "No such estate, or no such tier on it", content = @Content())
+    })
+    @PostMapping("/{id}/price-tiers/{tierId}/retire")
+    @PreAuthorize("hasAuthority('portal.estates.manage')")
+    public ResponseEntity<PriceTierDto> retireTier(@PathVariable UUID id, @PathVariable UUID tierId) {
+        return ResponseEntity.ok(editService.retireTier(id, tierId, true));
+    }
+
+    @Operation(summary = "Reinstate a retired tier", description = "Requires `portal.estates.manage`.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "The tier, with `retiredAt` cleared"),
+            @ApiResponse(responseCode = "404", description = "No such estate, or no such tier on it", content = @Content())
+    })
+    @PostMapping("/{id}/price-tiers/{tierId}/reinstate")
+    @PreAuthorize("hasAuthority('portal.estates.manage')")
+    public ResponseEntity<PriceTierDto> reinstateTier(@PathVariable UUID id, @PathVariable UUID tierId) {
+        return ResponseEntity.ok(editService.retireTier(id, tierId, false));
     }
 
     @Operation(summary = "Change a tier's price, label or size",

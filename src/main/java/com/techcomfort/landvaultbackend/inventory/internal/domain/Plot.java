@@ -76,6 +76,11 @@ public class Plot extends AbstractEntity {
     @Column(name = "status", nullable = false, length = 32)
     private PlotStatus status;
 
+    /** The available variant a withheld plot returns to; null unless withheld. Changeset 062. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "withheld_from_status", length = 32)
+    private PlotStatus withheldFromStatus;
+
     /** Nullable — a plot inherits the estate's intent unless sold specifically as one or the other. */
     @Enumerated(EnumType.STRING)
     @Column(name = "intent", length = 32)

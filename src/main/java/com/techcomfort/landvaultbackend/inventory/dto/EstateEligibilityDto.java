@@ -45,6 +45,11 @@ public record EstateEligibilityDto(
         @Schema(description = "Refund terms have been declared.")
         boolean refundTermsDeclared,
 
+        @Schema(description = "The estate has a boundary. Without one it cannot be checked for "
+                + "overlaps with other companies' land, so it cannot be listed. Applies to every "
+                + "estate, including ones published before this rule.")
+        boolean hasBoundary,
+
         /**
          * Explicit rather than inferable. Without it a client has to reason
          * "every named condition passes but {@code eligible} is false, so it

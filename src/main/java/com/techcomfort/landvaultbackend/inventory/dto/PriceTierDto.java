@@ -13,6 +13,8 @@ public record PriceTierDto(
         BigDecimal sizeSqm,
         BigDecimal price,
         Currency currency,
-        String label
+        String label,
+        /** When the tier stopped accepting new plots; null while open. Existing plots keep it. */
+        java.time.Instant retiredAt
 ) {
 }

@@ -7,6 +7,8 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.List;
+import java.util.UUID;
 
 /**
  * The two PostGIS calls this slice needs. Both go through the shared
@@ -52,6 +54,51 @@ public class GeometryCalculator {
      * Not plot-against-plot overlap — that's conflict detection, which needs
      * its own design and its own slice.
      */
+    /**
+     * Area of any geometry in square metres (geography cast) — for an overlap,
+     * which can come out as a polygon, multipolygon or collection. Null for
+     * an empty one.
+     */
+    public BigDecimal areaOf(org.locationtech.jts.geom.Geometry shape) {
+        if (shape == null || shape.isEmpty()) {
+            return null;
+        }
+        Object result = entityManager
+                .createNativeQuery("SELECT ST_Area(ST_GeomFromText(:wkt, :srid)::geography)")
+                .setParameter("wkt", shape.toText())
+                .setParameter("srid", SRID_WGS84)
+                .getSingleResult();
+        return new BigDecimal(result.toString()).setScale(AREA_SCALE, RoundingMode.HALF_UP);
+    }
+
+    /**
+     * Every plot on the estate whose boundary does not sit inside
+     * {@code boundary}, labelled "Block X, Plot N" (or "Plot N" with no
+     * block). One statement for the whole estate rather than one per plot —
+     * an estate can hold hundreds. Plots without a boundary are not checked:
+     * there is nothing to compare.
+     */
+    public List<String> plotsOutside(UUID estateId, Polygon boundary) {
+        @SuppressWarnings("unchecked")
+        List<Object> labels = entityManager
+                .createNativeQuery("""
+                        SELECT CASE WHEN b.name IS NULL THEN 'Plot ' || p.plot_number
+                                    ELSE 'Block ' || b.name || ', Plot ' || p.plot_number END
+                          FROM plots p
+                          LEFT JOIN blocks b ON b.id = p.block_id
+                         WHERE p.estate_id = :estateId
+                           AND p.deleted = false
+                           AND p.footprint IS NOT NULL
+                           AND NOT ST_Within(p.footprint, ST_GeomFromText(:boundary, :srid))
+                         ORDER BY b.name NULLS FIRST, p.plot_number
+                        """)
+                .setParameter("estateId", estateId)
+                .setParameter("boundary", boundary.toText())
+                .setParameter("srid", SRID_WGS84)
+                .getResultList();
+        return labels.stream().map(Object::toString).toList();
+    }
+
     public boolean isWithin(Polygon inner, Polygon outer) {
         Object result = entityManager
                 .createNativeQuery(

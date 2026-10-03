@@ -6,6 +6,8 @@ import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.LinearRing;
 import org.locationtech.jts.geom.Polygon;
+import org.locationtech.jts.operation.valid.TopologyValidationError;
+import org.locationtech.jts.operation.valid.IsValidOp;
 import org.locationtech.jts.geom.PrecisionModel;
 import org.springframework.stereotype.Component;
 
@@ -54,21 +56,31 @@ public class GeoJsonPolygonParser {
         }
         if (!POLYGON_TYPE.equalsIgnoreCase(dto.type())) {
             throw new InventoryException.InvalidGeometry(fieldName,
-                    "must be a GeoJSON Polygon, got '" + dto.type() + "'. MultiPolygon, LineString and bare "
+                    "The boundary must be a GeoJSON Polygon, got '" + dto.type() + "'. MultiPolygon, LineString and bare "
                             + "coordinate arrays are not accepted.");
         }
         if (dto.coordinates() == null || dto.coordinates().isEmpty()) {
-            throw new InventoryException.InvalidGeometry(fieldName, "has no coordinate ring.");
+            throw new InventoryException.InvalidGeometry(fieldName, "The boundary has no coordinate ring.");
         }
 
-        LinearRing shell = ring(dto.coordinates().getFirst(), fieldName, "outer ring");
+        LinearRing shell = ring(dto.coordinates().getFirst(), fieldName, "Outer ring");
         LinearRing[] holes = new LinearRing[dto.coordinates().size() - 1];
         for (int i = 1; i < dto.coordinates().size(); i++) {
-            holes[i - 1] = ring(dto.coordinates().get(i), fieldName, "hole " + i);
+            holes[i - 1] = ring(dto.coordinates().get(i), fieldName, "Hole " + i);
         }
 
         Polygon polygon = geometryFactory.createPolygon(shell, holes);
         polygon.setSRID(SRID_WGS84);
+        // A ring whose edges cross (a "bow-tie", usually two corners entered
+        // in the wrong order) is structurally closed but not a real area:
+        // PostGIS would compute a meaningless surveyed area and overlap for it.
+        TopologyValidationError invalid = new IsValidOp(polygon).getValidationError();
+        if (invalid != null) {
+            throw new InventoryException.InvalidGeometry(fieldName, "The boundary is not a valid shape: "
+                    + invalid.getMessage().toLowerCase(java.util.Locale.ROOT) + " near ["
+                    + invalid.getCoordinate().x + ", " + invalid.getCoordinate().y
+                    + "]. Usually two corners are in the wrong order.");
+        }
         return polygon;
     }
 
@@ -105,6 +117,16 @@ public class GeoJsonPolygonParser {
         boolean latitudeOk = latitude.compareTo(MIN_LATITUDE) >= 0 && latitude.compareTo(MAX_LATITUDE) <= 0;
         if (longitudeOk && latitudeOk) {
             return;
+        }
+        // Metres, not degrees: UTM (the Minna datum zones Nigerian survey
+        // software defaults to) gives six- and seven-digit numbers. Say so,
+        // because "outside Nigeria" sends the surveyor looking for the
+        // wrong mistake.
+        if (longitude.abs().compareTo(new BigDecimal("180")) > 0 || latitude.abs().compareTo(new BigDecimal("90")) > 0) {
+            throw new InventoryException.InvalidGeometry(fieldName,
+                    what + " position " + index + " [" + longitude + ", " + latitude + "] looks like projected "
+                            + "coordinates in metres (e.g. UTM on the Minna datum), not longitude/latitude. "
+                            + "Export again in WGS 84 (EPSG:4326).");
         }
         // The swap is by far the likeliest cause, so say so rather than
         // leaving the caller to work it out from a bounds number.

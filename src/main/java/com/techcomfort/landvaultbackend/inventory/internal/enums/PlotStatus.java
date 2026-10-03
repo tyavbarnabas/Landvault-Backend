@@ -19,7 +19,15 @@ public enum PlotStatus {
     AVAILABLE_DEV("available-dev"),
     AVAILABLE_INV("available-inv"),
     RESERVED("reserved"),
-    SOLD("sold");
+    SOLD("sold"),
+    /**
+     * Off the market on the developer's decision — a survey dispute, a staff
+     * allocation (IE-7). Never reserved by a buyer and never sold: those two
+     * statuses are only ever reached through checkout. Returning a withheld
+     * plot restores the available variant it had (see
+     * {@code Plot.withheldFromStatus}).
+     */
+    WITHHELD("withheld");
 
     private final String value;
 

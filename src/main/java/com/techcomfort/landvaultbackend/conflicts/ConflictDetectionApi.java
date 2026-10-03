@@ -42,4 +42,11 @@ public interface ConflictDetectionApi {
      * already documented in AGENTS.md, not a replacement for them.
      */
     ConflictPublicationCheck publicationCheckFor(UUID estateId);
+
+    /**
+     * Whether this plot has ever appeared in a conflict record, in any
+     * status. Through a definer function (changeset 062): conflicts are
+     * platform-scope only, so a tenant-scoped read would always say no.
+     */
+    boolean hasConflictHistory(UUID plotId);
 }

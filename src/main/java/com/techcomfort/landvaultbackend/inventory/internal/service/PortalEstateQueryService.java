@@ -191,6 +191,7 @@ public class PortalEstateQueryService {
                         e.tenantActive(),
                         e.feesDeclared(),
                         e.refundTermsDeclared(),
+                        e.hasBoundary(),
                         !conflictDetection.publicationCheckFor(estateId).blocked(),
                         e.eligible()))
                 .orElse(null);
@@ -410,7 +411,7 @@ public class PortalEstateQueryService {
 
     private static PriceTierDto toDto(PriceTier tier) {
         return new PriceTierDto(tier.getId(), tier.getEstateId(), tier.getTierType().getValue(),
-                tier.getSizeSqm(), tier.getPrice(), tier.getCurrency(), tier.getLabel());
+                tier.getSizeSqm(), tier.getPrice(), tier.getCurrency(), tier.getLabel(), tier.getRetiredAt());
     }
 
     private static EstateTitleDto toDto(EstateTitle title) {

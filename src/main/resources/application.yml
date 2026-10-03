@@ -1,6 +1,12 @@
 spring:
   application:
     name: landvault-backend
+  # Plot import (FU-1) uploads a GeoJSON file. Boot's 1MB default is too
+  # tight for a 500-plot survey export at full coordinate precision.
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
   datasource:
     # The APPLICATION's own runtime connection — deliberately NOT the
     # superuser Liquibase migrates with below. A superuser (or any

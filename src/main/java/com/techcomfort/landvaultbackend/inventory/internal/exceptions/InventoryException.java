@@ -66,6 +66,80 @@ public abstract class InventoryException extends RuntimeException {
         }
     }
 
+    /**
+     * {@code POST .../boundary} on an estate that already has one. Adding a
+     * boundary is for an estate created without one; changing an existing
+     * boundary is a different, riskier operation and is not offered.
+     */
+    public static class BoundaryAlreadySet extends InventoryException {
+
+        @Override
+        public String getMessage() {
+            return "This estate already has a boundary. Changing an existing boundary isn't supported.";
+        }
+    }
+
+    /**
+     * An edit to a plot that is reserved or sold. Its boundary, tier and
+     * size are what a buyer agreed to; only available plots are editable.
+     */
+    public static class PlotNotEditable extends InventoryException {
+
+        private final String detail;
+
+        public PlotNotEditable(String plotLabel, String status) {
+            this.detail = plotLabel + " is " + status + ". Only available plots can be edited — "
+                    + "a buyer's agreed boundary, price and size never change under them.";
+        }
+
+        @Override
+        public String getMessage() {
+            return detail;
+        }
+    }
+
+    /**
+     * A plot import refused because the file has errors. Carries the whole
+     * report, which is what the caller needs to fix the file — one answer
+     * for every problem, not the first one found.
+     */
+    public static class ImportRejected extends InventoryException {
+
+        private final com.techcomfort.landvaultbackend.inventory.dto.PlotImportReportDto report;
+
+        public ImportRejected(com.techcomfort.landvaultbackend.inventory.dto.PlotImportReportDto report) {
+            this.report = report;
+        }
+
+        public com.techcomfort.landvaultbackend.inventory.dto.PlotImportReportDto report() {
+            return report;
+        }
+
+        @Override
+        public String getMessage() {
+            return "The file has " + report.errors().size() + " error(s); nothing was imported.";
+        }
+    }
+
+    /**
+     * Withdrawing a plot that has been reserved, bought or disputed (IE-11).
+     * Its records refer to it; withholding is the way to take it off sale.
+     */
+    public static class PlotHasHistory extends InventoryException {
+
+        private final String detail;
+
+        public PlotHasHistory(String plotLabel) {
+            this.detail = plotLabel + " has been reserved, bought or part of a boundary conflict, so it can't be "
+                    + "withdrawn — its records refer to it. Withhold it instead to take it off the market.";
+        }
+
+        @Override
+        public String getMessage() {
+            return detail;
+        }
+    }
+
     /** A plot boundary that doesn't sit inside its estate's boundary. */
     public static class PlotOutsideEstate extends InventoryException {
 

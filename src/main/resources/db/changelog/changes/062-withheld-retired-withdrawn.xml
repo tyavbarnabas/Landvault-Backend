@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Inventory editing slice 3: withholding a plot (IE-7/IE-8), retiring a
+        tier (IE-5) and withdrawing a plot (IE-11). See AGENTS.md.
+    -->
+
+    <!--
+        IE-7. WITHHELD takes a plot off the market without the two dangerous
+        workarounds: a hand-set RESERVED is a hold the expiry sweep never
+        releases, and a hand-set SOLD is a sale with no payment.
+
+        withheld_from_status records which available variant the plot was,
+        so returning it restores AVAILABLE_INV rather than flattening every
+        plot to AVAILABLE_DEV — the same distinction the reservation sweep
+        already preserves. Only ever set while the plot is WITHHELD.
+    -->
+    <changeSet id="062-plot-withheld-status" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE plots DROP CONSTRAINT chk_plots_status;
+            ALTER TABLE plots ADD CONSTRAINT chk_plots_status
+                CHECK (status IN ('AVAILABLE_DEV', 'AVAILABLE_INV', 'RESERVED', 'SOLD', 'WITHHELD'));
+
+            ALTER TABLE plots ADD COLUMN withheld_from_status varchar(32);
+            ALTER TABLE plots ADD CONSTRAINT chk_plots_withheld_from_status
+                CHECK (withheld_from_status IS NULL
+                       OR (status = 'WITHHELD' AND withheld_from_status IN ('AVAILABLE_DEV', 'AVAILABLE_INV')));
+            COMMENT ON COLUMN plots.withheld_from_status IS
+                'The available variant a WITHHELD plot returns to. Null whenever the plot is not withheld.';
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE plots DROP CONSTRAINT chk_plots_withheld_from_status;
+            ALTER TABLE plots DROP COLUMN withheld_from_status;
+            ALTER TABLE plots DROP CONSTRAINT chk_plots_status;
+            ALTER TABLE plots ADD CONSTRAINT chk_plots_status
+                CHECK (status IN ('AVAILABLE_DEV', 'AVAILABLE_INV', 'RESERVED', 'SOLD'));
+        ]]></rollback>
+    </changeSet>
+
+    <!--
+        IE-5. Retiring cannot reuse `deleted`: a soft-deleted tier vanishes
+        from every lookup and its plots would lose their price. Retirement
+        stops NEW plots joining the tier; existing plots keep it and stay
+        sellable.
+    -->
+    <changeSet id="062-price-tier-retired-at" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE price_tiers ADD COLUMN retired_at timestamp(6) with time zone;
+            COMMENT ON COLUMN price_tiers.retired_at IS
+                'Set when the tier stops accepting new plots. Existing plots keep it. Never the same as deleted.';
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE price_tiers DROP COLUMN retired_at;
+        ]]></rollback>
+    </changeSet>
+
+    <!--
+        IE-11. Only a plot with no history can be withdrawn (soft-deleted),
+        so its number may be reused — but the original constraint counted
+        soft-deleted rows, so a withdrawn "Plot 4" would block a new one
+        forever. Same rule, live rows only. NULLS NOT DISTINCT is kept: a
+        block-less estate still gets one "Plot 4", not unlimited.
+        Rollback restores the constraint, which fails if a reused number now
+        coexists with its withdrawn predecessor — inherent, not a defect.
+    -->
+    <changeSet id="062-plot-number-unique-among-live-plots" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE plots DROP CONSTRAINT uq_plots_estate_block_number;
+            CREATE UNIQUE INDEX uq_plots_estate_block_number
+                ON plots (estate_id, block_id, plot_number) NULLS NOT DISTINCT
+                WHERE deleted = false;
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP INDEX uq_plots_estate_block_number;
+            ALTER TABLE plots ADD CONSTRAINT uq_plots_estate_block_number
+                UNIQUE NULLS NOT DISTINCT (estate_id, block_id, plot_number);
+        ]]></rollback>
+    </changeSet>
+
+    <!--
+        IE-11. Whether a plot ever appeared in a conflict record. A fourth
+        RLS escape on listing_conflicts (after 047): that table is
+        platform-scope only, so a tenant-scoped query would always say "no"
+        and let a plot with conflict history be withdrawn. Returns a boolean,
+        never a row — the caller learns exactly what it may ask and nothing
+        about the other side. Hardened like 043/047/054.
+    -->
+    <changeSet id="062-plot-conflict-history-function" author="landvault">
+        <sql splitStatements="false"><![CDATA[
+            CREATE OR REPLACE FUNCTION landvault_plot_has_conflict_history(p_plot_id uuid)
+            RETURNS boolean
+            LANGUAGE sql
+            STABLE
+            SECURITY DEFINER
+            SET search_path = public, pg_temp
+            AS $$
+                SELECT EXISTS (
+                    SELECT 1 FROM listing_conflicts
+                     WHERE conflict_type = 'PLOT_OVERLAP'
+                       AND (left_entity_id = p_plot_id OR right_entity_id = p_plot_id)
+                );
+            $$;
+        ]]></sql>
+        <sql><![CDATA[
+            REVOKE ALL ON FUNCTION landvault_plot_has_conflict_history(uuid) FROM PUBLIC;
+            GRANT EXECUTE ON FUNCTION landvault_plot_has_conflict_history(uuid) TO ${appDbUsername};
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP FUNCTION landvault_plot_has_conflict_history(uuid);
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

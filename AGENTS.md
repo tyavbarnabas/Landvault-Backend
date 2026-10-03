@@ -1414,7 +1414,7 @@ accepted from the request**.
 Computed on write rather than per read: simpler, and it matches the column
 that already exists. **The consequence is that editing a footprint must
 recompute it**, or the stored area silently describes the old boundary.
-Nothing edits footprints yet; whoever builds that owns this.
+**Closed for plots by IE-9** (`PUT .../plots/{plotId}/boundary` recomputes it). Estate boundaries can only be added once, never changed, so the estate side has nothing to recompute yet.
 
 No footprint means `actual_area_sqm` stays **null**, never the nominal figure.
 
@@ -1622,7 +1622,9 @@ and title verification. Two columns carry the weight:
 
 ## The marketplace publication gate: four conditions, recorded here, enforced there
 
-An estate is publicly listable only when **all five** hold:
+An estate is publicly listable only when **every** condition holds — five
+originally, now eight (fees and refund terms from full cost disclosure, and the
+boundary from BG-1; see those sections):
 
 1. `estates.published` is true (the developer's own opt-in switch)
 2. the owning tenant's `verificationState` is `VERIFIED`
@@ -1633,6 +1635,9 @@ An estate is publicly listable only when **all five** hold:
 5. **no conflict blocks it** — `ConflictDetectionApi.publicationCheckFor(estateId)`
    returns `blocked == false` (added by inventory slice 4; see the conflict
    detection sections below for why HIGH blocks and MEDIUM only warns)
+6. a fee schedule is declared, and 7. refund terms are declared (full cost
+   disclosure, changeset 059)
+8. **the estate has a boundary** (BG-1, changeset 061)
 
 **Built in the publication slice** as `marketplace_estate_eligibility`
 (changeset 049) — see "The public marketplace" below.
@@ -2637,12 +2642,14 @@ conflict "resolved itself" while the land still overlaps would be asserting
 a fact about the world they are not in a position to assert; `dismissed` is
 the judgement they *are* entitled to make.
 
-**This path is built but currently unreachable through HTTP**, and that is
-a real gap rather than a finished feature: nothing updates a footprint yet
-(creation only), so re-detection never fires on a corrected boundary. The
-same gap AGENTS.md already records for recomputing `actual_area_sqm` on
-edit — whoever builds footprint correction closes both at once, and should
-call `ConflictDetectionApi.detectForEstateBoundary` from it.
+**For plots, this path is now reachable through HTTP** (IE-9: correcting a
+plot boundary re-runs `detectForEstatePlots`, and
+`InventoryEditUnderRlsIT.aCorrectionCanCreateAnOverlapAndAnotherCanClearIt`
+proves a plot conflict auto-resolves end to end). **For estates it is still
+unreachable**: an estate boundary can be added once (BG-1's add-boundary
+route) but never changed, so an estate-level conflict cannot clear through a
+correction yet — whoever builds estate boundary correction must call
+`ConflictDetectionApi.detectForEstateBoundary` from it.
 `correctingTheGeometryAutoResolvesTheConflictAndKeepsTheRecord` exercises
 it by mutating geometry in SQL and invoking the API directly, so the logic
 is genuinely tested rather than shipped on a promise.
@@ -3082,10 +3089,327 @@ Reads are not audited: the audit log records actions, not page views.
   Comparing a ₦ "from" price with a $ one ranks land by a meaningless
   number. An estate whose tiers mix currencies has an ambiguous "from"
   price; the view takes the cheapest available tier as stored.
-- **An estate with no boundary can be published** and can never raise an
-  estate-level conflict, since there's nothing to intersect — a way to sit
-  outside the fifth condition entirely. Not one of the five conditions as
-  specified; flagged as an open decision, not silently added.
+- ~~**An estate with no boundary can be published**~~ — **closed by BG-1**
+  (changeset 061, see "No boundary, no listing" below).
+
+## Updating an estate's details: `PUT /api/portal/estates/{id}`
+
+`portal.estates.manage`, `PortalEstateService.updateEstate`. Name,
+description, area, city, state, address, corner premium, intent and
+amenities. Every field optional — left out means unchanged; a blank text
+field clears it, except `name` and `state`. An edit that changes nothing
+writes nothing; otherwise one `estate.updated` audit entry lists each field's
+old and new value.
+
+- **Refused, never silently ignored** — the decision made when the boundary
+  got its own route: `footprint` (`BOUNDARY_NOT_EDITABLE_HERE` — the boundary
+  route runs overlap detection; a generic update with `footprint: null` would
+  also be a way to *remove* a boundary and dodge BG-1), `published`
+  (`PUBLICATION_NOT_EDITABLE_HERE` — publishing checks every condition) and a
+  different `branchId` (`BRANCH_NOT_EDITABLE` — moving an estate would have
+  to move every plot across the RLS branch wall; not supported). Boot's
+  Jackson ignores unknown properties, so these exist on the request DTO only
+  so they *can* be refused.
+- **A rename regenerates the slug**, with creation's per-tenant uniqueness
+  (409 on a clash). Keeping the old slug was rejected: a renamed estate would
+  then silently block a new estate under its *old* name.
+- **A corner-premium change reprices every corner plot at once**, live on the
+  marketplace — prices are computed on read. Reservations keep the price
+  captured on them; proven by test.
+- **Amenities are replaced wholesale, removed ones hard-deleted.** An amenity
+  is a description, not history, and `uq_estate_amenities_estate_name` counts
+  soft-deleted rows — a soft-deleted amenity could never be added back.
+
+## Inventory editing, slice 3: withheld, bulk status, retired tiers, withdrawn plots
+
+Changeset **062**; `InventoryEditService` + `PlotStatusWriter`. All
+`portal.estates.manage`.
+
+### IE-7: `withheld` — a developer's way off the market
+
+`PUT .../plots/{plotId}/status` with `withheld`, `available`,
+`available-dev` or `available-inv`. **Never `reserved` or `sold`** — those
+are reached only through checkout; the two old workarounds were both
+dangerous (a hand-set `RESERVED` is a hold the sweep never releases; a
+hand-set `SOLD` is a sale with no payment).
+
+- **The available variant is remembered**, in `plots.withheld_from_status`,
+  and `available` restores it — investment plots are never flattened to
+  development, the same distinction the reservation sweep preserves. A
+  CHECK constraint keeps the column set only while `WITHHELD` and only to an
+  available variant — proven to be a real second line: letting the code
+  withhold a *reserved* plot made the database refuse the write.
+- **Returning to the market resyncs a land plot's size from its tier.** A
+  tier resize reaches available plots only (IE-4), so a withheld plot can be
+  carrying the old size — the same reason changeset 060 resyncs on release.
+- Nothing else needed changing: the reserve function only acquires
+  `AVAILABLE_*`, and the marketplace view already collapses every
+  non-available status to `UNAVAILABLE`, so a withheld plot shows on the map
+  as unavailable without revealing why.
+- **Frontend**: `withheld` is a new value in the `PlotStatus` union.
+
+### IE-8: bulk status — skip and report, compare-and-swap
+
+`POST .../plots/status` `{ plotIds (≤500), status, reason, dryRun }`.
+**Skip and report, never all or nothing** — one reserved plot must not block
+a 200-plot launch (contrast file import, which is all or nothing).
+
+Each transition is **one SQL statement** (`PlotStatusWriter`) whose `WHERE`
+names the statuses it may move from — the same compare-and-swap the
+reservation uses. A plot being reserved at that instant holds its row lock;
+the update waits, re-evaluates against the committed row, and skips it.
+`withholdingAndReservingTheSamePlotAtOnceNeverOverwriteEachOther` races the
+two with a latch and asserts exactly one wins. `dryRun` reports without
+writing, and is never trusted: the real request re-checks everything.
+Skipped plots come back with a code (`RESERVED`, `SOLD`, `NOT_FOUND`,
+`ALREADY`, `NO_RECORDED_AVAILABILITY`) and a reason. Another company's plot id
+simply doesn't match under RLS and reports as `NOT_FOUND`. One audit entry
+per change, with the reason.
+
+### IE-5: retired tiers — `price_tiers.retired_at`, never `deleted`
+
+`POST .../price-tiers/{tierId}/retire` and `/reinstate`. A soft-deleted tier
+would vanish from every lookup and its plots would lose their price, so
+retirement is its own column. A retired tier **accepts no new plots** —
+refused at creation, import (`TIER_RETIRED` in the report, and the template
+lists only open tiers) and tier moves — but **existing plots keep it and stay
+sellable at its price**; withholding is how to take them off sale.
+
+### IE-11: withdrawing a plot — untouched plots only
+
+`DELETE .../plots/{plotId}`: a soft delete, and only for a plot with **no
+history** — never reserved or bought in any state (an expired or cancelled
+hold counts) and never part of a conflict record. Otherwise
+`PLOT_HAS_HISTORY` (409): its records refer to it; withhold it instead.
+Locked first, like every plot edit.
+
+- **Purchase history** is answered by `checkout` through
+  `inventory.PlotHistoryProbe` — the **fifth** inverted interface (inventory
+  declares, checkout implements), because checkout is the module that will
+  one day tell inventory a plot is sold, so the arrow has to run checkout →
+  inventory.
+- **Conflict history** goes through `landvault_plot_has_conflict_history`
+  (`SECURITY DEFINER`, boolean only) — `listing_conflicts` is platform-scope
+  only, so an ordinary tenant-scoped read would always answer "no history".
+  **Proven**: as `SECURITY INVOKER` the check passed a plot with conflict
+  history and the withdrawal went through.
+- **A withdrawn plot's number can be reused.** `uq_plots_estate_block_number`
+  is now a unique index over live rows only (`WHERE deleted = false`, still
+  `NULLS NOT DISTINCT`), same name so the existing 409 mapping holds. Safe
+  because only history-free plots are ever withdrawn.
+
+## Plot import from a surveyor's file (FU-1..FU-3)
+
+`GET .../plots/import/template` (`portal.estates.view`),
+`POST .../plots/import/preview` and `POST .../plots/import` (both
+`portal.estates.manage`, multipart `file` plus optional property-name
+parameters). `PlotImportService`.
+
+**GeoJSON only.** A surveyor's CAD or shapefile is converted once in QGIS;
+parsing shapefile/DXF here would be a large, edge-case-heavy job for no gain.
+A single-part `MultiPolygon` is accepted (QGIS exports single shapes that
+way); a multi-part one is refused — a plot is one shape. Upload limit 10MB
+(`spring.servlet.multipart`), 500 features per file (the same ceiling as
+`CreatePlotsRequest`, since the import goes through that path).
+
+**The coordinate-system trap is the one the stories didn't mention.**
+Nigerian survey software defaults to UTM metres on the Minna datum (zones
+31N–33N). Two places now say so instead of "outside Nigeria", which sends a
+surveyor looking for the wrong mistake: a file whose `crs` member names a
+non-4326 system is refused as `PROJECTED_COORDINATES`, and
+`GeoJsonPolygonParser` recognises metre-sized numbers (|lng| > 180 or
+|lat| > 90) as projected coordinates. The parser change applies to every
+route that takes a boundary, not just import.
+
+**The parser also rejects self-crossing polygons now** (JTS `IsValidOp`), on
+every route: a "bow-tie" — two corners in the wrong order — is closed but not
+a real area, and PostGIS would compute a meaningless surveyed area and overlap
+for it. Only existing rectangles were in the fixtures, so nothing relied on
+the old leniency (full suite green after the change).
+
+**Preview reports everything at once; import is all or nothing.**
+- One report per file: `errors` (block the import), `warnings` (don't),
+  `blocksToCreate`, `plotsPerTier`. Codes include `UNKNOWN_TIER`,
+  `AMBIGUOUS_TIER`, `DUPLICATE_PLOT_NUMBER`, `PLOT_NUMBER_EXISTS`,
+  `OUTSIDE_ESTATE`, `INVALID_GEOMETRY`, `MISSING_PLOT_NUMBER`.
+- The preview is **not a promise** — the import validates again rather than
+  trusting it, since the estate can change in between.
+- An import with any error creates **nothing**, not even the valid plots or
+  new blocks, and returns the report with **HTTP 422** (the report as the
+  body, deliberately not the usual error shape — it already lists every
+  problem). Half a 450-plot estate imported is worse than none. Contrast
+  bulk status changes (IE-8), which will skip-and-report.
+- Valid files go through `PortalEstateService.createBlock`/`createPlots`, so
+  tier sizes, containment, area and overlap detection are the existing rules,
+  not a second copy of them. Missing blocks are created (matched
+  case-insensitively, so "a" and "A" are one block).
+
+**Tier mapping** is by the `tier` property: a tier's label
+(case-insensitive) or, failing that, a land tier's size in sqm — so a
+surveyor's `size: 500` column maps with no extra configuration. Which
+property carries plot number, block, tier and corner is configurable per
+upload. Imported plots are `available-dev` or `available-inv` only.
+
+**Overlaps are warnings**, found in memory with a JTS envelope index and
+measured by the database (geography, m²) only for pairs that genuinely
+intersect — so neighbours sharing an edge are never flagged, matching the
+detector's 1 m² threshold (`landvault.conflicts.min-overlap-sqm`). After
+import, `detectForEstatePlots` records them for review, exactly as for plots
+added one at a time.
+
+**A useful finding from the tests**: coordinates transposed near Abuja stay
+inside Nigeria, so the national check can't see them (see the coordinate-swap
+section) — but inside an estate that has a boundary, the containment check
+catches them as `OUTSIDE_ESTATE`. One more reason BG-1 matters.
+
+**A bug the IT caught before anyone saw it**: the template's file-name lookup
+ran outside a transaction, so `TenantScopedDataSource` never set the tenant
+GUCs, RLS returned no estate, and the download 404'd. The fix returns name and
+content from one `@Transactional` call. Same fail-closed mechanism AGENTS.md
+describes for scheduled jobs: **any repository read needs a transaction to
+carry the tenant scope.**
+
+**FU-3's template** is built per estate: its real tier labels, two example
+plots inside its real boundary (placeholder coordinates, said so, when it has
+none), and an `instructions` array (a GeoJSON foreign member, ignored by GIS
+tools) stating EPSG:4326 and the property names. The IT proves it previews
+clean and imports as downloaded.
+
+**Not built**: a per-feature size override for unit-type tiers, and a
+per-feature status. Both are one property each if needed.
+
+## Inventory editing, slice 2: a plot's boundary (IE-9) and its tier (IE-10)
+
+`PUT /api/portal/estates/{id}/plots/{plotId}/boundary` and
+`PUT /api/portal/estates/{id}/plots/{plotId}/tier`, both `portal.estates.manage`,
+both in `InventoryEditService`.
+
+**Available plots only, enforced under a row lock.** Both load the plot with
+`PlotRepository.findForUpdate` (`SELECT … FOR UPDATE`, the same lock
+`landvault_reserve_plot` takes) and check the status *after* the lock is held,
+so an edit and a reservation of the same plot serialize: either the
+reservation commits first and the edit is refused (`PLOT_NOT_EDITABLE`, 409),
+or the edit commits first and the buyer reserves the corrected plot. A
+check-then-write without the lock would let a buyer's hold be edited under
+them. **Reserved and sold plots are deliberately not editable** — their
+boundary, price and size are what a buyer agreed to; correcting a sold
+plot's survey is a matter for a person and a legal process, a stated gap
+rather than an oversight.
+
+### IE-9: correcting a boundary
+- Must sit inside the estate's boundary when there is one (`PLOT_OUTSIDE_ESTATE`).
+- A boundary can be **replaced, never removed** — `footprint` is required.
+  A plot that never had one can be given one through the same route.
+- **`actual_area_sqm` is recomputed** (geography cast, square metres). A
+  stale surveyed area looks authoritative, which is worse than none.
+- **Plot overlap detection re-runs for the estate** before and after, and
+  the response reports the overlapping-pair count both times — a correction
+  that clears an overlap, and one that creates one, are both reported. This
+  is what finally lets plot-conflict auto-resolution fire (CD-9). Plot
+  overlaps are same-company, so they warn and never block publication.
+- Audit `estate.plot_boundary_corrected` with old and new area.
+
+### IE-10: moving to another tier
+- Target tier must be on the same estate (another estate's tier is a 404)
+  and in the **same currency** (`TIER_CURRENCY_MISMATCH`, 400) — otherwise a
+  naira plot silently becomes a dollar plot.
+- **Size rule, decided with the user**: to a `LAND_SIZE` tier, the plot takes
+  that tier's size and `nominalSizeSqmOverride` is *refused* (not ignored —
+  the tier is authoritative, same as creation). To a `UNIT_TYPE` tier, the
+  plot keeps its current size unless an override is given — so a move never
+  silently clears a size or leaves a land plot sizeless.
+- The response reports price and size before and after; price is computed by
+  `PlotPricing`, corner premium included. A move to the same tier with the
+  same size is a no-op and writes no audit entry.
+- Audit `estate.plot_tier_changed` with tier labels, price and size.
+
+### A plot's property type follows its tier (found in the IE-10 walkthrough)
+
+IE-10 as first built let a `LAND` plot move to a `UNIT_TYPE` tier, leaving
+it marked bare land but priced as a 3-bedroom terrace. Creation had the same
+hole one step earlier: `propertyType` defaulted to `LAND` whatever the tier.
+The rule now, in one place (`PortalEstateService.expectedPropertyType`):
+**`LAND_SIZE` tier ↔ `LAND` plot, `UNIT_TYPE` tier ↔ `BUILT` plot.**
+
+- **At creation** (single, batch and file import, which goes through the
+  same path) the type is **derived from the tier when left out** and
+  **refused when it contradicts it** (`PROPERTY_TYPE_MISMATCH`, 400).
+- **On a tier move** the target tier must be of the same kind; crossing is
+  refused. Turning bare land into a built unit is a change to what the plot
+  physically is, not a re-categorisation, and has no route yet.
+- It cannot be a database constraint — it spans two tables. Rows written
+  before this rule may still disagree (the dev database has one, from the
+  walkthrough that found it); nothing corrects them automatically.
+
+### Conflict copy no longer promises an estate boundary correction
+
+Estate-level guidance used to say "correcting the coordinates clears this" /
+"a correction to the boundary is itself reviewed". An estate boundary cannot
+be changed from the portal at all, so that sent developers looking for a
+control that doesn't exist (caught in the BG-1 walkthrough). Estate messages
+now say to contact support; the *plot* message keeps "correcting the plot
+coordinates clears this automatically", which IE-9 made true.
+
+## No boundary, no listing (BG-1) — and no grandfathering
+
+**The hole**: conflict detection compares *estate* boundaries across companies,
+but *plot* boundaries only within one estate (`landvault_detect_plot_conflicts`
+filters both sides on `estate_id`). An estate with no footprint therefore never
+meets another company's land at all, even if every one of its plots has a
+shape. Publishing without a boundary was a way around the anti-fraud check the
+whole gate exists for.
+
+**The fix** (changeset 061): `marketplace_estate_eligibility` requires
+`e.footprint IS NOT NULL` for `eligible`, and exposes it as its own
+`has_boundary` column. The publish endpoint refuses with
+`PUBLICATION_BOUNDARY_MISSING`, checked **just before** the conflict condition
+because it is what makes that check meaningful — with no boundary, "no
+conflict" is an absence of evidence. `EstateEligibilityDto.hasBoundary` puts it
+on the portal's readiness read.
+
+**No grandfathering, deliberately unlike the fee rule.** Exempting existing
+listings from *disclosure* (changeset 056) traded principle for usefulness on a
+nicety. Exempting existing listings from *this* rule would keep the anti-fraud
+hole open for exactly the estates it catches — the local dev database had one
+such published, non-exempt, boundary-less estate when this was decided. An
+estate already live without a boundary drops off the marketplace with its
+`published` flag untouched (PB-5's intent/eligibility split) and returns, without
+republishing, as soon as a boundary is added and passes detection. Decided with
+the user; if leniency is ever wanted it should be a per-estate Super Admin
+decision, never an automatic exemption.
+
+### Adding a boundary later: `POST /api/portal/estates/{id}/boundary`
+
+BG-1 on its own stranded every estate created without a boundary: a boundary
+could only be set at creation, so such an estate could never be published.
+That applies in production too, not just to legacy rows, because the boundary
+is optional at creation. Decided with the user: keep it optional (a developer
+can set an estate up before the survey is ready) and add this route, rather
+than make it required at creation.
+
+- **Only when there is no boundary yet** (409 `BOUNDARY_ALREADY_SET`).
+  *Changing* an existing boundary is a different operation (every plot and
+  every overlap it used to satisfy would need re-checking) and stays out of
+  scope, along with extension — adjacent land is a new estate.
+- **Every plot that already has a boundary must sit inside the new one**,
+  checked in one statement for the whole estate (`GeometryCalculator.plotsOutside`),
+  never per plot. Refused with `PLOT_OUTSIDE_ESTATE` naming each plot
+  ("Block A, Plot 7"); nothing is saved.
+- **Runs `detectForEstateBoundary` in the same transaction**, then reports the
+  result (`publicationBlocked`, `blockReason`, `warningConflictCount`) — never
+  the counterparty (CD-11). This is the step that keeps the route from being
+  a back door around BG-1: a boundary-less estate is compared against other
+  companies' land the moment it gains one. Proven red by removing the call.
+- An already-published estate returns to the marketplace on its own when it
+  now passes every condition; a HIGH overlap keeps it off.
+- Audit entry `estate.boundary_added`.
+
+**Verified, not assumed**: no existing fixture published a boundary-less estate,
+so the full suite stayed green with the rule added — nothing was covering the
+hole. `MarketplaceIT.anEstateWithNoBoundaryCannotBePublishedAndSaysWhy` and
+`aLiveEstateWithoutABoundaryLeavesTheFeedAndReturnsWhenOneIsAdded` were each
+proven red by removing their half of the rule (the endpoint check, the view
+term).
 
 ## The OpenAPI document describes what exists, and stays dev-only
 

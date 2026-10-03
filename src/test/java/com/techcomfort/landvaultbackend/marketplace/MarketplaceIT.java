@@ -7,6 +7,8 @@ import com.techcomfort.landvaultbackend.common.geojson.GeoJsonPolygonDto;
 import com.techcomfort.landvaultbackend.identity.dto.AuthResponse;
 import com.techcomfort.landvaultbackend.identity.dto.LoginRequest;
 import com.techcomfort.landvaultbackend.identity.dto.RegisterRequest;
+import com.techcomfort.landvaultbackend.inventory.dto.AddEstateBoundaryRequest;
+import com.techcomfort.landvaultbackend.inventory.dto.EstateBoundaryDto;
 import com.techcomfort.landvaultbackend.inventory.dto.BlockDto;
 import com.techcomfort.landvaultbackend.inventory.dto.CreateBlockRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreateEstateRequest;
@@ -241,6 +243,150 @@ class MarketplaceIT {
         assertThat(feedIds()).contains(first.id());
     }
 
+    // --- BG-1: no boundary, no listing ---
+
+    /**
+     * An estate with no boundary can never meet another company's land in
+     * conflict detection, so listing it would be a way around the check.
+     */
+    @Test
+    void anEstateWithNoBoundaryCannotBePublishedAndSaysWhy() {
+        Tenant tenant = verifiedTenant("Boundaryless Ltd");
+        EstateDto estate = createEstate(tenant, "Boundaryless Gardens", null);
+        declareMinimumDisclosure(tenant, estate.id());
+
+        ResponseEntity<String> refusal = publish(tenant, estate.id());
+
+        assertThat(refusal.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(refusal.getBody()).contains("PUBLICATION_BOUNDARY_MISSING").contains("boundary");
+        assertThat(restTemplate.exchange("/api/portal/estates/" + estate.id(), HttpMethod.GET,
+                entity(tenant.token(), null), String.class).getBody())
+                .as("the readiness read names the outstanding condition")
+                .contains("\"hasBoundary\":false")
+                .contains("\"eligible\":false");
+        assertThat(feedIds()).doesNotContain(estate.id());
+    }
+
+    /**
+     * BG-2 decided against grandfathering: an estate already live without a
+     * boundary leaves the marketplace, keeps its published flag, and returns
+     * without republishing once a boundary exists. The boundary is removed
+     * in SQL to stand in for a listing published before the rule.
+     */
+    @Test
+    void aLiveEstateWithoutABoundaryLeavesTheFeedAndReturnsWhenOneIsAdded() {
+        Listing listing = publishedListing("Formerly Listed Gardens");
+        String boundary = queryString("SELECT ST_AsText(footprint) FROM estates WHERE id = '" + listing.estateId() + "'");
+
+        execute("UPDATE estates SET footprint = NULL WHERE id = '" + listing.estateId() + "'");
+        assertThat(feedIds()).as("no exemption for estates already published").doesNotContain(listing.estateId());
+        assertThat(anonymous("/api/marketplace/estates/" + listing.estateId()).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(publishedFlag(listing.estateId())).as("the developer's intent is untouched").isTrue();
+
+        execute("UPDATE estates SET footprint = ST_GeomFromText('" + boundary + "', 4326) WHERE id = '"
+                + listing.estateId() + "'");
+        assertThat(feedIds()).as("back without republishing").contains(listing.estateId());
+    }
+
+    // --- adding a boundary later: the way back from BG-1 ---
+
+    /** The API route back, replacing the SQL the previous test needed. */
+    @Test
+    void aLiveEstateWithoutABoundaryReturnsWhenOneIsAddedThroughTheApi() {
+        Listing listing = publishedListing("Returning Gardens");
+        execute("UPDATE estates SET footprint = NULL WHERE id = '" + listing.estateId() + "'");
+        assertThat(feedIds()).doesNotContain(listing.estateId());
+
+        ResponseEntity<EstateBoundaryDto> added = addBoundary(listing.tenant(), listing.estateId(), estateRing(),
+                EstateBoundaryDto.class);
+
+        assertThat(added.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(added.getBody().publicationBlocked()).isFalse();
+        assertThat(added.getBody().footprintAreaSqm()).isPositive();
+        assertThat(feedIds()).as("back without republishing").contains(listing.estateId());
+
+        ResponseEntity<String> again = addBoundary(listing.tenant(), listing.estateId(), estateRing(), String.class);
+        assertThat(again.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(again.getBody()).contains("BOUNDARY_ALREADY_SET");
+    }
+
+    /**
+     * The point of BG-1: an estate gaining a boundary is compared against
+     * other companies' land before it can be listed, and the developer is
+     * told at once — without being told who.
+     */
+    @Test
+    void addingABoundaryOverAnotherCompanysLandBlocksPublicationAndSaysSo() {
+        Listing incumbent = publishedListing("Incumbent Gardens");
+        Tenant latecomer = verifiedTenant("Latecomer Holdings");
+        EstateDto estate = createEstate(latecomer, "Latecomer Heights", null);
+        declareMinimumDisclosure(latecomer, estate.id());
+
+        ResponseEntity<String> added = addBoundary(latecomer, estate.id(), overlappingEstateRing(), String.class);
+
+        assertThat(added.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(added.getBody())
+                .contains("\"publicationBlocked\":true")
+                .as("CD-11: never name the other party")
+                .doesNotContain(incumbent.tenant().name())
+                .doesNotContain(incumbent.estateId().toString());
+        assertThat(publish(latecomer, estate.id()).getBody()).contains("PUBLICATION_CONFLICT_OUTSTANDING");
+        assertThat(feedIds()).doesNotContain(estate.id());
+    }
+
+    @Test
+    void plotsOutsideTheNewBoundaryAreNamedAndNothingIsSaved() {
+        Tenant tenant = verifiedTenant("Stray Plot Ltd");
+        EstateDto estate = createEstate(tenant, "Stray Plot Gardens", null);
+        UUID tierId = post(tenant, "/api/portal/estates/" + estate.id() + "/price-tiers",
+                new CreatePriceTierRequest("LAND_SIZE", new BigDecimal("250.00"),
+                        new BigDecimal("20000000.0000"), Currency.NGN, "Standard 250"), PriceTierDto.class).id();
+        UUID blockId = post(tenant, "/api/portal/estates/" + estate.id() + "/blocks",
+                new CreateBlockRequest("A", "Block A"), BlockDto.class).id();
+        assertThat(restTemplate.exchange("/api/portal/estates/" + estate.id() + "/plots", HttpMethod.POST,
+                entity(tenant.token(), new CreatePlotsRequest(List.of(
+                        plot("7", blockId, tierId, "available-dev", plotRing(0))))),
+                String.class).getStatusCode()).isEqualTo(HttpStatus.CREATED);
+
+        // overlappingEstateRing starts east of plotRing(0), so plot 7 is outside it.
+        ResponseEntity<String> refused = addBoundary(tenant, estate.id(), overlappingEstateRing(), String.class);
+
+        assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(refused.getBody()).contains("PLOT_OUTSIDE_ESTATE").contains("Block A, Plot 7");
+        assertThat(restTemplate.exchange("/api/portal/estates/" + estate.id(), HttpMethod.GET,
+                entity(tenant.token(), null), String.class).getBody())
+                .as("nothing saved")
+                .contains("\"hasFootprint\":false");
+
+        assertThat(addBoundary(tenant, estate.id(), estateRing(), String.class).getStatusCode())
+                .as("a boundary that does contain the plot is accepted")
+                .isEqualTo(HttpStatus.OK);
+    }
+
+    @Test
+    void anotherCompanyCannotAddABoundaryToYourEstate() {
+        Tenant owner = verifiedTenant("Owner Ltd");
+        Tenant intruder = verifiedTenant("Intruder Ltd");
+        EstateDto estate = createEstate(owner, "Owned Gardens", null);
+
+        assertThat(addBoundary(intruder, estate.id(), estateRing(), String.class).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    @Test
+    void aBoundaryOutsideNigeriaIsRefusedAsInvalidGeometry() {
+        Tenant tenant = verifiedTenant("Offshore Ltd");
+        EstateDto estate = createEstate(tenant, "Offshore Gardens", null);
+
+        // Lagos transposed: latitude 3.4 is in the sea.
+        ResponseEntity<String> refused = addBoundary(tenant, estate.id(),
+                rect("6.500", "3.400", "6.510", "3.410"), String.class);
+
+        assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(refused.getBody()).contains("INVALID_GEOMETRY");
+    }
+
     // --- intent versus eligibility (PB-5) ---
 
     @Test
@@ -454,7 +600,7 @@ class MarketplaceIT {
         CreateEstateRequest request = new CreateEstateRequest(
                 name, "A quiet estate.", "Gwarinpa", "Abuja", "FCT", "1 Hidden Close", new BigDecimal("10.00"),
                 "development", List.of("Perimeter fence"), tenant.branchId(),
-                new GeoJsonPolygonDto("Polygon", List.of(ring)));
+                ring == null ? null : new GeoJsonPolygonDto("Polygon", List.of(ring)));
         return post(tenant, "/api/portal/estates", request, EstateDto.class);
     }
 
@@ -469,6 +615,12 @@ class MarketplaceIT {
         ResponseEntity<String> refusal = publish(listing.tenant(), listing.estateId());
         assertThat(refusal.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(refusal.getBody()).contains(code).contains(messageFragment);
+    }
+
+    private <T> ResponseEntity<T> addBoundary(Tenant tenant, UUID estateId, List<List<BigDecimal>> ring, Class<T> type) {
+        return restTemplate.exchange("/api/portal/estates/" + estateId + "/boundary", HttpMethod.POST,
+                entity(tenant.token(), new AddEstateBoundaryRequest(new GeoJsonPolygonDto("Polygon", List.of(ring)))),
+                type);
     }
 
     private ResponseEntity<String> publish(Tenant tenant, UUID estateId) {
@@ -549,6 +701,17 @@ class MarketplaceIT {
              ResultSet rs = s.executeQuery("SELECT published FROM estates WHERE id = '" + estateId + "'")) {
             rs.next();
             return rs.getBoolean(1);
+        } catch (SQLException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static String queryString(String sql) {
+        try (Connection c = DriverManager.getConnection(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+             Statement s = c.createStatement();
+             ResultSet rs = s.executeQuery(sql)) {
+            rs.next();
+            return rs.getString(1);
         } catch (SQLException e) {
             throw new IllegalStateException(e);
         }

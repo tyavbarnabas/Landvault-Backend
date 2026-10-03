@@ -5,6 +5,8 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.Lock;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.repository.query.Param;
 
 import java.math.BigDecimal;
@@ -16,6 +18,15 @@ import java.util.UUID;
 public interface PlotRepository extends JpaRepository<Plot, UUID>, JpaSpecificationExecutor<Plot> {
 
     Optional<Plot> findByIdAndEstateId(UUID id, UUID estateId);
+
+    /**
+     * The plot row under {@code SELECT ... FOR UPDATE} — the same lock
+     * {@code landvault_reserve_plot} takes — so an edit and a reservation
+     * of the same plot serialize instead of interleaving (IE-9/IE-10).
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT p FROM Plot p WHERE p.id = :id AND p.estateId = :estateId")
+    Optional<Plot> findForUpdate(@Param("id") UUID id, @Param("estateId") UUID estateId);
 
     /**
      * Plot counts per status for a whole page of estates in one query,
@@ -73,6 +84,9 @@ public interface PlotRepository extends JpaRepository<Plot, UUID>, JpaSpecificat
     int resizeAvailablePlotsOnTier(@Param("tierId") UUID tierId,
                                    @Param("sizeSqm") BigDecimal sizeSqm,
                                    @Param("actor") String actor);
+
+    /** Every plot on an estate — the import checks plot numbers and overlaps against them. */
+    List<Plot> findByEstateId(UUID estateId);
 
     /** Only plots that actually have a boundary — the rest have nothing to draw. */
     List<Plot> findByEstateIdAndFootprintIsNotNull(UUID estateId);

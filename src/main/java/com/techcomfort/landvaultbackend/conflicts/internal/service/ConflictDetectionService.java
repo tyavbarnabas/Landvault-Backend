@@ -119,12 +119,22 @@ public class ConflictDetectionService implements ConflictDetectionApi {
         if (blocking > 0) {
             return ConflictPublicationCheck.blocked(
                     "This estate's boundary overlaps land claimed by another listing. "
-                            + "Publication is paused while the overlap is reviewed. A correction to the "
-                            + "boundary is itself reviewed before publication can resume — geometry no "
-                            + "longer overlapping does not lift this on its own.",
+                            + "Publication is paused while our team reviews the overlap. If the boundary "
+                            + "was entered incorrectly, contact support — an estate's boundary can't be "
+                            + "changed from the portal, and any change is reviewed before publication "
+                            + "can resume.",
                     blocking, warning);
         }
         return warning > 0 ? ConflictPublicationCheck.warning(warning) : ConflictPublicationCheck.clear();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public boolean hasConflictHistory(UUID plotId) {
+        return Boolean.TRUE.equals(entityManager
+                .createNativeQuery("SELECT landvault_plot_has_conflict_history(:plotId)")
+                .setParameter("plotId", plotId)
+                .getSingleResult());
     }
 
     /** Exposed for the threshold's own tests; not part of the public API. */

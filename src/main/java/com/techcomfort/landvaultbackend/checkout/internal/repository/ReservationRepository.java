@@ -13,6 +13,9 @@ import java.util.UUID;
 
 public interface ReservationRepository extends JpaRepository<Reservation, UUID> {
 
+    /** Any reservation, in any status — see {@code CheckoutPlotHistoryProbe}. */
+    boolean existsByPlotId(UUID plotId);
+
     List<Reservation> findByBuyerUserIdAndStatusOrderByExpiresAtAsc(UUID buyerUserId, ReservationStatus status);
 
     Optional<Reservation> findByIdAndBuyerUserId(UUID id, UUID buyerUserId);
