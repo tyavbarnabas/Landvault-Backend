@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        SB-1: an estate's boundary must sit inside the state it claims.
+
+        Nigeria's longitude and latitude ranges overlap, so a boundary with
+        its coordinates transposed often still lands inside the country
+        (Abuja → Benue, Kano → Adamawa, Port Harcourt → Ondo) and passes the
+        national bounds check. Checking against the declared state catches
+        it. See AGENTS.md.
+
+        DATA: GRID3 Nigeria operational state boundaries, via geoBoundaries
+        gbOpen NGA ADM1 (commit 9469f09, boundaries represent 2022).
+        LICENCE: CC BY 4.0 — attribution to "GRID3 / geoBoundaries" is
+        required wherever the data is used. Operational boundaries, not the
+        legal record: some state borders are disputed, which is what the
+        Super Admin override below is for. Chosen over GADM (non-commercial
+        only), Natural Earth (too coarse at borders) and OSM (ODbL
+        share-alike). Regenerate with scripts/generate-nigerian-states-sql.py;
+        a new dataset version is a NEW changeset, never an edit to this one.
+
+        Canonical names are the frontend's list; `code` is the ISO 3166-2
+        code, the stable identifier.
+    -->
+    <changeSet id="064-create-nigerian-states" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE nigerian_states (
+                code      varchar(8)  NOT NULL PRIMARY KEY,
+                name      varchar(64) NOT NULL UNIQUE,
+                aliases   text[]      NOT NULL DEFAULT '{}',
+                boundary  geometry(Polygon, 4326) NOT NULL
+            );
+            CREATE INDEX idx_nigerian_states_boundary ON nigerian_states USING GIST (boundary);
+            COMMENT ON TABLE nigerian_states IS
+                'Reference data. GRID3 operational state boundaries via geoBoundaries (CC BY 4.0, attribution required). Not the legal boundary record.';
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE nigerian_states;
+        ]]></rollback>
+    </changeSet>
+
+    <changeSet id="064-load-nigerian-states" author="landvault">
+        <sqlFile path="../../data/nigerian-states.sql" relativeToChangelogFile="true" splitStatements="true"
+                 stripComments="true"/>
+        <rollback><![CDATA[
+            DELETE FROM nigerian_states;
+        ]]></rollback>
+    </changeSet>
+
+    <!--
+        Reference data is identical for everyone and changes only by
+        migration, so the app reads it and never writes it — changeset 019's
+        default privileges would otherwise grant writes on a new table. Not
+        RLS-policied for the same reason roles and permissions aren't.
+    -->
+    <changeSet id="064-nigerian-states-read-only" author="landvault">
+        <sql><![CDATA[
+            REVOKE ALL ON nigerian_states FROM ${appDbUsername};
+            GRANT SELECT ON nigerian_states TO ${appDbUsername};
+        ]]></sql>
+        <rollback><![CDATA[
+            REVOKE ALL ON nigerian_states FROM ${appDbUsername};
+        ]]></rollback>
+    </changeSet>
+
+    <!--
+        An estate's state, standardised. `state` stays as the display name
+        (now always the canonical one); `state_code` is what the boundary
+        check keys on. Existing rows are mapped by name, code or alias
+        ("FCT" → NG-FC); a row that matches nothing keeps a null code and is
+        simply not checked until its state is corrected.
+
+        The override is for genuinely disputed borders: a Super Admin records
+        that the declared state was verified by a person, and the check is
+        skipped for that estate. Who and why are kept, like every decision.
+
+        Rollback drops the new columns but cannot restore the original
+        free-text spellings the backfill replaced.
+    -->
+    <changeSet id="064-estates-state-code" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE estates ADD COLUMN state_code varchar(8) REFERENCES nigerian_states (code);
+            ALTER TABLE estates ADD COLUMN state_override_at timestamp(6) with time zone;
+            ALTER TABLE estates ADD COLUMN state_override_by uuid;
+            ALTER TABLE estates ADD COLUMN state_override_reason text;
+            ALTER TABLE estates ADD CONSTRAINT chk_estates_state_override_complete
+                CHECK ((state_override_at IS NULL) = (state_override_by IS NULL)
+                       AND (state_override_at IS NULL) = (state_override_reason IS NULL));
+
+            UPDATE estates e
+               SET state_code = s.code, state = s.name
+              FROM nigerian_states s
+             WHERE e.state IS NOT NULL
+               AND lower(btrim(regexp_replace(e.state, '\s+state\s*$', '', 'i')))
+                   IN (lower(s.name), lower(s.code))
+                OR (e.state IS NOT NULL
+                    AND lower(btrim(regexp_replace(e.state, '\s+state\s*$', '', 'i'))) = ANY (s.aliases));
+
+            COMMENT ON COLUMN estates.state_code IS
+                'ISO 3166-2 code of the declared state (nigerian_states). The SB-1 boundary check keys on this.';
+            COMMENT ON COLUMN estates.state_override_at IS
+                'Set by a Super Admin when the declared state was verified by a person (a disputed border): the SB-1 boundary check is skipped.';
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE estates DROP CONSTRAINT chk_estates_state_override_complete;
+            ALTER TABLE estates DROP COLUMN state_override_reason;
+            ALTER TABLE estates DROP COLUMN state_override_by;
+            ALTER TABLE estates DROP COLUMN state_override_at;
+            ALTER TABLE estates DROP COLUMN state_code;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

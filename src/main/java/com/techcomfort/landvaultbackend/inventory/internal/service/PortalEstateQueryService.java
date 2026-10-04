@@ -192,6 +192,7 @@ public class PortalEstateQueryService {
                         e.feesDeclared(),
                         e.refundTermsDeclared(),
                         e.hasBoundary(),
+                        e.hasPlots(),
                         !conflictDetection.publicationCheckFor(estateId).blocked(),
                         e.eligible()))
                 .orElse(null);

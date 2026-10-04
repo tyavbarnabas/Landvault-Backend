@@ -96,6 +96,14 @@ landvault:
     # second factors. Generate with `openssl rand -base64 32`.
     encryption-key: ${KYC_ENCRYPTION_KEY}
 
+  # SB-1: an estate's boundary must sit inside its declared state (GRID3 state
+  # boundaries, changeset 064). The margin absorbs border-data imprecision and
+  # estates on a border; a transposed boundary lands hundreds of km away, so
+  # it doesn't hide one. Turned off only on the test classpath — see AGENTS.md.
+  estates:
+    state-check:
+      enabled: true
+      margin-metres: 1000
   checkout:
     # RS-1's 45-minute plot hold. Configuration so a test can shorten it,
     # not so it can be negotiated per buyer: a hold cannot be extended

@@ -52,4 +52,8 @@ public class EstateEligibilityView {
     /** BG-1, changeset 061. No grandfathering. */
     @Column(name = "has_boundary")
     private boolean hasBoundary;
+
+    /** Changeset 063. Any live plot, whatever its status. */
+    @Column(name = "has_plots")
+    private boolean hasPlots;
 }

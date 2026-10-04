@@ -1387,8 +1387,9 @@ and `state: null`, which is precisely the case a per-state check would have
 been unable to help with.
 
 So: **`state` is now required on estate creation** (`@NotBlank` on
-`CreateEstateRequest`), which is step one. Step two, still to build, is
-validating the boundary against that state's bounding box.
+`CreateEstateRequest`), which is step one. **Step two is built — see "SB-1:
+an estate's boundary must sit inside its state" below** — against real state
+polygons rather than bounding boxes.
 
 Two things whoever builds step two should settle first:
 
@@ -1404,6 +1405,72 @@ Two things whoever builds step two should settle first:
 `PortalEstateCreationIT.swappedCoordinatesAreOnlyCaughtWhenTheyLeaveTheCountryBox`
 pins the current limitation, and `anEstateWithoutAStateIsRejected` pins the
 precondition, so neither gets quietly undone.
+
+## SB-1: an estate's boundary must sit inside its state
+
+The coordinate-swap gap above, closed. Changeset **064**; `StateBoundaryService`.
+
+**The data**: `nigerian_states` — the 36 states and the FCT as polygons, from
+**GRID3's operational state boundaries via geoBoundaries** (gbOpen NGA ADM1,
+commit `9469f09`, 2022). **CC BY 4.0 — attribution to "GRID3 / geoBoundaries"
+is required** wherever it's used (see `src/main/resources/db/data/README.md`).
+Chosen after research, decided with the user: GADM is non-commercial only,
+Natural Earth too coarse at borders, OSM's ODbL is share-alike, the
+simplified geoBoundaries file shifts borders. Verified in PostGIS before
+choosing: all 37 valid, zero overlap between states, and transposed Abuja,
+Kano and Port Harcourt land in Benue, Adamawa and Ondo respectively — all
+inside Nigeria, all now caught. Loaded from a generated SQL file
+(`scripts/generate-nigerian-states-sql.py`); a new dataset version is a new
+changeset. The app role may only `SELECT` it — reference data changes by
+migration, and 019's default privileges would otherwise grant writes (proven
+by test, and red without the REVOKE).
+
+**These are operational boundaries, not the legal record** — some state
+borders are disputed. Treat the check as a mistake-catcher, not a ruling on
+whose land it is.
+
+**State names are standardised.** `estates.state_code` (ISO 3166-2, `NG-FC`)
+is what the check keys on; `estates.state` is now always the canonical name —
+the frontend's own list (`~/landvault/src/data/nigerianStates.ts`), which the
+dataset matches exactly except the FCT. Input is resolved by name, code or
+alias, case-insensitively, with a trailing " State" ignored ("FCT", "Abuja",
+"Lagos State", "Nassarawa" all work); anything else is `UNKNOWN_STATE`.
+Existing rows were mapped in the migration ("FCT" → `NG-FC`). **Wire change**:
+an estate entered as "FCT" now reads back as "Federal Capital Territory
+(Abuja)".
+
+**The check** runs wherever an estate's boundary or state is written — create,
+add-boundary, and an update that changes the state (which must re-check the
+boundary the estate already has). The boundary must sit within the declared
+state **buffered by 1 km** (`landvault.estates.state-check.margin-metres`), or
+it's refused as `BOUNDARY_OUTSIDE_STATE`, naming the state it actually falls in
+("sits in Benue, not Federal Capital Territory (Abuja)") — useful whether the
+cause is a swap or a mislabelled state. The margin absorbs border-data
+imprecision and estates on a border; a transposed boundary lands hundreds of
+km away, so it never hides one. Plots aren't checked separately — they must
+sit inside their estate already.
+
+**This also makes the state honest for buyers**: many estates marketed as
+"Abuja" (Karu, Mararaba, Masaka) are in Nasarawa, and title there is
+registered with Nasarawa, not AGIS. The developer can keep "Abuja" in
+`area`/`city`; `state` has to be true.
+
+**The override, for disputed borders**: `POST/DELETE
+/api/admin/estates/{id}/state-override` (`admin.marketplace.conflicts` — the
+people who already rule on boundary disputes between companies), with a
+required reason. Records who verified the state by hand, and why, and skips
+the check for that estate. The flow: the developer creates the estate without
+a boundary, support verifies, the developer adds the boundary. **Changing the
+estate's state clears the override** — it verified the old state.
+
+**Off in the general test suite** (`src/test/resources/application.properties`):
+fixtures in many IT classes put estates on synthetic coordinates spread
+across Nigeria with placeholder states, and moving them all is churn unrelated
+to what those classes test. `StateBoundaryUnderRlsIT` switches it on, runs
+under the restricted app role, and covers every rule above; each was proven
+red by removing it (margin 0, check bypassed, no re-check on state change,
+override ignored, REVOKE missing). State-name standardisation stays on
+everywhere.
 
 ## `actual_area_sqm` is computed on write, and must be recomputed on edit
 
@@ -1623,8 +1690,8 @@ and title verification. Two columns carry the weight:
 ## The marketplace publication gate: four conditions, recorded here, enforced there
 
 An estate is publicly listable only when **every** condition holds — five
-originally, now eight (fees and refund terms from full cost disclosure, and the
-boundary from BG-1; see those sections):
+originally, now nine (fees and refund terms from full cost disclosure, the
+boundary from BG-1, at least one plot from changeset 063; see those sections):
 
 1. `estates.published` is true (the developer's own opt-in switch)
 2. the owning tenant's `verificationState` is `VERIFIED`
@@ -1638,6 +1705,7 @@ boundary from BG-1; see those sections):
 6. a fee schedule is declared, and 7. refund terms are declared (full cost
    disclosure, changeset 059)
 8. **the estate has a boundary** (BG-1, changeset 061)
+9. **the estate has at least one plot**, in any status (changeset 063)
 
 **Built in the publication slice** as `marketplace_estate_eligibility`
 (changeset 049) — see "The public marketplace" below.
@@ -3377,6 +3445,24 @@ estate already live without a boundary drops off the marketplace with its
 republishing, as soon as a boundary is added and passes detection. Decided with
 the user; if leniency is ever wanted it should be a per-estate Super Admin
 decision, never an automatic exemption.
+
+### At least one plot to be listed (changeset 063)
+
+Found in the BG-1 walkthrough: an estate with no tiers and no plots published
+cleanly and sat on the marketplace with nothing for sale. `has_plots` is now a
+condition (`PUBLICATION_NO_PLOTS`), checked after the boundary and before the
+conflict. Every plot has a tier, so this also means "has a price".
+
+**Any live plot counts, deliberately not an *available* one.** Requiring an
+available plot would pull a sold-out estate off the marketplace, and make an
+estate flicker off while every plot sat in a 45-minute checkout hold —
+revealing exactly the sales velocity `marketplace_plots` collapses
+RESERVED/SOLD to UNAVAILABLE to hide. `MarketplaceIT.aSoldOutEstateStaysListed`
+pins this and was proven red against the available-only variant. An estate
+whose plots are all *withdrawn* does drop off — withdrawn means "never really
+for sale" — and returns without republishing when a plot is added.
+
+No grandfathering, like BG-1.
 
 ### Adding a boundary later: `POST /api/portal/estates/{id}/boundary`
 

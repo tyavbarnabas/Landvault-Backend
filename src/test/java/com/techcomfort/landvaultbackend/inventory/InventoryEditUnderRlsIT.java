@@ -768,12 +768,13 @@ class InventoryEditUnderRlsIT {
         execute("UPDATE plots SET status = 'SOLD' WHERE id = '" + sold + "'");
         reserve(verifiedBuyer(), plotId);
 
+        Map<UUID, String> labels = Map.of(plotId, "Block A, Plot 001 is reserved", sold, "Plot 002 is sold");
         for (UUID plot : List.of(plotId, sold)) {
             ResponseEntity<String> refused = restTemplate.exchange(
                     "/api/portal/estates/" + estateId + "/plots/" + plot + "/status", HttpMethod.PUT,
                     entity(seller.token(), new ChangePlotStatusRequest("withheld", null)), String.class);
             assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
-            assertThat(refused.getBody()).contains("PLOT_NOT_EDITABLE");
+            assertThat(refused.getBody()).contains("PLOT_NOT_EDITABLE").contains(labels.get(plot));
         }
     }
 
@@ -963,7 +964,8 @@ class InventoryEditUnderRlsIT {
         assertThat(estate.description()).isEqualTo("Phase 2");
         assertThat(estate.address()).as("blank clears").isNull();
         assertThat(estate.amenities()).containsExactlyInAnyOrder("Borehole", "Paved roads");
-        assertThat(estate.state()).as("left out, unchanged").isEqualTo("Abuja");
+        assertThat(estate.state()).as("left out, unchanged — and stored under its standard name (SB-1)")
+                .isEqualTo("Federal Capital Territory (Abuja)");
         assertThat(queryString("SELECT detail FROM audit_log_entries WHERE action = 'estate.updated' "
                 + "AND target_id = '" + estateId + "'"))
                 .contains("name 'Edit Gardens").contains("-> 'Renamed Gardens'")

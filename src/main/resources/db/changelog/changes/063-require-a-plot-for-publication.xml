@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        AN ESTATE MUST HAVE AT LEAST ONE PLOT TO BE LISTED.
+
+        Found in the BG-1 walkthrough: an estate with no tiers and no plots
+        published cleanly and appeared on the marketplace with nothing for
+        sale. Its own boolean (has_plots), checked by the publish endpoint
+        as PUBLICATION_NO_PLOTS, the same shape as every other condition.
+
+        ANY live plot, deliberately not an AVAILABLE one — see the comment on
+        the column. Every plot has a tier (price_tier_id is NOT NULL), so
+        this also means "the estate has a price".
+
+        No grandfathering, like BG-1: an estate published with no plots at
+        all is not a listing anyone can act on. Its published flag is kept,
+        and it returns as soon as a plot is added.
+
+        CREATE OR REPLACE with has_plots appended at the end, as 059/061.
+    -->
+    <changeSet id="063-require-a-plot-for-publication" author="landvault">
+        <sql><![CDATA[
+            CREATE OR REPLACE VIEW marketplace_estate_eligibility WITH (security_barrier = true) AS
+            SELECT
+                e.id                                   AS estate_id,
+                e.published                            AS published,
+                (o.verification_state = 'VERIFIED')    AS tenant_verified,
+                o.marketplace_publishing               AS tenant_entitled,
+                (o.status = 'ACTIVE')                  AS tenant_active,
+                -- CASE short-circuits, so the conflict function — the only
+                -- expensive term — runs last, and only for estates that
+                -- already pass every cheap condition.
+                CASE
+                    WHEN e.published
+                     AND o.verification_state = 'VERIFIED'
+                     AND o.marketplace_publishing
+                     AND o.status = 'ACTIVE'
+                     AND (e.fees_declared_at IS NOT NULL OR e.fees_declaration_exempt)
+                     AND (e.fees_declaration_exempt OR EXISTS (
+                            SELECT 1 FROM estate_refund_terms rt
+                             WHERE rt.estate_id = e.id AND rt.deleted = false))
+                     AND e.footprint IS NOT NULL
+                     AND EXISTS (SELECT 1 FROM plots p WHERE p.estate_id = e.id AND p.deleted = false)
+                    THEN (SELECT s.blocking_count FROM landvault_estate_conflict_summary(e.id) s) = 0
+                    ELSE false
+                END                                    AS eligible,
+                -- Declaring an EMPTY schedule counts: an estate with no
+                -- extra charges may list, but by saying so. Silence does
+                -- not, and the two are different facts.
+                (e.fees_declared_at IS NOT NULL OR e.fees_declaration_exempt) AS fees_declared,
+                -- RF-4: a developer who will not state what a buyer gets
+                -- back does not get a listing. Its own boolean beside the
+                -- others so the publish endpoint can name which one failed.
+                (e.fees_declaration_exempt OR EXISTS (
+                        SELECT 1 FROM estate_refund_terms rt
+                         WHERE rt.estate_id = e.id AND rt.deleted = false)) AS refund_terms_declared,
+                -- BG-1: an estate with no boundary is invisible to conflict
+                -- detection, so listing without one would be a way around
+                -- it. No exemption for estates already published: an
+                -- exempt boundary-less listing is exactly the hole.
+                (e.footprint IS NOT NULL)              AS has_boundary,
+                -- An estate with nothing to sell is not a listing. ANY live
+                -- plot counts, whatever its status: requiring an AVAILABLE
+                -- one would pull a sold-out estate off the marketplace and
+                -- make one flicker during checkout holds, revealing exactly
+                -- the sales velocity marketplace_plots collapses statuses to
+                -- hide.
+                EXISTS (SELECT 1 FROM plots p WHERE p.estate_id = e.id AND p.deleted = false) AS has_plots
+            FROM estates e
+            JOIN organizations o ON o.id = e.tenant_id AND o.deleted = false
+            WHERE e.deleted = false;
+        
+        
+        ]]></sql>
+        <rollback>
+            <!-- 061's definition, verbatim. -->
+            <![CDATA[
+            CREATE OR REPLACE VIEW marketplace_estate_eligibility WITH (security_barrier = true) AS
+            SELECT
+                e.id                                   AS estate_id,
+                e.published                            AS published,
+                (o.verification_state = 'VERIFIED')    AS tenant_verified,
+                o.marketplace_publishing               AS tenant_entitled,
+                (o.status = 'ACTIVE')                  AS tenant_active,
+                -- CASE short-circuits, so the conflict function — the only
+                -- expensive term — runs last, and only for estates that
+                -- already pass every cheap condition.
+                CASE
+                    WHEN e.published
+                     AND o.verification_state = 'VERIFIED'
+                     AND o.marketplace_publishing
+                     AND o.status = 'ACTIVE'
+                     AND (e.fees_declared_at IS NOT NULL OR e.fees_declaration_exempt)
+                     AND (e.fees_declaration_exempt OR EXISTS (
+                            SELECT 1 FROM estate_refund_terms rt
+                             WHERE rt.estate_id = e.id AND rt.deleted = false))
+                     AND e.footprint IS NOT NULL
+                    THEN (SELECT s.blocking_count FROM landvault_estate_conflict_summary(e.id) s) = 0
+                    ELSE false
+                END                                    AS eligible,
+                -- Declaring an EMPTY schedule counts: an estate with no
+                -- extra charges may list, but by saying so. Silence does
+                -- not, and the two are different facts.
+                (e.fees_declared_at IS NOT NULL OR e.fees_declaration_exempt) AS fees_declared,
+                -- RF-4: a developer who will not state what a buyer gets
+                -- back does not get a listing. Its own boolean beside the
+                -- others so the publish endpoint can name which one failed.
+                (e.fees_declaration_exempt OR EXISTS (
+                        SELECT 1 FROM estate_refund_terms rt
+                         WHERE rt.estate_id = e.id AND rt.deleted = false)) AS refund_terms_declared,
+                -- BG-1: an estate with no boundary is invisible to conflict
+                -- detection, so listing without one would be a way around
+                -- it. No exemption for estates already published: an
+                -- exempt boundary-less listing is exactly the hole.
+                (e.footprint IS NOT NULL)              AS has_boundary
+            FROM estates e
+            JOIN organizations o ON o.id = e.tenant_id AND o.deleted = false
+            WHERE e.deleted = false;
+        
+        
+            ]]>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

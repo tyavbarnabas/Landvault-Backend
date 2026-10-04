@@ -231,6 +231,7 @@ class MarketplaceIT {
         EstateDto first = createEstate(company, "Medium North", estateRing());
         createEstate(company, "Medium South", overlappingEstateRing());
 
+        addOnePlot(company, first.id());
         declareMinimumDisclosure(company, first.id());
 
         ResponseEntity<PublicationDto> published = restTemplate.exchange(
@@ -321,6 +322,7 @@ class MarketplaceIT {
         Listing incumbent = publishedListing("Incumbent Gardens");
         Tenant latecomer = verifiedTenant("Latecomer Holdings");
         EstateDto estate = createEstate(latecomer, "Latecomer Heights", null);
+        addOnePlot(latecomer, estate.id());
         declareMinimumDisclosure(latecomer, estate.id());
 
         ResponseEntity<String> added = addBoundary(latecomer, estate.id(), overlappingEstateRing(), String.class);
@@ -385,6 +387,50 @@ class MarketplaceIT {
 
         assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(refused.getBody()).contains("INVALID_GEOMETRY");
+    }
+
+    // --- an estate needs at least one plot ---
+
+    /** Found in the BG-1 walkthrough: an estate with nothing set up for sale was listed. */
+    @Test
+    void anEstateWithNoPlotsCannotBePublishedAndSaysWhy() {
+        Tenant tenant = verifiedTenant("Empty Estates Ltd");
+        EstateDto estate = createEstate(tenant, "Empty Gardens", estateRing());
+        declareMinimumDisclosure(tenant, estate.id());
+
+        ResponseEntity<String> refusal = publish(tenant, estate.id());
+
+        assertThat(refusal.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(refusal.getBody()).contains("PUBLICATION_NO_PLOTS");
+        assertThat(restTemplate.exchange("/api/portal/estates/" + estate.id(), HttpMethod.GET,
+                entity(tenant.token(), null), String.class).getBody())
+                .contains("\"hasPlots\":false");
+    }
+
+    /**
+     * The deliberate half of the rule: any plot counts, not only an available
+     * one. A sold-out estate stays listed — vanishing would reveal the sales
+     * velocity the plot view collapses statuses to hide.
+     */
+    @Test
+    void aSoldOutEstateStaysListed() {
+        Listing listing = publishedListing("Sold Out Gardens");
+
+        execute("UPDATE plots SET status = 'SOLD' WHERE estate_id = '" + listing.estateId() + "'");
+
+        assertThat(feedIds()).contains(listing.estateId());
+    }
+
+    @Test
+    void anEstateWhosePlotsAreAllWithdrawnLeavesTheFeedAndReturnsWithoutRepublishing() {
+        Listing listing = publishedListing("Withdrawn Gardens");
+
+        execute("UPDATE plots SET deleted = true WHERE estate_id = '" + listing.estateId() + "'");
+        assertThat(feedIds()).doesNotContain(listing.estateId());
+        assertThat(publishedFlag(listing.estateId())).isTrue();
+
+        execute("UPDATE plots SET deleted = false WHERE estate_id = '" + listing.estateId() + "'");
+        assertThat(feedIds()).contains(listing.estateId());
     }
 
     // --- intent versus eligibility (PB-5) ---
@@ -615,6 +661,17 @@ class MarketplaceIT {
         ResponseEntity<String> refusal = publish(listing.tenant(), listing.estateId());
         assertThat(refusal.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(refusal.getBody()).contains(code).contains(messageFragment);
+    }
+
+    /** A tier and one plot with no boundary — the minimum an estate needs to be listable. */
+    private void addOnePlot(Tenant tenant, UUID estateId) {
+        UUID tierId = post(tenant, "/api/portal/estates/" + estateId + "/price-tiers",
+                new CreatePriceTierRequest("LAND_SIZE", new BigDecimal("250.00"),
+                        new BigDecimal("20000000.0000"), Currency.NGN, "Standard 250"), PriceTierDto.class).id();
+        assertThat(restTemplate.exchange("/api/portal/estates/" + estateId + "/plots", HttpMethod.POST,
+                entity(tenant.token(), new CreatePlotsRequest(List.of(new CreatePlotRequest("1", null, tierId, false,
+                        "available-dev", null, null, null, null, null, null)))), String.class).getStatusCode())
+                .isEqualTo(HttpStatus.CREATED);
     }
 
     private <T> ResponseEntity<T> addBoundary(Tenant tenant, UUID estateId, List<List<BigDecimal>> ring, Class<T> type) {

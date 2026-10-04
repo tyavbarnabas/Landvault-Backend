@@ -97,6 +97,7 @@ public class PortalEstateService {
     private final AuditApi auditApi;
     private final ConflictDetectionApi conflictDetection;
     private final MarketplaceApi marketplace;
+    private final StateBoundaryService stateBoundaries;
 
     // --- estate ---
 
@@ -113,6 +114,7 @@ public class PortalEstateService {
         }
 
         Polygon footprint = geoJsonParser.parse(request.footprint(), "footprint");
+        StateBoundaryService.ResolvedState state = stateBoundaries.resolve(request.state());
 
         Estate estate = Estate.builder()
                 .name(request.name())
@@ -120,7 +122,8 @@ public class PortalEstateService {
                 .description(request.description())
                 .area(request.area())
                 .city(request.city())
-                .state(request.state())
+                .state(state.name())
+                .stateCode(state.code())
                 .address(request.address())
                 .cornerPremiumPct(request.cornerPremiumPct())
                 .intent(request.intent() == null ? null : EstateIntent.fromValue(request.intent()))
@@ -131,6 +134,9 @@ public class PortalEstateService {
                 .build();
         estate.setTenantId(tenantId);
         estate.setBranchId(branchId);
+        // SB-1: before anything is written — a boundary in the wrong state is
+        // a data error caught at the door, like a plot outside its estate.
+        stateBoundaries.requireWithinDeclaredState(footprint, estate);
         // saveAndFlush, not save: detection runs next and needs this row
         // visible. Flushing through the repository rather than letting
         // detection's own EntityManager.flush() do it keeps Spring's
@@ -185,6 +191,8 @@ public class PortalEstateService {
         if (footprint == null) {
             throw new InventoryException.InvalidGeometry("footprint", "A boundary is required.");
         }
+
+        stateBoundaries.requireWithinDeclaredState(footprint, estate);
 
         List<String> outside = geometry.plotsOutside(estateId, footprint);
         if (!outside.isEmpty()) {
@@ -267,7 +275,18 @@ public class PortalEstateService {
             if (request.state().isBlank()) {
                 throw new InventoryException.InvalidRequest("An estate's state cannot be cleared.");
             }
-            changeText(changes, "state", estate.getState(), request.state(), estate::setState);
+            StateBoundaryService.ResolvedState state = stateBoundaries.resolve(request.state());
+            if (!state.code().equals(estate.getStateCode())) {
+                changes.add("state '" + estate.getState() + "' -> '" + state.name() + "'");
+                estate.setState(state.name());
+                estate.setStateCode(state.code());
+                // An override verified the OLD state; it says nothing about the new one.
+                estate.setStateOverrideAt(null);
+                estate.setStateOverrideBy(null);
+                estate.setStateOverrideReason(null);
+                // SB-1: the existing boundary must sit inside the newly declared state.
+                stateBoundaries.requireWithinDeclaredState(estate.getFootprint(), estate);
+            }
         }
         changeText(changes, "description", estate.getDescription(), request.description(), estate::setDescription);
         changeText(changes, "area", estate.getArea(), request.area(), estate::setArea);
@@ -746,6 +765,10 @@ public class PortalEstateService {
             codes.add("PUBLICATION_BOUNDARY_MISSING");
             reasons.add("Add this estate's boundary before listing it. Without one, it can't be checked "
                     + "against neighbouring land, and buyers can't see where it is.");
+        }
+        if (!eligibility.hasPlots()) {
+            codes.add("PUBLICATION_NO_PLOTS");
+            reasons.add("Add this estate's plots before listing it — buyers need something to choose from.");
         }
         if (conflicts.blocked()) {
             codes.add("PUBLICATION_CONFLICT_OUTSTANDING");

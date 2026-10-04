@@ -152,8 +152,9 @@ public class InventoryEditService {
                     previousSize, tier.getSizeSqm(), updated, kept,
                     kept.total() == 0
                             ? "Every plot on this tier now carries the new size."
-                            : "Reserved and sold plots keep the size their buyer agreed to. A reserved plot "
-                                    + "that returns to the market takes the tier's size at that point.");
+                            : "Reserved and sold plots keep the size their buyer agreed to, and withheld plots "
+                                    + "keep theirs while off the market. A reserved or withheld plot that returns "
+                                    + "to the market takes the tier's size at that point.");
         }
 
         auditApi.record(AuditEntryRequest.of(
@@ -395,7 +396,8 @@ public class InventoryEditService {
                 case "NOT_FOUND" -> throw new InventoryException.RelatedRecordNotFound(
                         "Plot " + plotId + " does not belong to this estate.");
                 case "RESERVED", "SOLD" -> throw new InventoryException.PlotNotEditable(
-                        "Plot " + skipped.plotNumber(), skipped.currentStatus());
+                        plotRepository.findById(plotId).map(this::plotLabel).orElse("Plot " + skipped.plotNumber()),
+                        skipped.currentStatus());
                 case "NO_RECORDED_AVAILABILITY" -> throw new InventoryException.InvalidRequest(skipped.reason());
                 default -> {
                     // ALREADY: nothing to do, and nothing recorded.

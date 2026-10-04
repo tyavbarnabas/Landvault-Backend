@@ -50,6 +50,10 @@ public record EstateEligibilityDto(
                 + "estate, including ones published before this rule.")
         boolean hasBoundary,
 
+        @Schema(description = "The estate has at least one plot. A sold-out estate still counts — it stays "
+                + "listed; an estate with nothing set up for sale does not.")
+        boolean hasPlots,
+
         /**
          * Explicit rather than inferable. Without it a client has to reason
          * "every named condition passes but {@code eligible} is false, so it

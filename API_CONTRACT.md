@@ -461,3 +461,15 @@ When an endpoint here goes from stubbed to real:
 1. Implement it in the relevant Modulith module.
 2. Fill in the matching non-mock branch in the frontend's `src/services/*.ts` (the shape's already sketched there).
 3. Update `~/landvault/INTEGRATION.md`'s "migrated to the service layer" list and this file's status line for that endpoint.
+
+
+## Estate `state` is standardised (SB-1)
+
+`state` on estate create/update accepts a state's name, ISO code (`NG-LA`) or a
+common alias ("FCT", "Abuja", "Lagos State"), and is **returned as the
+canonical name** from `nigerianStates.ts` — "FCT" comes back as "Federal
+Capital Territory (Abuja)". Unknown values are `400 UNKNOWN_STATE`. A boundary
+outside its declared state (beyond a 1 km margin) is `400
+BOUNDARY_OUTSIDE_STATE`, and the message names the state it actually falls in.
+Credit "State boundaries: GRID3, via geoBoundaries (CC BY 4.0)" wherever the
+UI relies on this.

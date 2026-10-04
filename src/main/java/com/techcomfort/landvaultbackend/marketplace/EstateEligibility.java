@@ -28,6 +28,13 @@ public record EstateEligibility(
          * conflict detection. Nothing is grandfathered on this condition.
          */
         boolean hasBoundary,
+        /**
+         * At least one live plot, in any status — an estate with nothing to
+         * sell is not a listing. Deliberately not "an available plot": a
+         * sold-out estate stays listed, and an estate doesn't flicker during
+         * checkout holds. Changeset 063.
+         */
+        boolean hasPlots,
         boolean eligible
 ) {
 }

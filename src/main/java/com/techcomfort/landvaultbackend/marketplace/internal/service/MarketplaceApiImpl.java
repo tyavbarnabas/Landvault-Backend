@@ -24,7 +24,7 @@ public class MarketplaceApiImpl implements MarketplaceApi {
     public Optional<EstateEligibility> eligibilityOf(UUID estateId) {
         return eligibility.findById(estateId).map(v -> new EstateEligibility(
                 v.isPublished(), v.isTenantVerified(), v.isTenantEntitled(), v.isTenantActive(),
-                v.isFeesDeclared(), v.isRefundTermsDeclared(), v.isHasBoundary(), v.isEligible()));
+                v.isFeesDeclared(), v.isRefundTermsDeclared(), v.isHasBoundary(), v.isHasPlots(), v.isEligible()));
     }
 
     @Override

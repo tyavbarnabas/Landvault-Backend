@@ -66,6 +66,20 @@ public class Estate extends AbstractEntity {
     @Column(name = "state", length = 64)
     private String state;
 
+    /** ISO 3166-2 code of the declared state — what the SB-1 boundary check keys on. Changeset 064. */
+    @Column(name = "state_code", length = 8)
+    private String stateCode;
+
+    /** Set when a Super Admin verified the state by hand (disputed border); the SB-1 check is then skipped. */
+    @Column(name = "state_override_at")
+    private java.time.Instant stateOverrideAt;
+
+    @Column(name = "state_override_by")
+    private java.util.UUID stateOverrideBy;
+
+    @Column(name = "state_override_reason")
+    private String stateOverrideReason;
+
     @Column(name = "address")
     private String address;
 
