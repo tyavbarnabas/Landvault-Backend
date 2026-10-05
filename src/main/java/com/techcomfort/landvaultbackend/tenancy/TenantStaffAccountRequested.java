@@ -30,6 +30,10 @@ import java.util.UUID;
  */
 public record TenantStaffAccountRequested(
         UUID tenantId,
+        /** The company's display name, snapshotted onto the invitation. */
+        String organizationName,
+        /** The Super Admin who created the tenant — recorded as the inviter. */
+        UUID requestedByUserId,
         String roleCode,
         String firstName,
         String lastName,

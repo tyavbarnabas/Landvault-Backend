@@ -24,6 +24,7 @@ import com.techcomfort.landvaultbackend.common.geojson.GeoJsonPolygonWriter;
 import com.techcomfort.landvaultbackend.marketplace.dto.MarketplaceListingDto;
 import com.techcomfort.landvaultbackend.marketplace.dto.MarketplacePriceTierDto;
 import com.techcomfort.landvaultbackend.marketplace.dto.MarketplaceVerificationCheckDto;
+import com.techcomfort.landvaultbackend.marketplace.dto.BranchOfficeDto;
 import com.techcomfort.landvaultbackend.marketplace.dto.SellerDto;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.AmenityView;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.ListingView;
@@ -179,7 +180,7 @@ public class MarketplaceQueryService {
                     l.getCornerPremiumPct(),
                     l.getIntent() == null ? null : l.getIntent().getValue(),
                     l.getPublishedAt(),
-                    new SellerDto(l.getBranchName(), l.getCompanyName()),
+                    new SellerDto(l.getBranchName(), l.getCompanyName(), office(l)),
                     true,
                     l.getFromPrice(),
                     l.getFromPriceCurrency(),
@@ -380,5 +381,15 @@ public class MarketplaceQueryService {
      * suspended company's inventory or a contested estate's existence.
      */
     public static class ListingNotFound extends NoSuchElementException {
+    }
+
+    /** Null rather than an object of nulls: absent is absent. */
+    private static BranchOfficeDto office(ListingView l) {
+        if (l.getBranchStreet() == null && l.getBranchCity() == null && l.getBranchState() == null
+                && l.getBranchPhone() == null && l.getBranchEmail() == null) {
+            return null;
+        }
+        return new BranchOfficeDto(l.getBranchStreet(), l.getBranchCity(), l.getBranchState(),
+                l.getBranchPhone(), l.getBranchEmail());
     }
 }

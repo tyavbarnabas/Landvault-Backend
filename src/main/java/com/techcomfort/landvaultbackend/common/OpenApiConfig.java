@@ -43,6 +43,8 @@ public class OpenApiConfig {
     public static final String TAG_CHECKOUT = "Checkout";
     public static final String TAG_PORTAL_ESTATES = "Portal — Estates";
     public static final String TAG_PORTAL_CONFLICTS = "Portal — Conflicts";
+    public static final String TAG_PORTAL_BRANCHES = "Portal — Branches";
+    public static final String TAG_PORTAL_STAFF = "Portal — Staff";
     public static final String TAG_ADMIN_TENANTS = "Admin — Tenants";
     public static final String TAG_ADMIN_KYC = "Admin — Verification";
     public static final String TAG_ADMIN_CONFLICTS = "Admin — Conflicts";
@@ -125,7 +127,7 @@ public class OpenApiConfig {
                                         + "feature surface."),
                         new Tag().name(TAG_MARKETPLACE)
                                 .description("The public buyer surface. No authentication; rate-limited. "
-                                        + "Only estates meeting all five publication conditions appear."),
+                                        + "Only estates meeting every publication condition appear."),
                         new Tag().name(TAG_KYC)
                                 .description("A buyer's own identity verification. Gates buying, "
                                         + "never browsing or signup; held once, platform-wide."),
@@ -141,6 +143,12 @@ public class OpenApiConfig {
                         new Tag().name(TAG_PORTAL_CONFLICTS)
                                 .description("A developer's view of boundary conflicts affecting their "
                                         + "own estate. Never identifies the other party."),
+                        new Tag().name(TAG_PORTAL_BRANCHES)
+                                .description("A developer's own branches. Created and renamed company-wide "
+                                        + "only; branch-scoped staff see their own branch."),
+                        new Tag().name(TAG_PORTAL_STAFF)
+                                .description("Inviting a company's own staff. Invitation only — staff never "
+                                        + "self-register."),
                         new Tag().name(TAG_ADMIN_TENANTS)
                                 .description("Tenant onboarding, the verification state machine, plan, "
                                         + "status and support access."),

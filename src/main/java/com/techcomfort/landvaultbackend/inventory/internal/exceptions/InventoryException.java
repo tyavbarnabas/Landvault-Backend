@@ -140,6 +140,18 @@ public abstract class InventoryException extends RuntimeException {
         }
     }
 
+    /**
+     * EB-2: a branch-scoped user writing to a company-level estate. They may
+     * see it — it is shared inventory — but it isn't theirs to change.
+     */
+    public static class EstateReadOnlyForBranch extends InventoryException {
+
+        @Override
+        public String getMessage() {
+            return "This estate belongs to the company, not your branch. Branch staff can view it but not change it.";
+        }
+    }
+
     /** A plot boundary that doesn't sit inside its estate's boundary. */
     public static class PlotOutsideEstate extends InventoryException {
 

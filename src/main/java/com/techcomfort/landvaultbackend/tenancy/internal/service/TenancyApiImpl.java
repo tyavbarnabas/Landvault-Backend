@@ -39,9 +39,12 @@ import java.util.stream.Collectors;
 public class TenancyApiImpl implements TenancyApi {
 
     private final OrganizationRepository organizationRepository;
+    private final com.techcomfort.landvaultbackend.tenancy.internal.repository.BranchRepository branchRepository;
 
-    public TenancyApiImpl(OrganizationRepository organizationRepository) {
+    public TenancyApiImpl(OrganizationRepository organizationRepository,
+                          com.techcomfort.landvaultbackend.tenancy.internal.repository.BranchRepository branchRepository) {
         this.organizationRepository = organizationRepository;
+        this.branchRepository = branchRepository;
     }
 
     @PersistenceContext
@@ -99,5 +102,13 @@ public class TenancyApiImpl implements TenancyApi {
     private static String displayName(Organization organization) {
         String trading = organization.getTradingName();
         return trading == null || trading.isBlank() ? organization.getRegisteredName() : trading;
+    }
+
+    @Override
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    public java.util.Optional<String> branchNameFor(UUID branchId, UUID tenantId) {
+        return branchRepository.findById(branchId)
+                .filter(b -> b.getOrganizationId().equals(tenantId))
+                .map(com.techcomfort.landvaultbackend.tenancy.internal.domain.Branch::getName);
     }
 }

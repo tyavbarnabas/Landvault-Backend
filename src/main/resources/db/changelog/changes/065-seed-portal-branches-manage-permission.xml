@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        TB-1..TB-3: a tenant creates and renames its own branches.
+
+        Granted to executive_director ONLY — the one tenant role that is
+        always company-wide. TB-3's point: a branch manager who could create
+        a sibling branch and be assigned to it would widen their own reach,
+        so branch creation belongs to company-wide roles. The service also
+        refuses any caller whose current scope is a single branch, so the
+        permission alone is not the whole control.
+
+        Branches are internal structure, not a platform decision: verification
+        is where the platform exercises judgement; how a verified company
+        arranges itself inside is its own business.
+    -->
+    <changeSet id="065-seed-portal-branches-manage-permission" author="landvault">
+        <sql>
+            INSERT INTO permissions (id, created_at, created_by, deleted, code, description) VALUES
+                (gen_random_uuid(), now(), 'system', false, 'portal.branches.manage',
+                 'Create and rename the owning tenant''s branches. Company-wide roles only.');
+
+            INSERT INTO role_permissions (id, created_at, created_by, deleted, role_id, permission_id)
+            SELECT gen_random_uuid(), now(), 'system', false, r.id, p.id
+            FROM roles r, permissions p
+            WHERE r.code = 'executive_director' AND p.code = 'portal.branches.manage';
+        </sql>
+        <rollback>
+            DELETE FROM role_permissions WHERE permission_id IN (
+                SELECT id FROM permissions WHERE code = 'portal.branches.manage'
+            );
+            DELETE FROM permissions WHERE code = 'portal.branches.manage';
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

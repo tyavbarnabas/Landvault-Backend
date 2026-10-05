@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Branch managers request invitations; the Executive Director approves.
+        See AGENTS.md, "Invitation requests from a branch".
+    -->
+    <!--
+        Also granted to executive_director, though they never use it: SI-4
+        ("never grant what you don't hold") would otherwise stop the Executive
+        Director inviting a branch manager at all, since that role now carries
+        this permission. The service refuses requests from anyone holding
+        portal.staff.invite, so a director can't request and self-approve.
+    -->
+    <changeSet id="068-seed-portal-staff-request-permission" author="landvault">
+        <sql>
+            INSERT INTO permissions (id, created_at, created_by, deleted, code, description) VALUES
+                (gen_random_uuid(), now(), 'system', false, 'portal.staff.request',
+                 'Request a staff invitation into your own branch; it is sent only once a company-wide approver approves it.');
+            INSERT INTO role_permissions (id, created_at, created_by, deleted, role_id, permission_id)
+            SELECT gen_random_uuid(), now(), 'system', false, r.id, p.id
+            FROM roles r, permissions p
+            WHERE r.code IN ('branch_manager', 'executive_director') AND p.code = 'portal.staff.request';
+        </sql>
+        <rollback>
+            DELETE FROM role_permissions WHERE permission_id IN (SELECT id FROM permissions WHERE code = 'portal.staff.request');
+            DELETE FROM permissions WHERE code = 'portal.staff.request';
+        </rollback>
+    </changeSet>
+
+    <!--
+        A request is an invitation row with NO link yet: token_hash and
+        last_sent_at are null until approval, and expires_at is the request's
+        own deadline. The CHECKs make "a link exists before approval"
+        structurally impossible, and keep one outcome per row.
+    -->
+    <changeSet id="068-staff-invitation-approval-columns" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE staff_invitations
+                ADD COLUMN approval_required boolean NOT NULL DEFAULT false,
+                ADD COLUMN approved_at       timestamp(6) with time zone,
+                ADD COLUMN approved_by       uuid REFERENCES users (id),
+                ADD COLUMN rejected_at       timestamp(6) with time zone,
+                ADD COLUMN rejected_by       uuid REFERENCES users (id),
+                ADD COLUMN rejection_reason  varchar(500);
+            ALTER TABLE staff_invitations ALTER COLUMN token_hash DROP NOT NULL;
+            ALTER TABLE staff_invitations ALTER COLUMN last_sent_at DROP NOT NULL;
+
+            ALTER TABLE staff_invitations DROP CONSTRAINT chk_staff_invitations_one_outcome;
+            ALTER TABLE staff_invitations ADD CONSTRAINT chk_staff_invitations_one_outcome
+                CHECK (num_nonnulls(accepted_at, revoked_at, rejected_at) <= 1);
+            ALTER TABLE staff_invitations ADD CONSTRAINT chk_staff_invitations_link_only_when_approved
+                CHECK ((token_hash IS NOT NULL) = (NOT approval_required OR approved_at IS NOT NULL));
+            ALTER TABLE staff_invitations ADD CONSTRAINT chk_staff_invitations_approval
+                CHECK (approved_at IS NULL OR (approval_required AND approved_by IS NOT NULL));
+            ALTER TABLE staff_invitations ADD CONSTRAINT chk_staff_invitations_rejection
+                CHECK (rejected_at IS NULL OR (approval_required AND approved_at IS NULL
+                       AND rejected_by IS NOT NULL AND rejection_reason IS NOT NULL));
+
+            DROP INDEX uq_staff_invitations_open_email;
+            CREATE UNIQUE INDEX uq_staff_invitations_open_email
+                ON staff_invitations (tenant_id, lower(email))
+                WHERE accepted_at IS NULL AND revoked_at IS NULL AND rejected_at IS NULL AND deleted = false;
+
+            COMMENT ON COLUMN staff_invitations.approval_required IS
+                'True when a branch manager requested this invitation: no link exists (token_hash null) until a company-wide approver approves it.';
+        ]]></sql>
+        <rollback><![CDATA[
+            -- Requests that were never approved have no token and can't survive
+            -- the restored NOT NULL; they are dropped.
+            DELETE FROM staff_invitations WHERE token_hash IS NULL;
+            DROP INDEX uq_staff_invitations_open_email;
+            CREATE UNIQUE INDEX uq_staff_invitations_open_email
+                ON staff_invitations (tenant_id, lower(email))
+                WHERE accepted_at IS NULL AND revoked_at IS NULL AND deleted = false;
+            ALTER TABLE staff_invitations DROP CONSTRAINT chk_staff_invitations_rejection;
+            ALTER TABLE staff_invitations DROP CONSTRAINT chk_staff_invitations_approval;
+            ALTER TABLE staff_invitations DROP CONSTRAINT chk_staff_invitations_link_only_when_approved;
+            ALTER TABLE staff_invitations DROP CONSTRAINT chk_staff_invitations_one_outcome;
+            ALTER TABLE staff_invitations ADD CONSTRAINT chk_staff_invitations_one_outcome
+                CHECK (accepted_at IS NULL OR revoked_at IS NULL);
+            ALTER TABLE staff_invitations ALTER COLUMN last_sent_at SET NOT NULL;
+            ALTER TABLE staff_invitations ALTER COLUMN token_hash SET NOT NULL;
+            ALTER TABLE staff_invitations
+                DROP COLUMN rejection_reason, DROP COLUMN rejected_by, DROP COLUMN rejected_at,
+                DROP COLUMN approved_by, DROP COLUMN approved_at, DROP COLUMN approval_required;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

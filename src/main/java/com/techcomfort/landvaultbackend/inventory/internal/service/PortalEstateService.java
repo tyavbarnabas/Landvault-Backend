@@ -808,8 +808,11 @@ public class PortalEstateService {
             return scope.branchId();
         }
         if (requestedBranchId == null) {
-            throw new InventoryException.InvalidRequest(
-                    "branchId is required: an estate belongs to a branch, and your role is organization-wide.");
+            // EB-1: no branch means the estate belongs to the organisation
+            // directly — a single-office developer has no branch to name, and
+            // inventing a "Head Office" would be a fiction. Branch-scoped
+            // users never reach here: their estates go to their own branch.
+            return null;
         }
         if (!tenancyApi.branchBelongsToTenant(requestedBranchId, tenantId)) {
             throw new InventoryException.InvalidRequest("That branch does not belong to your organization.");
@@ -817,9 +820,12 @@ public class PortalEstateService {
         return requestedBranchId;
     }
 
+    /** Every caller writes, so the EB-2 branch rule is applied here once. */
     private Estate requireOwnedEstate(UUID estateId, UUID tenantId) {
-        return estateRepository.findByIdAndTenantId(estateId, tenantId)
+        Estate estate = estateRepository.findByIdAndTenantId(estateId, tenantId)
                 .orElseThrow(InventoryException.EstateNotFound::new);
+        EstateWriteAccess.requireWritable(estate);
+        return estate;
     }
 
     private List<String> saveAmenities(Estate estate, List<String> amenities) {

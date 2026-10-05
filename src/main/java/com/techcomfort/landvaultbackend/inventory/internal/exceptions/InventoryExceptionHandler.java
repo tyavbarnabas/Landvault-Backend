@@ -82,6 +82,12 @@ public class InventoryExceptionHandler {
                 .body(ErrorResponse.of(ex.getMessage(), "PLOT_HAS_HISTORY"));
     }
 
+    @ExceptionHandler(InventoryException.EstateReadOnlyForBranch.class)
+    public ResponseEntity<ErrorResponse> handleEstateReadOnlyForBranch(InventoryException.EstateReadOnlyForBranch ex) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ErrorResponse.of(ex.getMessage(), "ESTATE_READ_ONLY_FOR_BRANCH"));
+    }
+
     @ExceptionHandler(InventoryException.PlotOutsideEstate.class)
     public ResponseEntity<ErrorResponse> handlePlotOutsideEstate(InventoryException.PlotOutsideEstate ex) {
         return ResponseEntity.badRequest()

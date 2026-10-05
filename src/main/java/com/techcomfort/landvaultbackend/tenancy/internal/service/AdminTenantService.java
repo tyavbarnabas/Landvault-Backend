@@ -130,7 +130,10 @@ public class AdminTenantService {
         PrimaryContactDto contact = request.primaryContact();
         String[] name = splitFullName(contact.fullName());
         eventPublisher.publishEvent(new TenantStaffAccountRequested(
-                organization.getId(), "executive_director", name[0], name[1], contact.workEmail(), contact.phone()));
+                organization.getId(),
+                organization.getTradingName() == null || organization.getTradingName().isBlank()
+                        ? organization.getRegisteredName() : organization.getTradingName(),
+                actorUserId, "executive_director", name[0], name[1], contact.workEmail(), contact.phone()));
 
         auditApi.record(AuditEntryRequest.of(
                 actorUserId, "tenant.created", "organization", organization.getId(), organization.getId(),

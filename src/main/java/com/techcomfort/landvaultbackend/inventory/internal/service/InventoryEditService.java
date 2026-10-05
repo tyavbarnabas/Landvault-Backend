@@ -169,7 +169,7 @@ public class InventoryEditService {
     @Transactional(readOnly = true)
     public PriceTierImpactDto priceTierImpact(UUID estateId, UUID tierId) {
         TenantScope scope = currentScope();
-        requireOwnedEstate(estateId, requireTenant(scope));
+        requireVisibleEstate(estateId, requireTenant(scope));
         requireTier(estateId, tierId);
         return new PriceTierImpactDto(tierId, countsForTier(tierId, false));
     }
@@ -577,7 +577,14 @@ public class InventoryEditService {
         return scope.tenantId();
     }
 
+    /** For writes — applies the EB-2 branch rule. Reads use {@link #requireVisibleEstate}. */
     private Estate requireOwnedEstate(UUID estateId, UUID tenantId) {
+        Estate estate = requireVisibleEstate(estateId, tenantId);
+        EstateWriteAccess.requireWritable(estate);
+        return estate;
+    }
+
+    private Estate requireVisibleEstate(UUID estateId, UUID tenantId) {
         return estateRepository.findByIdAndTenantId(estateId, tenantId)
                 .orElseThrow(InventoryException.EstateNotFound::new);
     }

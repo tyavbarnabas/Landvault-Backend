@@ -433,6 +433,24 @@ class MarketplaceIT {
         assertThat(feedIds()).contains(listing.estateId());
     }
 
+    // --- the seller's branch office ---
+
+    /** The office a buyer would visit or call — published deliberately (changeset 066). */
+    @Test
+    void theSellerCardCarriesTheBranchOfficeAndOmitsItWhenThereIsNone() {
+        Listing listing = publishedListing("Office Gardens");
+        assertThat(anonymous("/api/marketplace/estates/" + listing.estateId()).getBody())
+                .as("no office details entered: absent, not an object of nulls")
+                .contains("\"office\":null");
+
+        execute("UPDATE branches SET street = '1 Broad Street', city = 'Abuja', state = 'Federal Capital Territory (Abuja)', "
+                + "phone = '+234 800 000 0000', email = 'office@example.com' WHERE id = '" + listing.tenant().branchId() + "'");
+
+        assertThat(anonymous("/api/marketplace/estates/" + listing.estateId()).getBody())
+                .contains("\"street\":\"1 Broad Street\"").contains("\"phone\":\"+234 800 000 0000\"")
+                .contains("\"email\":\"office@example.com\"");
+    }
+
     // --- intent versus eligibility (PB-5) ---
 
     @Test

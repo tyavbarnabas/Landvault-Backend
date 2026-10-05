@@ -36,4 +36,9 @@ public class Role extends AbstractEntity {
 
     @Column(name = "system_role", nullable = false)
     private Boolean systemRole;
+
+    /** How a tenant may assign this role; null means not assignable by a tenant. Changeset 067. */
+    @jakarta.persistence.Enumerated(jakarta.persistence.EnumType.STRING)
+    @Column(name = "scope", length = 16)
+    private com.techcomfort.landvaultbackend.identity.internal.enums.RoleScope scope;
 }

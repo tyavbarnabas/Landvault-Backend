@@ -52,4 +52,24 @@ public class Branch extends AbstractEntity {
     // grouping several branches. No hierarchy logic yet — see class Javadoc.
     @Column(name = "parent_branch_id")
     private UUID parentBranchId;
+
+    // The office (changeset 066). All optional; shown on the branch's
+    // marketplace listings. state is the canonical name, state_code its ISO code.
+    @Column(name = "street")
+    private String street;
+
+    @Column(name = "city")
+    private String city;
+
+    @Column(name = "state")
+    private String state;
+
+    @Column(name = "state_code")
+    private String stateCode;
+
+    @Column(name = "phone")
+    private String phone;
+
+    @Column(name = "email")
+    private String email;
 }

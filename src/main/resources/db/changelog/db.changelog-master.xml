@@ -70,6 +70,10 @@
     <include file="changes/062-withheld-retired-withdrawn.xml" relativeToChangelogFile="true"/>
     <include file="changes/063-require-a-plot-for-publication.xml" relativeToChangelogFile="true"/>
     <include file="changes/064-nigerian-state-boundaries.xml" relativeToChangelogFile="true"/>
+    <include file="changes/065-seed-portal-branches-manage-permission.xml" relativeToChangelogFile="true"/>
+    <include file="changes/066-branch-office-details.xml" relativeToChangelogFile="true"/>
+    <include file="changes/067-staff-invitations.xml" relativeToChangelogFile="true"/>
+    <include file="changes/068-staff-invitation-approval.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

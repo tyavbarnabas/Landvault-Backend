@@ -1,5 +1,6 @@
 package com.techcomfort.landvaultbackend.inventory.internal.service;
 
+import com.techcomfort.landvaultbackend.common.NigerianStates;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.Estate;
 import com.techcomfort.landvaultbackend.inventory.internal.exceptions.InventoryException;
 import jakarta.persistence.EntityManager;
@@ -9,7 +10,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
-import java.util.Locale;
 
 /**
  * SB-1: Nigeria's states, from the {@code nigerian_states} reference table
@@ -36,6 +36,12 @@ public class StateBoundaryService {
     @PersistenceContext
     private EntityManager entityManager;
 
+    private final NigerianStates states;
+
+    public StateBoundaryService(NigerianStates states) {
+        this.states = states;
+    }
+
     @Value("${landvault.estates.state-check.enabled:true}")
     private boolean enabled;
 
@@ -47,23 +53,11 @@ public class StateBoundaryService {
 
     /** The canonical state for what a caller typed, or a refusal listing the valid names. */
     public ResolvedState resolve(String input) {
-        String normalised = input == null ? "" : input.trim().replaceAll("(?i)\\s+state\\s*$", "")
-                .toLowerCase(Locale.ROOT);
-        @SuppressWarnings("unchecked")
-        List<Object[]> rows = entityManager.createNativeQuery("""
-                        SELECT code, name FROM nigerian_states
-                         WHERE lower(name) = :v OR lower(code) = :v OR :v = ANY (aliases)
-                        """)
-                .setParameter("v", normalised)
-                .getResultList();
-        if (rows.size() != 1) {
-            @SuppressWarnings("unchecked")
-            List<Object> names = entityManager
-                    .createNativeQuery("SELECT name FROM nigerian_states ORDER BY name").getResultList();
-            throw new InventoryException.ImmutableField("UNKNOWN_STATE",
-                    "'" + (input == null ? "" : input.trim()) + "' isn't a Nigerian state. Use one of: " + names + ".");
-        }
-        return new ResolvedState((String) rows.getFirst()[0], (String) rows.getFirst()[1]);
+        return states.resolve(input)
+                .map(state -> new ResolvedState(state.code(), state.name()))
+                .orElseThrow(() -> new InventoryException.ImmutableField("UNKNOWN_STATE",
+                        "'" + (input == null ? "" : input.trim()) + "' isn't a Nigerian state. Use one of: "
+                                + states.names() + "."));
     }
 
     /**

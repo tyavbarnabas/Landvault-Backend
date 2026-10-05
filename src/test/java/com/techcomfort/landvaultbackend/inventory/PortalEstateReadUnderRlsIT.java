@@ -52,6 +52,7 @@ import org.testcontainers.utility.DockerImageName;
 import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Arrays;
@@ -169,6 +170,70 @@ class PortalEstateReadUnderRlsIT {
                 plot("T01", blockId, unitTierId, false, "available-dev", null))));
 
         createEstate("Beta Courts", satelliteBranchId, null);
+    }
+
+    // --- EB-1 / EB-2: estates that belong to the company, not a branch ---
+
+    /** EB-1: a single-office company has no branch to name, and needn't invent one. */
+    @Test
+    void anOrganisationWideUserCanCreateAnEstateWithNoBranch() {
+        EstateDto estate = createEstate("Company Gardens", null, null);
+
+        assertThat(estate.branchId()).as("belongs to the organisation directly").isNull();
+        assertThat(queryString("SELECT branch_id IS NULL FROM estates WHERE id = '" + estate.id() + "'")).isEqualTo("t");
+    }
+
+    /**
+     * EB-2, verified rather than assumed: the first time an estate exercises
+     * the branch policy's {@code branch_id IS NULL} clause. A branch manager
+     * sees their own branch's estates and the company's, never another
+     * branch's.
+     */
+    @Test
+    void aBranchManagerSeesCompanyLevelEstatesButNotAnotherBranchs() {
+        UUID company = createEstate("Shared Gardens", null, null).id();
+
+        List<UUID> visible = listEstates(branchManagerToken).items().stream().map(EstateSummaryDto::id).toList();
+
+        assertThat(visible).contains(company);
+        assertThat(visible).doesNotContain(alphaEstateId);
+        assertThat(get("/api/portal/estates/" + company, branchManagerToken, String.class).getStatusCode())
+                .isEqualTo(HttpStatus.OK);
+    }
+
+    /**
+     * EB-2's write half. The database would allow it — the same
+     * {@code branch_id IS NULL} clause sits in WITH CHECK — so this is the
+     * application rule that stops it. A branch-scoped surveyor holds
+     * portal.estates.manage, so this is a real capability being refused.
+     */
+    @Test
+    void branchStaffCanViewButNotChangeACompanyLevelEstate() {
+        UUID company = createEstate("Locked Gardens", null, null).id();
+        String branchSurveyor = staffToken("surveyor_project_manager", satelliteBranchId);
+
+        ResponseEntity<String> tier = restTemplate.exchange("/api/portal/estates/" + company + "/price-tiers",
+                HttpMethod.POST, entity(branchSurveyor, new CreatePriceTierRequest("LAND_SIZE", LAND_TIER_SIZE,
+                        LAND_TIER_PRICE, Currency.NGN, "Standard 250")), String.class);
+        ResponseEntity<String> edit = restTemplate.exchange("/api/portal/estates/" + company, HttpMethod.PUT,
+                entity(branchSurveyor, "{\"description\":\"mine now\"}"), String.class);
+        ResponseEntity<String> fees = restTemplate.exchange("/api/portal/estates/" + company + "/fees",
+                HttpMethod.PUT, entity(branchSurveyor, "{\"fees\":[]}"), String.class);
+
+        for (ResponseEntity<String> refused : List.of(tier, edit, fees)) {
+            assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+            assertThat(refused.getBody()).contains("ESTATE_READ_ONLY_FOR_BRANCH");
+        }
+        assertThat(get("/api/portal/estates/" + company, branchSurveyor, String.class).getStatusCode())
+                .as("still visible").isEqualTo(HttpStatus.OK);
+
+        // Their own branch's estate is theirs to change — and leaving branchId
+        // out puts a branch-scoped user's estate in their own branch, never the company's.
+        EstateDto own = createEstate(branchSurveyor, "Annex Gardens", null, null);
+        assertThat(own.branchId()).isEqualTo(satelliteBranchId);
+        assertThat(restTemplate.exchange("/api/portal/estates/" + own.id() + "/price-tiers", HttpMethod.POST,
+                entity(branchSurveyor, new CreatePriceTierRequest("LAND_SIZE", LAND_TIER_SIZE, LAND_TIER_PRICE,
+                        Currency.NGN, "Standard 250")), String.class).getStatusCode()).isEqualTo(HttpStatus.CREATED);
     }
 
     /**
@@ -707,6 +772,17 @@ class PortalEstateReadUnderRlsIT {
 
     // Superuser connection, deliberately: fixture setup writes rows the app's
     // own restricted role could not see to write.
+    private static String queryString(String sql) {
+        try (Connection connection = DriverManager.getConnection(
+                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+             Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery(sql)) {
+            return rs.next() ? rs.getString(1) : null;
+        } catch (SQLException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     private static void execute(String sql) {
         try (Connection connection = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());

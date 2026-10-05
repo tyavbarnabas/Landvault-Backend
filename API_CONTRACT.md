@@ -473,3 +473,41 @@ outside its declared state (beyond a 1 km margin) is `400
 BOUNDARY_OUTSIDE_STATE`, and the message names the state it actually falls in.
 Credit "State boundaries: GRID3, via geoBoundaries (CC BY 4.0)" wherever the
 UI relies on this.
+
+
+## Branches (TB-1..TB-3) and the seller's office
+
+`GET/POST /api/portal/branches`, `PUT /api/portal/branches/{id}` — a tenant's
+own branches; create/update need `portal.branches.manage` (Executive Director,
+company-wide view). A branch is `{ id, name, street, city, state, phone,
+email, createdAt }`; everything but `name` is optional and **shown publicly**
+on that branch's listings. The marketplace `seller` gains `office: { street,
+city, state, phone, email } | null` beside `branchName` and `companyName` —
+additive to the frontend's `Seller` type. Frontend needs `portal.branches.manage`
+in its permission list.
+
+## Staff invitations (SI-1..SI-7)
+
+`POST /api/portal/staff/invitations` `{ email, firstName, lastName, roleCode,
+branchId? }`, `GET` (list with `status: pending|expired|accepted|revoked`),
+`POST .../{id}/revoke`, `POST .../{id}/resend` — all `portal.staff.invite`.
+Public: `POST /api/auth/invitations/preview` `{ token }` →
+`{ email, firstName, companyName, roleName, branchName, expiresAt }`, and
+`POST /api/auth/invitations/accept` `{ token, password }` → the login
+response plus the refresh cookie. **The frontend needs**: a page at
+`/accept-invitation` that reads the token from `location.hash` (`#token=`),
+never the query string; `portal.staff.invite` in its permission list; and a
+creating-a-tenant flow that no longer assumes the first Executive Director
+has an account — they get an invitation email.
+
+**Branch requests (changeset 068)**: `POST /api/portal/staff/invitations/requests`
+(same body; `portal.staff.request`, Branch Manager) creates an
+`awaiting_approval` invitation for the caller's own branch — nothing is sent
+until `POST .../{id}/approve` (`portal.staff.invite`). Also
+`POST .../{id}/reject` `{ reason }` and `POST .../{id}/cancel` (requester
+only). `GET` is open to both permissions; a branch manager sees their branch
+only. New statuses `awaiting_approval` and `rejected`; new fields
+`approvalRequired`, `requestedBy`, `approvedAt`, `rejectedAt`,
+`rejectionReason`. The frontend needs `portal.staff.request` in its permission
+list and an approval queue for the Executive Director.
+

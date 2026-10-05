@@ -103,15 +103,13 @@ class AdminTenantWriteIT {
 
         assertThat(countRows("organizations", "id = '" + orgId + "' AND rc_number = '" + rcNumber + "'")).isEqualTo(1);
 
-        UUID edUserId = singleUuid(
-                "SELECT id FROM users WHERE tenant_id = '" + orgId + "' AND email = '" + contactEmail.toLowerCase() + "'");
-        assertThat(edUserId).isNotNull();
-        assertThat(singleString("SELECT status FROM users WHERE id = '" + edUserId + "'")).isEqualTo("PENDING_VERIFICATION");
-        assertThat(singleString("SELECT first_name FROM users WHERE id = '" + edUserId + "'")).isEqualTo("Ada");
-        assertThat(singleString("SELECT last_name FROM users WHERE id = '" + edUserId + "'")).isEqualTo("Okafor");
-
-        assertThat(countRows("user_roles ur JOIN roles r ON r.id = ur.role_id",
-                "ur.user_id = '" + edUserId + "' AND r.code = 'executive_director' AND ur.scoped_branch_id IS NULL"))
+        // SI-3: the first Executive Director is INVITED — no account (and no
+        // password nobody could receive) until they accept.
+        assertThat(countRows("users", "lower(email) = lower('" + contactEmail + "')")).isEqualTo(0);
+        assertThat(countRows("staff_invitations i JOIN roles r ON r.id = i.role_id",
+                "i.tenant_id = '" + orgId + "' AND i.email = '" + contactEmail.toLowerCase() + "' "
+                        + "AND r.code = 'executive_director' AND i.scoped_branch_id IS NULL "
+                        + "AND i.first_name = 'Ada' AND i.last_name = 'Okafor' AND i.accepted_at IS NULL"))
                 .isEqualTo(1);
 
         assertThat(countRows("audit_log_entries",

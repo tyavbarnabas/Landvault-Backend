@@ -91,6 +91,7 @@ public class EstateDisclosureService {
     @Transactional
     public FeeScheduleDto declareFees(UUID estateId, DeclareFeesRequest request) {
         Estate estate = requireEstate(estateId);
+        EstateWriteAccess.requireWritable(estate);
         List<EstateFee> rows = validateAndBuild(estate, request);
 
         int version = estate.getFeesVersion() + 1;
@@ -201,6 +202,7 @@ public class EstateDisclosureService {
     @Transactional
     public RefundTermsDto declareRefundTerms(UUID estateId, DeclareRefundTermsRequest request) {
         Estate estate = requireEstate(estateId);
+        EstateWriteAccess.requireWritable(estate);
         RefundAppliesTo appliesTo = RefundAppliesTo.fromValue(request.appliesTo());
 
         String[] nonRefundable = (request.nonRefundableFeeTypes() == null
@@ -250,6 +252,7 @@ public class EstateDisclosureService {
     @Transactional
     public DefaultTermsDto declareDefaultTerms(UUID estateId, DeclareDefaultTermsRequest request) {
         Estate estate = requireEstate(estateId);
+        EstateWriteAccess.requireWritable(estate);
 
         int version = defaultTermsRepository.findFirstByEstateIdOrderByVersionDesc(estateId)
                 .map(existing -> existing.getVersion() + 1).orElse(1);

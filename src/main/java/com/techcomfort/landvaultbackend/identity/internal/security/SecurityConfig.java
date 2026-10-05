@@ -71,6 +71,10 @@ public class SecurityConfig {
             "/api/auth/forgot-password",
             "/api/auth/reset-password",
             "/api/auth/2fa/verify",
+            // SI-3: the invited person has no account yet. The token in the
+            // body is the credential; one answer for every bad token.
+            "/api/auth/invitations/preview",
+            "/api/auth/invitations/accept",
             "/actuator/health",
             // A hand-rolled SecurityFilterChain doesn't get Boot's default
             // exemption for the error-view path — without this, any

@@ -65,6 +65,22 @@ landvault:
       last-name: ${BOOTSTRAP_SUPER_ADMIN_LAST_NAME:}
       password: ${BOOTSTRAP_SUPER_ADMIN_PASSWORD:}
 
+  # Staff invitations (SI-1..SI-7). `delivery` works exactly like otp.delivery:
+  # email (default) or log — and `log` is for tests only, because it writes a
+  # live credential into a company to the application log.
+  invitations:
+    delivery: ${INVITATION_DELIVERY:email}
+    from-address: ${MAIL_FROM:noreply@landvault.com}
+    # The frontend page the link opens; the token follows after #token=.
+    accept-url: ${INVITATION_ACCEPT_URL:http://localhost:8443/accept-invitation}
+    ttl: 72h
+    # Security parameters: they stop resend being a way to flood an inbox.
+    resend-min-interval: 2m
+    max-sends: 5
+    # A branch manager's request waits this long for an approver, then lapses.
+    request-ttl: 14d
+    # The portal page an approver is pointed to in the "request to review" email.
+    review-url: ${INVITATION_REVIEW_URL:http://localhost:8443/portal/staff/invitations}
   otp:
     # One-time codes (password reset today). Every value here is a security
     # parameter — see AGENTS.md before widening one.

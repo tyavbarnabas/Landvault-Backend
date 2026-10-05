@@ -49,4 +49,10 @@ public interface TenancyApi {
      * Ids with no match are absent rather than an error.
      */
     Map<UUID, String> organizationNamesFor(Collection<UUID> tenantIds);
+
+    /**
+     * A branch's name, if it belongs to that tenant. A plain read under the
+     * caller's RLS scope — used when an invitation snapshots the branch name.
+     */
+    java.util.Optional<String> branchNameFor(UUID branchId, UUID tenantId);
 }

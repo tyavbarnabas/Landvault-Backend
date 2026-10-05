@@ -1406,6 +1406,248 @@ Two things whoever builds step two should settle first:
 pins the current limitation, and `anEstateWithoutAStateIsRejected` pins the
 precondition, so neither gets quietly undone.
 
+## Tenant self-service: decisions taken before building (2026-10-05)
+
+From the TB/SI/EB stories. Two of their claims were wrong and are recorded so
+nobody builds on them: **`staff_invitations` did not exist**, and **there was no
+branch API for anyone** — Super Admin included; tests insert branches in SQL.
+
+Decided with the user:
+- **An invitation to an email that already has an account is refused**, and an
+  accepted invitation creates a **fresh user holding only the invited role** —
+  never `buyer`. A buyer who also held a staff role would silently lose their
+  branch wall (see "A branch-scoped staff user with a leftover `buyer` role")
+  and buyers must never be tenant-scoped. Staff use a work email.
+- **Role scoping is data**: a column on `roles` — `executive_director`
+  company-wide only, `branch_manager` must have a branch, the other tenant roles
+  either.
+- **Only company-wide roles invite**, via a new `portal.staff.invite`; branch
+  managers don't invite at all in v1. Branches are created by holders of a new
+  `portal.branches.manage`, company-wide only — a branch manager creating a
+  sibling branch would carve out visibility for themselves.
+- **"Double King staff create estates" means a surveyor scoped to Double
+  King** — `branch_manager` does not hold `portal.estates.manage`.
+- Invitations: a separate sender beside `OtpDeliveryService` (that interface is
+  shaped for a code, not a link); the token travels after `#` in the link so it
+  never reaches a server log or a referrer; refused while the tenant isn't
+  active; the first Executive Director at tenant creation gets an invitation
+  instead of an unusable random password.
+
+### EB-1: an estate may belong to the company, with no branch
+
+An organisation-wide caller who leaves `branchId` out now creates a
+**company-level estate** (`branch_id` null) instead of a 400. A single-office
+developer has no branch to name, and auto-creating a "Head Office" was
+rejected as a fiction — the tenancy model already treats "belongs to the
+organisation" as legitimate everywhere else. A branch-scoped caller's estates
+still always go to their own branch. Nothing downstream assumed a branch: the
+marketplace view `LEFT JOIN`s branches, and children copy the estate's
+`branch_id`, null included.
+
+### EB-2: company-level estates are visible to branch staff, and read-only for them
+
+**Visible**: changeset 044's branch policy has `branch_id IS NULL`, so a branch
+manager sees their branch's estates and the company's, never another branch's —
+verified, the first time an estate exercised that clause.
+
+**Read-only — and the database will not do this for you.** The same clause is
+in `WITH CHECK`, so RLS permits branch-scoped *writes* to company-level rows.
+`EstateWriteAccess.requireWritable` is the application rule
+(`ESTATE_READ_ONLY_FOR_BRANCH`, 403), applied in every inventory write path:
+the write lookups in `PortalEstateService` and `InventoryEditService`, the
+three disclosure declarations, and plot import. **Proven**: without it, a
+branch-scoped surveyor added a price tier to a company estate (201). **Any new
+inventory write must go through it.**
+
+**The branch switcher**: an Executive Director narrowed to one branch with
+`X-Branch-Id` is acting inside that branch, so company-level estates are
+read-only to them until they widen again — the lens is a lens.
+
+### TB-1..TB-3: a tenant manages its own branches
+
+`GET/POST /api/portal/branches`, `PUT /api/portal/branches/{id}`
+(`PortalBranchService`, tenancy). **The first branch API there has been, for
+anyone** — before this, branches only existed by SQL.
+
+- **The company is always the caller's own**, from `TenantContext`, never the
+  request; another company's branch id is a 404.
+- **Create and rename are company-wide only, twice over.** The new
+  `portal.branches.manage` (changeset 065) is granted to `executive_director`
+  alone, **and** the service refuses any caller whose current scope is one
+  branch (`BRANCHES_REQUIRE_COMPANY_WIDE_SCOPE`, 403) — including an Executive
+  Director narrowed with `X-Branch-Id`. The second check is not redundant:
+  changeset 021's `WITH CHECK` on `branches` deliberately omits the branch
+  match (a new branch can't equal an existing branch id), so **the database
+  lets a branch-scoped user insert a sibling branch**. Proven: without the
+  service check, a branch-scoped holder of the permission got 201. Same lesson
+  as EB-2 — RLS walls reads; some writes need an application rule.
+- **Listing** needs `portal.branches.manage` or `portal.estates.view`;
+  RLS shows company-wide staff every branch and branch-scoped staff only their
+  own. A company with no branches gets an empty list — never an invented
+  "Head Office".
+- **Names are unique within the company, ignoring case.** The database
+  constraint (`uq_branches_organization_id_name`) is case-sensitive, so the
+  case-insensitive check is the service's (proven red without it); the
+  constraint remains the backstop for a race. Its own exception handler —
+  `TenancyExceptionHandler` reports every conflict as a duplicate RC number.
+- Audit: `tenant.branch_created`, `tenant.branch_updated` (field-by-field old
+  → new); an update that changes nothing records nothing.
+- **Not exposed: `parent_branch_id` and `manager_user_id`.** The manager comes
+  with invitations (SI). A parent branch is deliberately not offered: the
+  branch wall compares exact branch ids, so a parent branch's manager would not
+  see its sub-branches' estates — offering hierarchy would promise visibility
+  that doesn't exist. No delete route either (not in the stories; a branch
+  with estates needs a decision about them first).
+
+### A branch's office (changeset 066)
+
+A branch was only a name — enough for the access wall, but not for a buyer
+who wants to visit or call the people they'd deal with, nor for state-level
+registration (a Lagos branch may need its own LASRERA entry). Decided with the
+user: branches now carry an optional **street, city, state, phone and email**.
+
+- **All optional, never invented.** Existing branches have none; a missing
+  office is `null`, and the portal never fills it from the company's own
+  address.
+- **State is standardised exactly like estates** (`state` canonical name,
+  `state_code` ISO). The resolver moved to **`common.NigerianStates`** so
+  tenancy can use it: tenancy → inventory would be a cycle, and the lookup is
+  reference data, not domain logic. SB-1's `StateBoundaryService` delegates to
+  it; behaviour unchanged.
+- `PUT /api/portal/branches/{id}` is now a general update (left out =
+  unchanged, blank clears, the name can't be cleared) rather than rename-only.
+- **The office is published on the marketplace seller card**
+  (`SellerDto.office`, from new columns appended to `marketplace_listings`).
+  Adding a column to a `marketplace_*` view is publishing it to the internet —
+  deliberate here, since these are business contact details entered to be
+  shown, and the API docs tell developers so. `office` is `null`, not an
+  object of nulls, when the estate has no branch or the branch has no details.
+  The view's rollback drops and recreates it, so it re-grants SELECT-only.
+- **Not added: map coordinates** — nothing shows offices on a map.
+
+### SI-1..SI-7: staff invitations (changeset 067)
+
+How tenant staff get an account at all. `POST/GET /api/portal/staff/invitations`,
+`POST .../{id}/revoke`, `POST .../{id}/resend` (all `portal.staff.invite`), and
+the public `POST /api/auth/invitations/preview` / `accept`. Decided with the
+user before building:
+
+- **An email that already has an account is refused** (`EMAIL_HAS_ACCOUNT`,
+  409), checked at invite *and* at accept. Merging a buyer account into a
+  staff one would hand a branch wall to someone holding a `buyer` role — the
+  exact org-wide leak recorded under "A branch-scoped staff user with a
+  leftover `buyer` role". An accepted invitation creates a user holding
+  **only the invited role**, never `buyer`; the IT asserts the full role list.
+- **`roles.scope`** (`COMPANY` / `BRANCH` / `EITHER`, null = not invitable)
+  is data, not a hardcoded list: `executive_director` COMPANY,
+  `branch_manager` BRANCH, other tenant roles EITHER, `buyer` and platform
+  roles null (`ROLE_NOT_INVITABLE`). A branch is required, forbidden or
+  optional accordingly (`ROLE_SCOPE_MISMATCH`), and must be the caller's own
+  (`BRANCH_NOT_FOUND`).
+- **Who invites**: `portal.staff.invite` (executive_director only) **and** a
+  company-wide current scope (`INVITATIONS_REQUIRE_COMPANY_WIDE_SCOPE`, 403 —
+  an ED narrowed with `X-Branch-Id` is refused too). Branch managers don't
+  invite. **SI-4, never grant what you don't hold**: the role's permissions
+  must all be in the caller's own authorities (`CANNOT_GRANT_ROLE`), so a
+  future role carrying an `admin.*` slug can't be minted from the portal.
+- **The token**: 32 random bytes, stored SHA-256 only (same reasoning as
+  `otp_codes`), single-use, 72h. It goes **after `#`** in the link
+  (`/accept-invitation#token=...`) — a fragment never reaches a server, so it
+  never lands in an access log or a `Referer`. Unknown, expired, revoked and
+  used links all get one `INVITATION_INVALID` with the same body.
+- **Resend issues a new token** (the old link dies — never two live links),
+  resets expiry, and is limited: 2 minutes apart, 5 sends total (429s). Same
+  inbox-flooding reasoning as password reset.
+- **Suspended/offboarded tenants** can neither invite nor have an invitation
+  accepted (`TENANT_NOT_ACTIVE`) — accepting would be a login-shaped door
+  around the login-time tenant check.
+- **Accept signs the person in** (tokens + refresh cookie, like login), with
+  `emailVerifiedAt` set — receiving the link proves the mailbox.
+- **Names are snapshotted** onto the invitation (company, branch, role) so
+  the email and preview need no cross-module read before any scope exists.
+- **`staff_invitations` is not RLS-policied**, like `otp_codes`: preview and
+  accept run before any scope exists. Rows are reached by token hash, or by
+  `id` *and* the caller's `tenant_id` from `TenantContext` (another company's
+  invitation is a 404). A tenant-facing policy would only block accept.
+- **Delivery**: `InvitationDeliveryService`, separate from
+  `OtpDeliveryService` (a different message, not a code). Email by default;
+  `LoggingInvitationDeliveryService` (`landvault.invitations.delivery=log`) is
+  **test-only** and is the one place an invitation link is logged — selecting
+  it anywhere real writes account-takeover links into the log.
+- Audit: `staff.invited`, `staff.invitation_resent`,
+  `staff.invitation_revoked`, `staff.invitation_accepted`.
+
+**The first Executive Director is invited too.** Tenant creation used to
+create the ED's account with a random password nobody received (see "three
+independent reasons" above — the reason nobody could ever log in as one).
+`TenantStaffAccountListener` now creates an **invitation** instead, in the
+same transaction, still via the synchronous `@EventListener`
+(`TenantStaffAccountRequested` gained the organisation name and the
+requesting admin's id for the snapshot and `invited_by`). An email that
+already has an account still fails tenant creation with
+`EMAIL_ALREADY_REGISTERED`. No `users` row exists until acceptance.
+
+**Proven red** by breaking each guard: the permission-subset check (201
+instead of 403), revoked-still-usable, the account-collision check, the
+company-wide check, and expiry.
+
+**Not built**: listing/removing *accepted* staff, changing a staff member's
+role, and the frontend accept page. The `invited_by` FK means an inviting
+admin's row can't be hard-deleted — fine, nothing hard-deletes users.
+
+### Invitation requests from a branch (changeset 068)
+
+A branch manager can't invite, but can **ask**: `POST
+/api/portal/staff/invitations/requests` (new `portal.staff.request`), and
+head office decides with `POST .../{id}/approve` or `.../{id}/reject`
+(`portal.staff.invite`, company-wide). The requester can withdraw with
+`.../{id}/cancel`. Decided with the user: the Executive Director approves,
+the requester may cancel, requests lapse after **14 days**
+(`landvault.invitations.request-ttl`), and approvers are emailed as well as
+seeing the list.
+
+- **A request is an invitation row with no link.** `token_hash` and
+  `last_sent_at` stay null until approval; a CHECK
+  (`chk_staff_invitations_link_only_when_approved`) makes a link before
+  approval impossible even for code that tries — tested. Approval issues the
+  ordinary invitation: fresh token, 72-hour clock, normal email.
+- **The branch is always the requester's own** (from `TenantContext`; any
+  other `branchId` is `ROLE_SCOPE_MISMATCH`), company-wide roles can't be
+  requested, and SI-4 applies to the **requester**: they can only ask for
+  roles whose permissions they hold. **Consequence, stated plainly**: a
+  branch manager cannot request a `surveyor_project_manager` (that role holds
+  `portal.estates.manage`, a branch manager doesn't) — head office invites
+  surveyors directly. Relaxing this means checking the approver instead; a
+  decision, not a bug.
+- **Approval re-checks** that the approver holds the role's permissions, that
+  the tenant is active, and that no account has appeared for the email while
+  the request waited. A lapsed request can't be approved
+  (`INVITATION_REQUEST_EXPIRED`) but can be rejected to close it.
+- **`executive_director` also holds `portal.staff.request`**, never to use it:
+  `branch_manager` now carries that permission, so SI-4 would otherwise stop
+  the director inviting a branch manager at all (the full suite caught this).
+  To stop a director narrowed with `X-Branch-Id` from requesting and then
+  approving their own request, **anyone holding `portal.staff.invite` is
+  refused at `/requests`** (`INVITATION_REQUESTS_REQUIRE_BRANCH_SCOPE`).
+- **Cancel is the requester's only** — anyone else's request is a 404. A
+  rejection needs a reason, which the branch manager sees; rejected and
+  cancelled requests are history, so the same email can be requested again
+  (the open-email unique index now also excludes `rejected_at`).
+- **The list is scoped**: company-wide callers see everything, a
+  branch-scoped caller sees only invitations into their branch. The table
+  isn't RLS-policied, so this is the service's filter, by `scoped_branch_id`.
+- **Approver email**: every active, company-wide Executive Director of the
+  tenant, pointing at `landvault.invitations.review-url`. It carries no
+  credential. No active approver → the request still stands and is logged.
+- New statuses on `StaffInvitationDto`: `awaiting_approval`, `rejected`
+  (plus `approvalRequired`, `requestedBy`, `approvedAt`, `rejectedAt`,
+  `rejectionReason`). Audit: `staff.invitation_requested`,
+  `staff.invitation_approved`, `staff.invitation_rejected`,
+  `staff.invitation_request_cancelled`.
+
+Proven red by removing each guard: requester-only cancel, own-branch only,
+the no-self-approval check, lapse, and the branch-scoped list.
+
 ## SB-1: an estate's boundary must sit inside its state
 
 The coordinate-swap gap above, closed. Changeset **064**; `StateBoundaryService`.

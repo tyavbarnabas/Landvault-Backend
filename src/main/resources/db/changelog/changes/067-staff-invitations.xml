@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        SI-1..SI-7: tenant staff are invited, never self-registered. See
+        AGENTS.md, "Tenant self-service".
+    -->
+
+    <!--
+        Role scoping is DATA about the role, decided with the user:
+          COMPANY — must be organisation-wide (executive_director)
+          BRANCH  — must name a branch       (branch_manager)
+          EITHER  — may be either             (sales, surveyor, finance, legal)
+          NULL    — not assignable by a tenant at all (platform roles, buyer,
+                    broker): an invitation for one is refused.
+    -->
+    <changeSet id="067-roles-scope" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE roles ADD COLUMN scope varchar(16);
+            ALTER TABLE roles ADD CONSTRAINT chk_roles_scope CHECK (scope IS NULL OR scope IN ('COMPANY', 'BRANCH', 'EITHER'));
+            UPDATE roles SET scope = 'COMPANY' WHERE code = 'executive_director';
+            UPDATE roles SET scope = 'BRANCH'  WHERE code = 'branch_manager';
+            UPDATE roles SET scope = 'EITHER'
+             WHERE code IN ('sales_manager', 'surveyor_project_manager', 'finance_officer', 'legal_officer');
+            COMMENT ON COLUMN roles.scope IS
+                'How a tenant may assign this role: COMPANY (organisation-wide only), BRANCH (must name a branch), EITHER, or NULL (not assignable by a tenant).';
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE roles DROP CONSTRAINT chk_roles_scope;
+            ALTER TABLE roles DROP COLUMN scope;
+        ]]></rollback>
+    </changeSet>
+
+    <!--
+        Only company-wide roles invite (decided with the user): branch
+        managers don't invite at all in v1, which removes SI-4's hardest case
+        — a branch manager minting an Executive Director, or inviting into a
+        sibling branch.
+    -->
+    <changeSet id="067-seed-portal-staff-invite-permission" author="landvault">
+        <sql>
+            INSERT INTO permissions (id, created_at, created_by, deleted, code, description) VALUES
+                (gen_random_uuid(), now(), 'system', false, 'portal.staff.invite',
+                 'Invite, revoke and resend staff invitations for the owning tenant. Company-wide roles only.');
+            INSERT INTO role_permissions (id, created_at, created_by, deleted, role_id, permission_id)
+            SELECT gen_random_uuid(), now(), 'system', false, r.id, p.id
+            FROM roles r, permissions p
+            WHERE r.code = 'executive_director' AND p.code = 'portal.staff.invite';
+        </sql>
+        <rollback>
+            DELETE FROM role_permissions WHERE permission_id IN (SELECT id FROM permissions WHERE code = 'portal.staff.invite');
+            DELETE FROM permissions WHERE code = 'portal.staff.invite';
+        </rollback>
+    </changeSet>
+
+    <!--
+        An invitation is a live credential into a company: time-boxed,
+        single-use, revocable, and stored as a SHA-256 hash — the raw token
+        only ever travels in the email link (after #, so it never reaches a
+        server log or a referrer). Resending replaces the hash, so there are
+        never two live links for one invitation.
+
+        company_name / branch_name / role_name are a SNAPSHOT taken when the
+        invitation is created: the accept page must show "Estintin — Branch
+        Manager, Double King" to someone with no account yet, when RLS would
+        hide those rows. Copying three display strings is far narrower than
+        another SECURITY DEFINER escape.
+
+        NOT RLS-policied, for the same reason as otp_codes and refresh_tokens:
+        preview and accept run before any tenant scope exists. Rows are reached
+        only by token hash (accept) or with the caller's own tenant id as a
+        mandatory query parameter (the portal list); never enumerated.
+
+        Append-only in spirit: a used, revoked or expired invitation is kept as
+        the record of who granted what.
+    -->
+    <changeSet id="067-create-staff-invitations" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE staff_invitations (
+                id                uuid NOT NULL PRIMARY KEY,
+                tenant_id         uuid NOT NULL REFERENCES organizations (id),
+                branch_id         uuid,
+                created_at        timestamp(6) with time zone NOT NULL,
+                updated_at        timestamp(6) with time zone,
+                created_by        varchar(255),
+                updated_by        varchar(255),
+                deleted           boolean NOT NULL,
+
+                email             varchar(255) NOT NULL,
+                first_name        varchar(255) NOT NULL,
+                last_name         varchar(255) NOT NULL,
+                phone             varchar(32),
+                role_id           uuid NOT NULL REFERENCES roles (id),
+                scoped_branch_id  uuid REFERENCES branches (id),
+                company_name      varchar(255) NOT NULL,
+                branch_name       varchar(255),
+                role_name         varchar(255) NOT NULL,
+                invited_by        uuid NOT NULL REFERENCES users (id),
+                token_hash        varchar(64) NOT NULL UNIQUE,
+                expires_at        timestamp(6) with time zone NOT NULL,
+                send_count        integer NOT NULL DEFAULT 1,
+                last_sent_at      timestamp(6) with time zone NOT NULL,
+                accepted_at       timestamp(6) with time zone,
+                accepted_user_id  uuid REFERENCES users (id),
+                revoked_at        timestamp(6) with time zone,
+                revoked_by        uuid REFERENCES users (id),
+
+                CONSTRAINT chk_staff_invitations_one_outcome CHECK (accepted_at IS NULL OR revoked_at IS NULL),
+                CONSTRAINT chk_staff_invitations_accepted_user CHECK ((accepted_at IS NULL) = (accepted_user_id IS NULL))
+            );
+            CREATE INDEX idx_staff_invitations_tenant ON staff_invitations (tenant_id, created_at DESC);
+            -- At most one open invitation per email per company; a fresh one is
+            -- a resend, not a duplicate. Closed ones are history and don't count.
+            CREATE UNIQUE INDEX uq_staff_invitations_open_email
+                ON staff_invitations (tenant_id, lower(email))
+                WHERE accepted_at IS NULL AND revoked_at IS NULL AND deleted = false;
+            COMMENT ON TABLE staff_invitations IS
+                'Tenant staff invitations (SI-1..SI-7). Token stored hashed. Not RLS-policied: reached pre-auth by token hash. See AGENTS.md.';
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE staff_invitations;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

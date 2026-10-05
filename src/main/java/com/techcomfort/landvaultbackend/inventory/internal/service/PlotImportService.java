@@ -110,6 +110,7 @@ public class PlotImportService {
     public PlotImportReportDto importPlots(UUID estateId, byte[] file, String fileName, Options options) {
         TenantScope scope = currentScope();
         Estate estate = requireOwnedEstate(estateId);
+        EstateWriteAccess.requireWritable(estate);
         Analysis analysis = analyse(estate, file, options);
         if (!analysis.errors.isEmpty()) {
             throw new InventoryException.ImportRejected(analysis.report(false, 0, null));

@@ -19,6 +19,10 @@ public interface BranchRepository extends JpaRepository<Branch, UUID> {
 
     List<Branch> findByOrganizationId(UUID organizationId);
 
+    boolean existsByOrganizationIdAndNameIgnoreCase(UUID organizationId, String name);
+
+    boolean existsByOrganizationIdAndNameIgnoreCaseAndIdNot(UUID organizationId, String name, UUID id);
+
     // One grouped query for a whole page of organizations, not one COUNT
     // per row — see AGENTS.md's "avoid N+1 on the directory" note.
     @Query("SELECT new com.techcomfort.landvaultbackend.tenancy.internal.repository.BranchCountProjection(b.organizationId, COUNT(b)) "

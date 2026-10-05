@@ -75,6 +75,22 @@ public class ListingView {
     @Column(name = "company_name")
     private String companyName;
 
+    // The branch office (changeset 066). Null for a company-level estate.
+    @Column(name = "branch_street")
+    private String branchStreet;
+
+    @Column(name = "branch_city")
+    private String branchCity;
+
+    @Column(name = "branch_state")
+    private String branchState;
+
+    @Column(name = "branch_phone")
+    private String branchPhone;
+
+    @Column(name = "branch_email")
+    private String branchEmail;
+
     @Column(name = "last_verified_at")
     private Instant lastVerifiedAt;
 

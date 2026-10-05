@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        A branch's office: street, city, state, phone, email.
+
+        Until now a branch was only a name — the access wall needs nothing
+        more. An office address and contact matter once buyers see the branch
+        (the marketplace seller card already shows "Double King · Estintin")
+        and for state-level registration (a Lagos branch may need its own
+        LASRERA entry). All nullable: existing branches have none, and a
+        missing address is shown as missing, never invented. `state` is the
+        canonical name and `state_code` the ISO code, the same standard as
+        estates (SB-1). Map coordinates are deliberately not added — nothing
+        shows offices on a map.
+    -->
+    <changeSet id="066-branch-office-details" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE branches ADD COLUMN street     varchar(255);
+            ALTER TABLE branches ADD COLUMN city       varchar(128);
+            ALTER TABLE branches ADD COLUMN state      varchar(64);
+            ALTER TABLE branches ADD COLUMN state_code varchar(8) REFERENCES nigerian_states (code);
+            ALTER TABLE branches ADD COLUMN phone      varchar(32);
+            ALTER TABLE branches ADD COLUMN email      varchar(255);
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE branches DROP COLUMN email;
+            ALTER TABLE branches DROP COLUMN phone;
+            ALTER TABLE branches DROP COLUMN state_code;
+            ALTER TABLE branches DROP COLUMN state;
+            ALTER TABLE branches DROP COLUMN city;
+            ALTER TABLE branches DROP COLUMN street;
+        ]]></rollback>
+    </changeSet>
+
+    <!--
+        The seller card gains the branch office. ADDING A COLUMN TO A
+        marketplace_* VIEW IS PUBLISHING IT TO THE INTERNET (see AGENTS.md):
+        these are business contact details a developer enters to be shown on
+        their listings, and the portal says so. Appended at the end, so
+        CREATE OR REPLACE is permitted. Rollback restores 049's definition.
+    -->
+    <changeSet id="066-marketplace-listing-branch-office" author="landvault">
+        <sql splitStatements="false"><![CDATA[
+            CREATE OR REPLACE VIEW marketplace_listings WITH (security_barrier = true) AS
+            SELECT
+                e.id                     AS estate_id,
+                e.name                   AS name,
+                e.area                   AS area,
+                e.city                   AS city,
+                e.state                  AS state,
+                e.description            AS description,
+                e.image_url              AS image_url,
+                e.intent                 AS intent,
+                e.corner_premium_pct     AS corner_premium_pct,
+                e.published_at           AS published_at,
+                e.footprint              AS footprint,
+                t.title_type             AS title_type,
+                b.name                   AS branch_name,
+                COALESCE(NULLIF(btrim(o.trading_name), ''), o.registered_name) AS company_name,
+                v.last_verified_at       AS last_verified_at,
+                ft.price                 AS from_price,
+                ft.currency              AS from_price_currency,
+                ft.price_per_sqm         AS from_price_per_sqm,
+                sz.min_size_sqm          AS min_size_sqm,
+                sz.max_size_sqm          AS max_size_sqm,
+                COALESCE(pr.plots_remaining, 0) AS plots_remaining,
+                -- The branch office, so a buyer can visit or call the people
+                -- they would actually deal with. Published deliberately: the
+                -- portal tells developers these appear on their listings.
+                b.street                 AS branch_street,
+                b.city                   AS branch_city,
+                b.state                  AS branch_state,
+                b.phone                  AS branch_phone,
+                b.email                  AS branch_email
+            FROM marketplace_estate_eligibility el
+            JOIN estates e       ON e.id = el.estate_id
+            JOIN organizations o ON o.id = e.tenant_id
+            LEFT JOIN branches b      ON b.id = e.branch_id AND b.deleted = false
+            LEFT JOIN estate_titles t ON t.estate_id = e.id AND t.deleted = false
+            -- The most recent check that actually came back VERIFIED. Never a
+            -- pending or not_checked one: absent verification stays absent.
+            LEFT JOIN LATERAL (
+                SELECT max(c.last_verified_at) AS last_verified_at
+                FROM estate_verification_checks c
+                WHERE c.estate_id = e.id AND c.deleted = false AND c.status = 'VERIFIED'
+            ) v ON true
+            -- "From" price: the cheapest tier that still has a plot for sale,
+            -- falling back to the cheapest tier overall when everything is
+            -- sold (the frontend's fromPrice() rule). The tier's own base
+            -- price: a corner premium only ever raises it.
+            LEFT JOIN LATERAL (
+                SELECT pt.price, pt.currency,
+                       CASE WHEN pt.tier_type = 'LAND_SIZE' AND pt.size_sqm > 0
+                            THEN round(pt.price / pt.size_sqm, 2) END AS price_per_sqm
+                FROM price_tiers pt
+                WHERE pt.estate_id = e.id AND pt.deleted = false
+                ORDER BY EXISTS (
+                            SELECT 1 FROM plots p
+                            WHERE p.price_tier_id = pt.id AND p.deleted = false
+                              AND p.status IN ('AVAILABLE_DEV', 'AVAILABLE_INV')
+                         ) DESC,
+                         pt.price ASC
+                LIMIT 1
+            ) ft ON true
+            LEFT JOIN LATERAL (
+                SELECT min(pt.size_sqm) AS min_size_sqm, max(pt.size_sqm) AS max_size_sqm
+                FROM price_tiers pt
+                WHERE pt.estate_id = e.id AND pt.deleted = false AND pt.tier_type = 'LAND_SIZE'
+            ) sz ON true
+            LEFT JOIN LATERAL (
+                SELECT count(*) AS plots_remaining
+                FROM plots p
+                WHERE p.estate_id = e.id AND p.deleted = false
+                  AND p.status IN ('AVAILABLE_DEV', 'AVAILABLE_INV')
+            ) pr ON true
+            WHERE el.eligible;
+        ]]></sql>
+        <rollback>
+            <sql splitStatements="false"><![CDATA[
+            DROP VIEW marketplace_listings;
+            CREATE VIEW marketplace_listings WITH (security_barrier = true) AS
+            SELECT
+                e.id                     AS estate_id,
+                e.name                   AS name,
+                e.area                   AS area,
+                e.city                   AS city,
+                e.state                  AS state,
+                e.description            AS description,
+                e.image_url              AS image_url,
+                e.intent                 AS intent,
+                e.corner_premium_pct     AS corner_premium_pct,
+                e.published_at           AS published_at,
+                e.footprint              AS footprint,
+                t.title_type             AS title_type,
+                b.name                   AS branch_name,
+                COALESCE(NULLIF(btrim(o.trading_name), ''), o.registered_name) AS company_name,
+                v.last_verified_at       AS last_verified_at,
+                ft.price                 AS from_price,
+                ft.currency              AS from_price_currency,
+                ft.price_per_sqm         AS from_price_per_sqm,
+                sz.min_size_sqm          AS min_size_sqm,
+                sz.max_size_sqm          AS max_size_sqm,
+                COALESCE(pr.plots_remaining, 0) AS plots_remaining
+            FROM marketplace_estate_eligibility el
+            JOIN estates e       ON e.id = el.estate_id
+            JOIN organizations o ON o.id = e.tenant_id
+            LEFT JOIN branches b      ON b.id = e.branch_id AND b.deleted = false
+            LEFT JOIN estate_titles t ON t.estate_id = e.id AND t.deleted = false
+            -- The most recent check that actually came back VERIFIED. Never a
+            -- pending or not_checked one: absent verification stays absent.
+            LEFT JOIN LATERAL (
+                SELECT max(c.last_verified_at) AS last_verified_at
+                FROM estate_verification_checks c
+                WHERE c.estate_id = e.id AND c.deleted = false AND c.status = 'VERIFIED'
+            ) v ON true
+            -- "From" price: the cheapest tier that still has a plot for sale,
+            -- falling back to the cheapest tier overall when everything is
+            -- sold (the frontend's fromPrice() rule). The tier's own base
+            -- price: a corner premium only ever raises it.
+            LEFT JOIN LATERAL (
+                SELECT pt.price, pt.currency,
+                       CASE WHEN pt.tier_type = 'LAND_SIZE' AND pt.size_sqm > 0
+                            THEN round(pt.price / pt.size_sqm, 2) END AS price_per_sqm
+                FROM price_tiers pt
+                WHERE pt.estate_id = e.id AND pt.deleted = false
+                ORDER BY EXISTS (
+                            SELECT 1 FROM plots p
+                            WHERE p.price_tier_id = pt.id AND p.deleted = false
+                              AND p.status IN ('AVAILABLE_DEV', 'AVAILABLE_INV')
+                         ) DESC,
+                         pt.price ASC
+                LIMIT 1
+            ) ft ON true
+            LEFT JOIN LATERAL (
+                SELECT min(pt.size_sqm) AS min_size_sqm, max(pt.size_sqm) AS max_size_sqm
+                FROM price_tiers pt
+                WHERE pt.estate_id = e.id AND pt.deleted = false AND pt.tier_type = 'LAND_SIZE'
+            ) sz ON true
+            LEFT JOIN LATERAL (
+                SELECT count(*) AS plots_remaining
+                FROM plots p
+                WHERE p.estate_id = e.id AND p.deleted = false
+                  AND p.status IN ('AVAILABLE_DEV', 'AVAILABLE_INV')
+            ) pr ON true
+            WHERE el.eligible;
+            -- Dropping the view drops its grants; restore 049's SELECT-only access.
+            REVOKE ALL ON marketplace_listings FROM ${appDbUsername};
+            GRANT SELECT ON marketplace_listings TO ${appDbUsername};
+            ]]></sql>
+        </rollback>
+    </changeSet>
+</databaseChangeLog>
