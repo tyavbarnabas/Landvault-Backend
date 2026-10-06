@@ -1613,12 +1613,12 @@ seeing the list.
   ordinary invitation: fresh token, 72-hour clock, normal email.
 - **The branch is always the requester's own** (from `TenantContext`; any
   other `branchId` is `ROLE_SCOPE_MISMATCH`), company-wide roles can't be
-  requested, and SI-4 applies to the **requester**: they can only ask for
-  roles whose permissions they hold. **Consequence, stated plainly**: a
-  branch manager cannot request a `surveyor_project_manager` (that role holds
-  `portal.estates.manage`, a branch manager doesn't) — head office invites
-  surveyors directly. Relaxing this means checking the approver instead; a
-  decision, not a bug.
+  requested, and SI-4 applies to the **approver, not the requester**: asking
+  grants nothing, so a branch manager may ask for a `surveyor_project_manager`
+  even though they don't hold `portal.estates.manage`. The grant happens at
+  approval, and that is where the check runs. (Built requester-checked first;
+  relaxed with the user once it meant branches couldn't ask for the surveyor
+  that "Double King staff create estates" needs.)
 - **Approval re-checks** that the approver holds the role's permissions, that
   the tenant is active, and that no account has appeared for the email while
   the request waited. A lapsed request can't be approved
@@ -1647,6 +1647,57 @@ seeing the list.
 
 Proven red by removing each guard: requester-only cancel, own-branch only,
 the no-self-approval check, lapse, and the branch-scoped list.
+
+### Managing staff: list, change role, deactivate, reactivate
+
+`GET /api/portal/staff` (`portal.staff.invite` or `portal.staff.request`),
+`PUT /api/portal/staff/{userId}/role`, `POST .../{userId}/deactivate`
+`{ reason }` and `POST .../{userId}/reactivate` (`portal.staff.invite`,
+company-wide). `PortalStaffService`.
+
+- **The company check is the only wall.** `users` carries no RLS policy, so
+  `PortalStaffService.manageable` filtering on the caller's own `tenant_id` is
+  what stops another company's director managing your staff — proven: without
+  it, that was a 200. Another company's user is a 404, never a 403.
+- **A role change replaces every assignment with one**, under exactly the
+  invitation rules (`StaffRoleRules`, now shared by both services so they
+  can't drift). Old assignments are **hard-deleted**, not soft: the unique
+  constraint on `(user_id, role_id, scoped_branch_id)` counts soft-deleted
+  rows, so a soft delete would make a role impossible to give back. The audit
+  entry (`staff.role_changed`, old → new) is the history. This is also **the
+  fix for "a leftover `buyer` role silently loses the wall"**: changing the
+  person's role removes the buyer assignment.
+- **SI-4 both ways**: the caller must hold the new role's permissions *and*
+  every permission the person already holds (`CANNOT_MANAGE_STAFF_MEMBER`) — a
+  director can't be demoted by someone weaker. A leftover `buyer` role is
+  ignored for that comparison (its `client.*` slugs aren't power over the
+  company, and replacing it is the point).
+- **Never yourself** (`CANNOT_MANAGE_YOURSELF`), and **never the last active
+  company-wide Executive Director** (`LAST_EXECUTIVE_DIRECTOR`) — a company
+  must always keep someone who can manage it.
+- **Sessions end on a role change or deactivation** (refresh tokens revoked).
+  An already-issued access token rides out its 15 minutes, as everywhere
+  else — documented on the route, never described as instant.
+- Deactivation sets `DEACTIVATED` (login and refresh refuse it);
+  reactivation is `DEACTIVATED → ACTIVE` only, role untouched. Audit:
+  `staff.deactivated` (with the reason), `staff.reactivated`.
+
+Proven red by removing each guard: self, other company, outranking, last
+director, the branch-scoped list, and ending sessions.
+
+### Two loose ends settled
+
+- **Staff log in with `"role": "client"` — deliberately, not a gap.** The
+  frontend's `authService.ts` types `role` as `"client" | "super_admin"` and
+  gates every portal menu on `permissions`; its own comments say tenant staff
+  arrive as `"client"`. Don't add a staff role string without a frontend
+  change.
+- **A completed password reset verifies the email.** Using a code delivered
+  to the address proves the mailbox, so a `PENDING_VERIFICATION` account
+  becomes `ACTIVE` (and `email_verified_at` is set); `SUSPENDED`/`DEACTIVATED`
+  are never touched. This is how accounts created before invitations existed
+  (tenant creation's old random-password directors) get in: forgot-password,
+  then reset — they then also count as approvers. Proven red.
 
 ## SB-1: an estate's boundary must sit inside its state
 

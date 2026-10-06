@@ -16,7 +16,6 @@ import com.techcomfort.landvaultbackend.identity.internal.domain.UserRole;
 import com.techcomfort.landvaultbackend.identity.internal.enums.RoleScope;
 import com.techcomfort.landvaultbackend.identity.internal.enums.UserStatus;
 import com.techcomfort.landvaultbackend.identity.internal.exceptions.InvitationException;
-import com.techcomfort.landvaultbackend.identity.internal.repository.PermissionRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.RoleRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.StaffInvitationRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.UserRepository;
@@ -27,8 +26,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.security.core.GrantedAuthority;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -58,7 +55,8 @@ import java.util.stream.Collectors;
  *   <li>The token is hashed at rest, single-use, time-boxed; resending
  *       replaces it. Unknown, expired, revoked and used tokens get one answer.</li>
  *   <li>A branch manager <em>requests</em> an invitation into their own
- *       branch; nothing is sent until a company-wide approver approves it.</li>
+ *       branch; nothing is sent until a company-wide approver approves it.
+ *       The approver, not the requester, must hold the role's permissions.</li>
  * </ul>
  */
 @Slf4j
@@ -72,7 +70,6 @@ public class StaffInvitationService {
 
     private final StaffInvitationRepository invitations;
     private final RoleRepository roleRepository;
-    private final PermissionRepository permissionRepository;
     private final UserRepository userRepository;
     private final UserRoleRepository userRoleRepository;
     private final PasswordEncoder passwordEncoder;
@@ -81,6 +78,7 @@ public class StaffInvitationService {
     private final InvitationDeliveryService delivery;
     private final InvitationProperties properties;
     private final AuthService authService;
+    private final StaffRoleRules rules;
 
     // --- SI-1, SI-2, SI-4: invite ---
 
@@ -92,10 +90,10 @@ public class StaffInvitationService {
             throw new InvitationException.TenantNotActive();
         }
 
-        Role role = invitableRole(request.roleCode());
-        requireHoldsEverything(role);
+        Role role = rules.assignableRole(request.roleCode());
+        rules.requireCallerHolds(role);
 
-        String branchName = branchFor(role, request.branchId(), tenantId);
+        String branchName = rules.branchFor(role, request.branchId(), tenantId);
         String email = normalise(request.email());
         requireNoAccount(email);
         if (invitations.existsOpenFor(tenantId, email)) {
@@ -181,14 +179,14 @@ public class StaffInvitationService {
     public StaffInvitationDto request(CreateStaffInvitationRequest request) {
         TenantScope scope = currentScope();
         // Inviters invite directly — and must never request and then approve their own request.
-        if (scope.tenantId() == null || scope.branchId() == null || heldAuthorities().contains("portal.staff.invite")) {
+        if (scope.tenantId() == null || scope.branchId() == null || StaffRoleRules.heldAuthorities().contains("portal.staff.invite")) {
             throw new InvitationException.BranchScopeOnly();
         }
         UUID tenantId = scope.tenantId();
         if (!tenancyApi.isTenantActive(tenantId)) {
             throw new InvitationException.TenantNotActive();
         }
-        Role role = invitableRole(request.roleCode());
+        Role role = rules.assignableRole(request.roleCode());
         if (role.getScope() == RoleScope.COMPANY) {
             throw new InvitationException.ScopeMismatch(
                     "'" + role.getCode() + "' is company-wide, so only head office can invite one.");
@@ -197,7 +195,8 @@ public class StaffInvitationService {
             throw new InvitationException.ScopeMismatch(
                     "Requests are always for your own branch. Leave branchId out.");
         }
-        requireHoldsEverything(role);
+        // Deliberately no SI-4 check on the requester: asking grants nothing.
+        // The approver is checked at approval, which is where the grant happens.
         String branchName = tenancyApi.branchNameFor(scope.branchId(), tenantId)
                 .orElseThrow(InvitationException.BranchNotFound::new);
         String email = normalise(request.email());
@@ -244,8 +243,8 @@ public class StaffInvitationService {
         }
         Role role = roleRepository.findById(invitation.getRoleId())
                 .orElseThrow(() -> new IllegalStateException("Requested role no longer exists."));
-        // The approver is the one granting it now, so the rule applies to them too.
-        requireHoldsEverything(role);
+        // SI-4 for requests: the approver is the one granting it, so the rule applies here.
+        rules.requireCallerHolds(role);
         // An account may have appeared with that email while the request waited.
         requireNoAccount(invitation.getEmail());
 
@@ -454,12 +453,6 @@ public class StaffInvitationService {
 
     // --- rules ---
 
-    private Role invitableRole(String roleCode) {
-        return roleRepository.findByCode(roleCode.trim())
-                .filter(r -> r.getScope() != null)
-                .orElseThrow(() -> new InvitationException.RoleNotInvitable(roleCode));
-    }
-
     private StaffInvitation awaitingApproval(UUID invitationId, UUID tenantId) {
         StaffInvitation invitation = invitations.findByIdAndTenantId(invitationId, tenantId)
                 .orElseThrow(InvitationException.NotFound::new);
@@ -489,37 +482,6 @@ public class StaffInvitationService {
                     invitation.getFirstName() + " " + invitation.getLastName(), invitation.getEmail(),
                     invitation.getRoleName(), properties.reviewUrl(), invitation.getExpiresAt()));
         }
-    }
-
-    /** SI-4: the inviter must already hold every permission the role carries. */
-    private void requireHoldsEverything(Role role) {
-        Set<String> held = heldAuthorities();
-        List<String> carried = permissionRepository.findCodesByRoleIdIn(List.of(role.getId()));
-        if (!held.containsAll(carried)) {
-            throw new InvitationException.CannotGrant(role.getCode());
-        }
-    }
-
-    private static Set<String> heldAuthorities() {
-        return SecurityContextHolder.getContext().getAuthentication().getAuthorities().stream()
-                .map(GrantedAuthority::getAuthority)
-                .collect(Collectors.toSet());
-    }
-
-    /** The role's scope decides: a branch is required, forbidden or optional — and must be the company's own. */
-    private String branchFor(Role role, UUID branchId, UUID tenantId) {
-        if (role.getScope() == RoleScope.COMPANY && branchId != null) {
-            throw new InvitationException.ScopeMismatch(
-                    "'" + role.getCode() + "' is company-wide and can't be limited to a branch. Leave branchId out.");
-        }
-        if (role.getScope() == RoleScope.BRANCH && branchId == null) {
-            throw new InvitationException.ScopeMismatch(
-                    "'" + role.getCode() + "' runs a branch, so branchId is required.");
-        }
-        if (branchId == null) {
-            return null;
-        }
-        return tenancyApi.branchNameFor(branchId, tenantId).orElseThrow(InvitationException.BranchNotFound::new);
     }
 
     private void requireNoAccount(String email) {

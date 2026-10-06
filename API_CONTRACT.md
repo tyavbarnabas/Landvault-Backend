@@ -511,3 +511,14 @@ only. New statuses `awaiting_approval` and `rejected`; new fields
 `rejectionReason`. The frontend needs `portal.staff.request` in its permission
 list and an approval queue for the Executive Director.
 
+**Staff management**: `GET /api/portal/staff` → `[{ userId, firstName,
+lastName, email, phone, status, roles: [{ roleCode, roleName, branchId,
+branchName }], lastLoginAt, createdAt }]` (a branch manager sees their branch
+only). `PUT /api/portal/staff/{userId}/role` `{ roleCode, branchId? }`
+replaces all roles; `POST .../{userId}/deactivate` `{ reason }`;
+`POST .../{userId}/reactivate`. Codes: `CANNOT_MANAGE_YOURSELF`,
+`CANNOT_MANAGE_STAFF_MEMBER`, `LAST_EXECUTIVE_DIRECTOR`,
+`STAFF_ALREADY_DEACTIVATED`, `STAFF_NOT_DEACTIVATED`, `STAFF_NOT_FOUND`,
+plus the invitation role codes. Branch requests may now name any branch-level
+role (surveyor included); `CANNOT_GRANT_ROLE` comes at approval instead.
+

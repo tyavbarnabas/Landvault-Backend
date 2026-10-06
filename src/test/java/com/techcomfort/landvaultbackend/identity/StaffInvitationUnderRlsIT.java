@@ -382,8 +382,10 @@ class StaffInvitationUnderRlsIT {
         assertThat(requestInvite(manager, fresh(), "sales_manager", harmony).getBody())
                 .as("never another branch").contains("ROLE_SCOPE_MISMATCH");
         assertThat(requestInvite(manager, fresh(), "executive_director", null).getBody()).contains("ROLE_SCOPE_MISMATCH");
-        assertThat(requestInvite(manager, fresh(), "surveyor_project_manager", null).getBody())
-                .as("surveyors hold portal.estates.manage, which a branch manager doesn't").contains("CANNOT_GRANT_ROLE");
+        // Asking grants nothing, so a branch may ask for a surveyor; the approver is checked instead.
+        UUID surveyor = idOf(requestInvite(manager, fresh(), "surveyor_project_manager", null));
+        assertThat(post("/api/portal/staff/invitations/" + surveyor + "/approve", director, null).getStatusCode())
+                .isEqualTo(HttpStatus.OK);
         assertThat(requestInvite(manager, fresh(), "buyer", null).getBody()).contains("ROLE_NOT_INVITABLE");
         assertThat(requestInvite(director, fresh(), "sales_manager", null).getBody())
                 .as("head office invites directly").contains("INVITATION_REQUESTS_REQUIRE_BRANCH_SCOPE");
@@ -435,6 +437,133 @@ class StaffInvitationUnderRlsIT {
                 .getBody()).contains(ours).contains(toHarmony);
     }
 
+    // --- managing the staff a company has ---
+
+    @Test
+    void theStaffListShowsTheCompanyAndABranchManagerOnlyTheirBranch() {
+        staffToken(tenantId, "sales_manager", harmony);
+        String harmonyEmail = lastStaffEmail;
+        String manager = staffToken(tenantId, "branch_manager", doubleKing);
+        String managerEmail = lastStaffEmail;
+
+        String all = restTemplate.exchange("/api/portal/staff", HttpMethod.GET, entity(director, null), String.class).getBody();
+        assertThat(all).contains(directorEmail).contains(harmonyEmail).contains(managerEmail)
+                .contains("\"branchName\":\"Harmony\"");
+        String branch = restTemplate.exchange("/api/portal/staff", HttpMethod.GET, entity(manager, null), String.class).getBody();
+        assertThat(branch).contains(managerEmail).doesNotContain(harmonyEmail).doesNotContain(directorEmail);
+
+        String otherCompany = staffToken(tenant(), "executive_director", null);
+        assertThat(restTemplate.exchange("/api/portal/staff", HttpMethod.GET, entity(otherCompany, null), String.class)
+                .getBody()).doesNotContain(directorEmail);
+    }
+
+    /** One role replaces all — including a leftover buyer role — and the person's sessions end. */
+    @Test
+    void changingARoleReplacesEveryAssignmentAndEndsTheirSessions() {
+        staffToken(tenantId, "branch_manager", doubleKing);
+        String email = lastStaffEmail;
+        UUID userId = userIdOf(email);
+        execute("INSERT INTO user_roles (id, created_at, deleted, user_id, role_id) SELECT gen_random_uuid(), now(), false, '"
+                + userId + "', id FROM roles WHERE code = 'buyer'");
+
+        ResponseEntity<String> changed = changeRole(userId, "sales_manager", harmony);
+        assertThat(changed.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(queryString("SELECT string_agg(r.code || ':' || coalesce(ur.scoped_branch_id::text, 'company'), ',') "
+                + "FROM user_roles ur JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = '" + userId + "'"))
+                .isEqualTo("sales_manager:" + harmony);
+        assertThat(queryString("SELECT count(*) FROM refresh_tokens WHERE user_id = '" + userId + "' AND revoked_at IS NULL"))
+                .isEqualTo("0");
+        assertThat(queryString("SELECT detail FROM audit_log_entries WHERE action = 'staff.role_changed' AND target_id = '"
+                + userId + "'")).contains("branch_manager in branch 'Double King'").contains("buyer").contains("sales_manager");
+
+        assertThat(changeRole(userId, "sales_manager", harmony).getStatusCode()).as("same role again: a no-op").isEqualTo(HttpStatus.OK);
+        assertThat(queryString("SELECT count(*) FROM audit_log_entries WHERE action = 'staff.role_changed' AND target_id = '"
+                + userId + "'")).isEqualTo("1");
+        assertThat(changeRole(userId, "branch_manager", doubleKing).getStatusCode())
+                .as("a role once held can be given back").isEqualTo(HttpStatus.OK);
+    }
+
+    @Test
+    void roleChangesFollowTheSameRulesAsInvitations() {
+        staffToken(tenantId, "sales_manager", null);
+        UUID userId = userIdOf(lastStaffEmail);
+
+        assertThat(changeRole(userId, "branch_manager", null).getBody()).contains("ROLE_SCOPE_MISMATCH");
+        assertThat(changeRole(userId, "buyer", null).getBody()).contains("ROLE_NOT_INVITABLE");
+        UUID theirs = createBranch(staffToken(tenant(), "executive_director", null), "Theirs");
+        assertThat(changeRole(userId, "sales_manager", theirs).getBody()).contains("BRANCH_NOT_FOUND");
+        assertThat(changeRole(userIdOf(directorEmail), "sales_manager", null).getBody()).contains("CANNOT_MANAGE_YOURSELF");
+
+        String otherDirector = staffToken(tenant(), "executive_director", null);
+        assertThat(restTemplate.exchange("/api/portal/staff/" + userId + "/role", HttpMethod.PUT,
+                entity(otherDirector, "{\"roleCode\":\"legal_officer\"}"), String.class).getStatusCode())
+                .as("another company's staff don't exist to you").isEqualTo(HttpStatus.NOT_FOUND);
+        String manager = staffToken(tenantId, "branch_manager", doubleKing);
+        assertThat(restTemplate.exchange("/api/portal/staff/" + userId + "/role", HttpMethod.PUT,
+                entity(manager, "{\"roleCode\":\"legal_officer\"}"), String.class).getStatusCode())
+                .isEqualTo(HttpStatus.FORBIDDEN);
+        String narrowed = staffToken(tenantId, "executive_director", doubleKing);
+        assertThat(restTemplate.exchange("/api/portal/staff/" + userId + "/role", HttpMethod.PUT,
+                entity(narrowed, "{\"roleCode\":\"legal_officer\"}"), String.class).getBody())
+                .contains("STAFF_MANAGEMENT_REQUIRES_COMPANY_WIDE_SCOPE");
+    }
+
+    /** SI-4 the other way round: you can't touch someone who holds what you don't. */
+    @Test
+    void nobodyCanManageSomeoneHoldingPermissionsTheyLack() {
+        staffToken(tenantId, "legal_officer", null);
+        UUID userId = userIdOf(lastStaffEmail);
+        execute("INSERT INTO role_permissions (id, created_at, created_by, deleted, role_id, permission_id) "
+                + "SELECT gen_random_uuid(), now(), 'test', false, r.id, p.id FROM roles r, permissions p "
+                + "WHERE r.code = 'legal_officer' AND p.code = 'admin.audit.view'");
+        try {
+            assertThat(changeRole(userId, "sales_manager", null).getBody()).contains("CANNOT_MANAGE_STAFF_MEMBER");
+            assertThat(deactivate(userId).getBody()).contains("CANNOT_MANAGE_STAFF_MEMBER");
+        } finally {
+            execute("DELETE FROM role_permissions WHERE created_by = 'test'");
+        }
+    }
+
+    @Test
+    void aDeactivatedPersonCannotSignInUntilReactivated() {
+        staffToken(tenantId, "sales_manager", null);
+        String email = lastStaffEmail;
+        UUID userId = userIdOf(email);
+
+        assertThat(deactivate(userId).getBody()).contains("\"status\":\"deactivated\"");
+        assertThat(restTemplate.postForEntity("/api/auth/login", new LoginRequest(email, PASSWORD), String.class).getBody())
+                .contains("ACCOUNT_DEACTIVATED");
+        assertThat(queryString("SELECT count(*) FROM refresh_tokens WHERE user_id = '" + userId + "' AND revoked_at IS NULL"))
+                .isEqualTo("0");
+        assertThat(deactivate(userId).getBody()).contains("STAFF_ALREADY_DEACTIVATED");
+        assertThat(post("/api/portal/staff/" + userId + "/deactivate", director, "{\"reason\":\"\"}").getStatusCode())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
+
+        assertThat(post("/api/portal/staff/" + userId + "/reactivate", director, null).getBody()).contains("\"status\":\"active\"");
+        assertThat(login(email)).isNotBlank();
+        assertThat(post("/api/portal/staff/" + userId + "/reactivate", director, null).getBody()).contains("STAFF_NOT_DEACTIVATED");
+    }
+
+    /** A company must always keep someone who can manage it. */
+    @Test
+    void theLastActiveExecutiveDirectorCannotBeRemovedOrDemoted() {
+        staffToken(tenantId, "executive_director", null);
+        String secondEmail = lastStaffEmail;
+        UUID second = userIdOf(secondEmail);
+        execute("UPDATE users SET status = 'ACTIVE' WHERE id = '" + second + "'");
+
+        // Two active directors: either may step the other down.
+        assertThat(deactivate(second).getStatusCode()).isEqualTo(HttpStatus.OK);
+        post("/api/portal/staff/" + second + "/reactivate", director, null);
+
+        // If the caller isn't an active director themselves, the target is the last one.
+        execute("UPDATE users SET status = 'PENDING_VERIFICATION' WHERE lower(email) = lower('" + directorEmail + "')");
+        assertThat(deactivate(second).getBody()).contains("LAST_EXECUTIVE_DIRECTOR");
+        assertThat(changeRole(second, "sales_manager", null).getBody()).contains("LAST_EXECUTIVE_DIRECTOR");
+        assertThat(changeRole(second, "executive_director", null).getStatusCode())
+                .as("staying a company-wide director is fine").isEqualTo(HttpStatus.OK);
+    }
+
     // --- fixtures ---
 
     private ResponseEntity<String> invite(String token, String email, String role, UUID branch) {
@@ -475,6 +604,19 @@ class StaffInvitationUnderRlsIT {
         assertThat(links).as("an invitation was delivered").isNotEmpty();
         String message = links.getLast();
         return message.substring(message.indexOf("link=") + 5).trim();
+    }
+
+    private ResponseEntity<String> changeRole(UUID userId, String role, UUID branch) {
+        String body = "{\"roleCode\":\"" + role + "\"" + (branch == null ? "" : ",\"branchId\":\"" + branch + "\"") + "}";
+        return restTemplate.exchange("/api/portal/staff/" + userId + "/role", HttpMethod.PUT, entity(director, body), String.class);
+    }
+
+    private ResponseEntity<String> deactivate(UUID userId) {
+        return post("/api/portal/staff/" + userId + "/deactivate", director, "{\"reason\":\"Left the company.\"}");
+    }
+
+    private static UUID userIdOf(String email) {
+        return UUID.fromString(queryString("SELECT id FROM users WHERE lower(email) = lower('" + email + "')"));
     }
 
     private List<String> links() {

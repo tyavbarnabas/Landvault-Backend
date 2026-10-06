@@ -2,6 +2,7 @@ package com.techcomfort.landvaultbackend.identity.internal.exceptions;
 
 import com.techcomfort.landvaultbackend.common.ErrorResponse;
 import com.techcomfort.landvaultbackend.identity.internal.controllers.InvitationAcceptController;
+import com.techcomfort.landvaultbackend.identity.internal.controllers.PortalStaffController;
 import com.techcomfort.landvaultbackend.identity.internal.controllers.PortalStaffInvitationController;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -12,8 +13,13 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-/** Turns invitation refusals into AGENTS.md's {message, code, fieldErrors} body. */
-@RestControllerAdvice(assignableTypes = {PortalStaffInvitationController.class, InvitationAcceptController.class})
+/**
+ * Turns invitation and staff-management refusals into AGENTS.md's
+ * {message, code, fieldErrors} body. Staff management shares the role rules,
+ * so it shares their codes.
+ */
+@RestControllerAdvice(assignableTypes = {PortalStaffInvitationController.class, InvitationAcceptController.class,
+        PortalStaffController.class})
 public class InvitationExceptionHandler {
 
     @ExceptionHandler(InvitationException.class)
@@ -38,6 +44,23 @@ public class InvitationExceptionHandler {
             case InvitationException.ResendLimitReached e -> body(HttpStatus.TOO_MANY_REQUESTS, e, "INVITATION_RESEND_LIMIT_REACHED");
             default -> body(HttpStatus.BAD_REQUEST, ex, "INVITATION_REFUSED");
         };
+    }
+
+    @ExceptionHandler(StaffException.class)
+    public ResponseEntity<ErrorResponse> handleStaff(StaffException ex) {
+        HttpStatus status;
+        String code;
+        switch (ex) {
+            case StaffException.NotFound e -> { status = HttpStatus.NOT_FOUND; code = "STAFF_NOT_FOUND"; }
+            case StaffException.CompanyWideOnly e -> { status = HttpStatus.FORBIDDEN; code = "STAFF_MANAGEMENT_REQUIRES_COMPANY_WIDE_SCOPE"; }
+            case StaffException.Yourself e -> { status = HttpStatus.BAD_REQUEST; code = "CANNOT_MANAGE_YOURSELF"; }
+            case StaffException.Outranks e -> { status = HttpStatus.FORBIDDEN; code = "CANNOT_MANAGE_STAFF_MEMBER"; }
+            case StaffException.LastExecutive e -> { status = HttpStatus.CONFLICT; code = "LAST_EXECUTIVE_DIRECTOR"; }
+            case StaffException.AlreadyDeactivated e -> { status = HttpStatus.CONFLICT; code = "STAFF_ALREADY_DEACTIVATED"; }
+            case StaffException.NotDeactivated e -> { status = HttpStatus.CONFLICT; code = "STAFF_NOT_DEACTIVATED"; }
+            default -> { status = HttpStatus.BAD_REQUEST; code = "STAFF_CHANGE_REFUSED"; }
+        }
+        return ResponseEntity.status(status).body(ErrorResponse.of(ex.getMessage(), code));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

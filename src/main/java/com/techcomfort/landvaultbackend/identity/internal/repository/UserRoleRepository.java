@@ -3,6 +3,7 @@ package com.techcomfort.landvaultbackend.identity.internal.repository;
 import com.techcomfort.landvaultbackend.identity.internal.domain.UserRole;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 
@@ -17,6 +18,8 @@ import java.util.UUID;
 public interface UserRoleRepository extends JpaRepository<UserRole, UUID> {
 
     List<UserRole> findByUserId(UUID userId);
+
+    List<UserRole> findByUserIdIn(Collection<UUID> userIds);
 
     // Used by SuperAdminBootstrap to check "does anyone already hold this
     // role" before creating a new account — a soft-deleted assignment is

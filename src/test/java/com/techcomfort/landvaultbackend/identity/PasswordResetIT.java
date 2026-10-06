@@ -269,6 +269,23 @@ class PasswordResetIT {
                 .isEqualTo(HttpStatus.UNAUTHORIZED);
     }
 
+    /** Using a code sent to the address proves the mailbox — but a reset never undoes a suspension. */
+    @Test
+    void aCompletedResetVerifiesAPendingAccountButNeverReactivatesASuspendedOne() {
+        String pending = register();
+        assertThat(singleString("SELECT status FROM users WHERE email = '" + pending + "'")).isEqualTo("PENDING_VERIFICATION");
+        requestCode(pending);
+        resetPassword(pending, onlyDeliveredCode(), NEW_PASSWORD);
+        assertThat(singleString("SELECT status || ':' || (email_verified_at IS NOT NULL) FROM users WHERE email = '"
+                + pending + "'")).isEqualTo("ACTIVE:true");
+
+        String suspended = register();
+        execute("UPDATE users SET status = 'SUSPENDED' WHERE email = '" + suspended + "'");
+        requestCode(suspended);
+        resetPassword(suspended, deliveredCodes().getLast(), NEW_PASSWORD);
+        assertThat(singleString("SELECT status FROM users WHERE email = '" + suspended + "'")).isEqualTo("SUSPENDED");
+    }
+
     @Test
     void anAuditEntryIsWrittenOnSuccessfulReset() {
         String email = register();
@@ -377,6 +394,15 @@ class PasswordResetIT {
 
     private static long countRows(String table, String whereClause) {
         return singleLong("SELECT count(*) FROM " + table + " WHERE " + whereClause);
+    }
+
+    private static String singleString(String sql) {
+        try (Connection c = connection(); Statement st = c.createStatement(); ResultSet rs = st.executeQuery(sql)) {
+            rs.next();
+            return rs.getString(1);
+        } catch (SQLException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private static long singleLong(String sql) {

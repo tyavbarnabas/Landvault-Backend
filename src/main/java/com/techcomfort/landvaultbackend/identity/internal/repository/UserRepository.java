@@ -17,6 +17,8 @@ public interface UserRepository extends JpaRepository<User, UUID> {
 
     boolean existsByEmailIgnoreCase(String email);
 
+    List<User> findByTenantIdOrderByCreatedAtAsc(UUID tenantId);
+
     /** Active company-wide holders of a role in one tenant — who to ask to approve an invitation request. */
     @Query("SELECT DISTINCT u FROM UserRole ur JOIN ur.user u, Role r WHERE r.id = ur.roleId "
             + "AND u.tenantId = :tenantId AND r.code = :roleCode AND ur.scopedBranchId IS NULL AND u.status = :status")

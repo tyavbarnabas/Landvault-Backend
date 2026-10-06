@@ -433,6 +433,15 @@ public class AuthService {
         }
 
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
+        // Using a code delivered to this address proves control of it — the
+        // same thing email verification proves. A pending account becomes
+        // ACTIVE; a suspended or deactivated one is left exactly as it is.
+        if (user.getEmailVerifiedAt() == null) {
+            user.setEmailVerifiedAt(Instant.now());
+        }
+        if (user.getStatus() == UserStatus.PENDING_VERIFICATION) {
+            user.setStatus(UserStatus.ACTIVE);
+        }
         userRepository.save(user);
 
         // Terminal: a used code can never be reused, even while it would
@@ -597,6 +606,12 @@ public class AuthService {
                 .toList();
 
         return new RoleAssignmentContext(permissions, platformStaff, superAdmin, roleClaims);
+    }
+
+    /** Ends every session a user has (refresh tokens); access tokens ride out their 15 minutes. */
+    @Transactional
+    public void revokeAllSessions(UUID userId) {
+        revokeTokenFamily(userId);
     }
 
     private void revokeTokenFamily(UUID userId) {
