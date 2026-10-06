@@ -1,5 +1,6 @@
 package com.techcomfort.landvaultbackend.conflicts;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -49,4 +50,12 @@ public interface ConflictDetectionApi {
      * platform-scope only, so a tenant-scoped read would always say no.
      */
     boolean hasConflictHistory(UUID plotId);
+
+    /**
+     * The owning company's own view of every conflict on one estate — estate
+     * and plot overlaps, live and closed — never naming the other party.
+     * Take one before and one after a boundary change and compare them with
+     * {@link ConflictChanges#between}.
+     */
+    List<ConflictItem> conflictsOf(UUID estateId, UUID tenantId);
 }

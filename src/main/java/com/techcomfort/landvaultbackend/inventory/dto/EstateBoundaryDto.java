@@ -1,5 +1,6 @@
 package com.techcomfort.landvaultbackend.inventory.dto;
 
+import com.techcomfort.landvaultbackend.conflicts.ConflictChanges;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.math.BigDecimal;
@@ -24,6 +25,9 @@ public record EstateBoundaryDto(
         String blockReason,
 
         @Schema(description = "Overlaps with your own company's estates. These warn but never block.")
-        int warningConflictCount
+        int warningConflictCount,
+        @Schema(description = "Which conflicts this change raised, resolved, left awaiting review, or left "
+                + "open — your own side only; the other party is never named.")
+        ConflictChanges conflictChanges
 ) {
 }

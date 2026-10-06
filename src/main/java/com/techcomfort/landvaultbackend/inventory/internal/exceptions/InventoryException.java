@@ -75,7 +75,7 @@ public abstract class InventoryException extends RuntimeException {
 
         @Override
         public String getMessage() {
-            return "This estate already has a boundary. Changing an existing boundary isn't supported.";
+            return "This estate already has a boundary. To change it, correct it with PUT .../boundary.";
         }
     }
 
@@ -149,6 +149,27 @@ public abstract class InventoryException extends RuntimeException {
         @Override
         public String getMessage() {
             return "This estate belongs to the company, not your branch. Branch staff can view it but not change it.";
+        }
+    }
+
+    /** A request that conflicts with the record's current state (409), with its own code. */
+    public static class StateConflict extends InventoryException {
+
+        private final String code;
+        private final String detail;
+
+        public StateConflict(String code, String detail) {
+            this.code = code;
+            this.detail = detail;
+        }
+
+        public String code() {
+            return code;
+        }
+
+        @Override
+        public String getMessage() {
+            return detail;
         }
     }
 

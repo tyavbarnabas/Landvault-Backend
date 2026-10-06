@@ -3,6 +3,7 @@ package com.techcomfort.landvaultbackend.tenancy.internal.exceptions;
 import com.techcomfort.landvaultbackend.common.DuplicateEmailException;
 import com.techcomfort.landvaultbackend.common.ErrorResponse;
 import com.techcomfort.landvaultbackend.tenancy.internal.controllers.AdminTenantController;
+import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -34,13 +35,35 @@ public class TenancyExceptionHandler {
     // Defense-in-depth for the concurrent-create race the proactive
     // existsByRcNumberIgnoreCase check alone can't close — see
     // TenancyException.DuplicateRcNumber and changeset 027. Specifically
-    // organizations.rc_number, not a catch-all: the primary contact's
-    // email racing a concurrent write throws DuplicateEmailException
-    // instead (see below), never reaches here.
+    /**
+     * A database uniqueness clash during a tenant write. The constraint is
+     * read rather than assumed — this used to report every clash as a
+     * duplicate RC number, which is right only while RC number is the one
+     * unique field a tenant write can hit, and would send the user back to
+     * the wrong field for any other. Unrecognised constraints say so plainly.
+     */
     @ExceptionHandler(DataIntegrityViolationException.class)
-    public ResponseEntity<ErrorResponse> handleDataIntegrityViolation() {
-        return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(ErrorResponse.of("A tenant with this RC number is already registered.", "RC_NUMBER_ALREADY_REGISTERED"));
+    public ResponseEntity<ErrorResponse> handleDataIntegrityViolation(DataIntegrityViolationException ex) {
+        String constraint = constraintNameOf(ex);
+        return switch (constraint == null ? "" : constraint) {
+            case "uq_organizations_rc_number" -> ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(ErrorResponse.of("A tenant with this RC number is already registered.", "RC_NUMBER_ALREADY_REGISTERED"));
+            // The first Executive Director's email, racing another write.
+            case "idx_users_email_lower", "uq_staff_invitations_open_email" -> ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(ErrorResponse.of("An account with this email already exists.", "EMAIL_ALREADY_REGISTERED"));
+            default -> ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(ErrorResponse.of("That change conflicts with existing data"
+                            + (constraint == null ? "." : " (" + constraint + ")."), "DUPLICATE_RECORD"));
+        };
+    }
+
+    private static String constraintNameOf(DataIntegrityViolationException ex) {
+        for (Throwable cause = ex.getCause(); cause != null; cause = cause.getCause()) {
+            if (cause instanceof ConstraintViolationException violation) {
+                return violation.getConstraintName();
+            }
+        }
+        return null;
     }
 
     // Thrown by identity's TenantStaffAccountListener when the tenant's

@@ -1,5 +1,6 @@
 package com.techcomfort.landvaultbackend.inventory.dto;
 
+import com.techcomfort.landvaultbackend.conflicts.ConflictChanges;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.math.BigDecimal;
@@ -25,6 +26,9 @@ public record PlotBoundaryDto(
 
         @Schema(description = "Overlapping plot pairs in this estate now. A pair that no longer overlaps "
                 + "resolves on its own; a new one is recorded for review.")
-        int plotOverlapsInEstateAfter
+        int plotOverlapsInEstateAfter,
+        @Schema(description = "Which conflicts this change raised, resolved, left awaiting review, or left "
+                + "open — your own side only; the other party is never named.")
+        ConflictChanges conflictChanges
 ) {
 }

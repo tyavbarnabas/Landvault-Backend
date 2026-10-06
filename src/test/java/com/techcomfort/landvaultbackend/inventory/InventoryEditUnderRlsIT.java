@@ -391,11 +391,17 @@ class InventoryEditUnderRlsIT {
         assertThat(overlapping.plotOverlapsInEstateBefore()).isZero();
         assertThat(overlapping.plotOverlapsInEstateAfter()).as("a correction may also create a conflict").isEqualTo(1);
         assertThat(conflictCount("OPEN")).isEqualTo(1);
+        assertThat(overlapping.conflictChanges().raised()).as("itemised, not just counted").singleElement()
+                .satisfies(c -> assertThat(c.conflictType()).isEqualTo("plot_overlap"));
+        assertThat(overlapping.conflictChanges().resolved()).isEmpty();
 
         PlotBoundaryDto fixed = putPlotBoundary(second, square(0.005, 0.005, 0.002)).getBody();
         assertThat(fixed.plotOverlapsInEstateBefore()).isEqualTo(1);
         assertThat(fixed.plotOverlapsInEstateAfter()).isZero();
         assertThat(conflictCount("AUTO_RESOLVED")).as("resolved, and the record kept").isEqualTo(1);
+        assertThat(fixed.conflictChanges().resolved()).singleElement()
+                .satisfies(c -> assertThat(c.status()).isEqualTo("auto_resolved"));
+        assertThat(fixed.conflictChanges().raised()).isEmpty();
     }
 
     @Test
@@ -666,6 +672,30 @@ class InventoryEditUnderRlsIT {
                 .isEqualTo("500.00/true/true");
         assertThat(queryString("SELECT count(*) FROM audit_log_entries WHERE action = 'estate.plots_imported' "
                 + "AND target_id = '" + estateId + "'")).isEqualTo("1");
+    }
+
+    /** FI-6: a surveyor's own tier codes ("zone A") mapped to tiers, beside label/size matching. */
+    @Test
+    void aTierMappingTurnsTheFilesOwnValuesIntoTiers() {
+        UUID large = landTier("500.00", "35000000", Currency.NGN, "Large 500");
+        String file = collection(
+                feature("60", "A", "zone-a", null, square(0.001, 0.001, 0.001)),
+                feature("61", "A", "ZONE-B", null, square(0.003, 0.001, 0.001)),
+                feature("62", "A", "Standard 250", null, square(0.005, 0.001, 0.001)));
+        String mapping = "{\"Zone-A\": \"" + large + "\", \"zone-b\": \"" + tierId + "\"}";
+
+        PlotImportReportDto report = upload("preview", file, seller.token(), PlotImportReportDto.class, mapping).getBody();
+        assertThat(report.canImport()).as(String.valueOf(report.errors())).isTrue();
+        assertThat(report.plotsPerTier()).as("mapped values, and an unmapped label still matching")
+                .isEqualTo(Map.of("Large 500", 1, "Standard 250", 2));
+
+        assertThat(upload("preview", file, seller.token(), String.class, "{\"zone-a\": \"" + UUID.randomUUID() + "\"}")
+                .getBody()).as("a tier that isn't on this estate").contains("isn't on this estate");
+        assertThat(upload("preview", file, seller.token(), String.class, "not json").getStatusCode())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(upload("preview", file, seller.token(), PlotImportReportDto.class).getBody().errors())
+                .as("without the mapping the codes match nothing").extracting(PlotImportIssueDto::code)
+                .contains("UNKNOWN_TIER");
     }
 
     /** Overlaps warn and are recorded for review; they never stop an import. */
@@ -1116,7 +1146,14 @@ class InventoryEditUnderRlsIT {
     }
 
     private <T> ResponseEntity<T> upload(String action, String geojson, String token, Class<T> type) {
+        return upload(action, geojson, token, type, null);
+    }
+
+    private <T> ResponseEntity<T> upload(String action, String geojson, String token, Class<T> type, String tierMapping) {
         MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+        if (tierMapping != null) {
+            body.add("tierMapping", tierMapping);
+        }
         body.add("file", new ByteArrayResource(geojson.getBytes(StandardCharsets.UTF_8)) {
             @Override
             public String getFilename() {

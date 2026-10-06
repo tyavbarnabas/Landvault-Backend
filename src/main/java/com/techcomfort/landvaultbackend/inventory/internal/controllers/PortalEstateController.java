@@ -54,6 +54,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import com.techcomfort.landvaultbackend.common.OpenApiConfig;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
@@ -530,7 +531,8 @@ public class PortalEstateController {
                     A preview is **not a promise**: the import checks everything again.
 
                     Which property carries what is configurable; the defaults match the template. \
-                    `tier` matches a tier's label, or a land tier's size in sqm. Every imported \
+                    `tier` matches a tier's label, or a land tier's size in sqm — or, with \
+                    `tierMapping`, any value you map to a tier id (e.g. `zone = A` → Premium). Every imported \
                     plot gets `status` (`available-dev` or `available-inv`).""")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "The report; `canImport` says whether the import would proceed"),
@@ -546,9 +548,13 @@ public class PortalEstateController {
             @RequestParam(defaultValue = "block") String blockProperty,
             @RequestParam(defaultValue = "tier") String tierProperty,
             @RequestParam(defaultValue = "corner") String cornerProperty,
-            @RequestParam(defaultValue = "available-dev") String status) throws IOException {
+            @RequestParam(defaultValue = "available-dev") String status,
+            @Parameter(description = "Optional JSON object from the file's tier values to tier ids, for files "
+                    + "that don't use the estate's labels or sizes: {\"A\": \"<tier id>\", \"B\": \"<tier id>\"}. "
+                    + "Values not in it still match by label or size.")
+            @RequestParam(required = false) String tierMapping) throws IOException {
         return ResponseEntity.ok(importService.preview(id, file.getBytes(), new PlotImportService.Options(
-                plotNumberProperty, blockProperty, tierProperty, cornerProperty, status)));
+                plotNumberProperty, blockProperty, tierProperty, cornerProperty, status, tierMapping)));
     }
 
     @Operation(summary = "Import plots from a file — all or nothing",
@@ -573,9 +579,13 @@ public class PortalEstateController {
             @RequestParam(defaultValue = "block") String blockProperty,
             @RequestParam(defaultValue = "tier") String tierProperty,
             @RequestParam(defaultValue = "corner") String cornerProperty,
-            @RequestParam(defaultValue = "available-dev") String status) throws IOException {
+            @RequestParam(defaultValue = "available-dev") String status,
+            @Parameter(description = "Optional JSON object from the file's tier values to tier ids, for files "
+                    + "that don't use the estate's labels or sizes: {\"A\": \"<tier id>\", \"B\": \"<tier id>\"}. "
+                    + "Values not in it still match by label or size.")
+            @RequestParam(required = false) String tierMapping) throws IOException {
         return ResponseEntity.ok(importService.importPlots(id, file.getBytes(), file.getOriginalFilename(),
-                new PlotImportService.Options(plotNumberProperty, blockProperty, tierProperty, cornerProperty, status)));
+                new PlotImportService.Options(plotNumberProperty, blockProperty, tierProperty, cornerProperty, status, tierMapping)));
     }
 
     @Operation(summary = "Withhold a plot, or return it to the market",

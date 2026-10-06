@@ -576,6 +576,16 @@ next time a listener/service writes to a uniquely-constrained column: a
 for every possible constraint violation will mislabel every collision
 except the one it was written for.
 
+**`TenancyExceptionHandler` now reads the constraint name** (2026-10-06,
+raised by the frontend): `uq_organizations_rc_number` →
+`RC_NUMBER_ALREADY_REGISTERED`; `idx_users_email_lower` or
+`uq_staff_invitations_open_email` (the first director's invitation, since
+SI-3) → `EMAIL_ALREADY_REGISTERED`; anything else → `DUPLICATE_RECORD` naming
+the constraint. It used to call every clash an RC duplicate, which sent the
+tenant wizard back to the RC field for the wrong reason. Same pattern as
+`InventoryExceptionHandler`; `TenancyExceptionHandlerTest` pins it (red with
+the old behaviour).
+
 ## The verification reviewer's identity comes from the authenticated caller, never the request body
 
 `VerificationDecisionRequest` (the body of `POST /api/admin/tenants/{id}/verification-decision`)
@@ -1684,6 +1694,33 @@ company-wide). `PortalStaffService`.
 
 Proven red by removing each guard: self, other company, outranking, last
 director, the branch-scoped list, and ending sessions.
+
+### Roles: seeded today, company-made later — and permissions are always seeded
+
+`GET /api/portal/roles` (`portal.staff.invite` or `portal.staff.request`)
+lists every role a tenant may assign — `{ code, name, description, scope,
+permissions, canGrant, custom }` — so the portal never hard-codes them.
+`canGrant` is whether the *caller* holds every permission the role carries
+(the SI-4 rule, computed by the same `StaffRoleRules` that enforces it);
+a branch manager may still *request* a role they can't grant.
+
+**Decided with the user (2026-10-06): companies should eventually create
+their own roles, but not yet.** Two layers, deliberately different:
+
+- **Permissions are always seeded.** A slug means something only because code
+  checks it; a user-created `portal.payments.approve` that nothing checks
+  would look like access control and do nothing — the same fabrication the
+  `otp_codes.purpose` CHECK refuses.
+- **Roles are just bundles of permissions**, so company-made roles are safe
+  in principle. Not built now because only five `portal.*` permissions exist,
+  so a custom role could barely differ from a seeded one. Build it with the
+  first module (finance, sales, documents) that adds meaningful permissions.
+  The intended shape: a tenant-scoped role (`roles` gains a nullable
+  `tenant_id`, RLS-policied), a `portal.roles.manage` permission for the
+  Executive Director, `portal.*` permissions only, SI-4 on the role's
+  contents, no deleting a role someone holds, edits take effect at holders'
+  next sign-in, all audited. `custom` on the DTO (from `roles.system_role`)
+  is already there for it.
 
 ### Two loose ends settled
 
@@ -3006,11 +3043,11 @@ the judgement they *are* entitled to make.
 **For plots, this path is now reachable through HTTP** (IE-9: correcting a
 plot boundary re-runs `detectForEstatePlots`, and
 `InventoryEditUnderRlsIT.aCorrectionCanCreateAnOverlapAndAnotherCanClearIt`
-proves a plot conflict auto-resolves end to end). **For estates it is still
-unreachable**: an estate boundary can be added once (BG-1's add-boundary
-route) but never changed, so an estate-level conflict cannot clear through a
-correction yet — whoever builds estate boundary correction must call
-`ConflictDetectionApi.detectForEstateBoundary` from it.
+proves a plot conflict auto-resolves end to end). **For estates it is
+reachable too since FP-2's boundary correction** (`PUT .../boundary`), which
+calls `detectForEstateBoundary`;
+`EstateBoundaryCorrectionUnderRlsIT.aCrossCompanyOverlapFromACorrectionBlocksAndOnlyAHumanClearsIt`
+proves a cleared HIGH conflict stays blocking until a human closes it.
 `correctingTheGeometryAutoResolvesTheConflictAndKeepsTheRecord` exercises
 it by mutating geometry in SQL and invoking the API directly, so the logic
 is genuinely tested rather than shipped on a promise.
@@ -3636,6 +3673,15 @@ none), and an `instructions` array (a GeoJSON foreign member, ignored by GIS
 tools) stating EPSG:4326 and the property names. The IT proves it previews
 clean and imports as downloaded.
 
+**Tier mapping (FI-6 follow-up)**: an optional `tierMapping` form field — a
+JSON object from the file's own values to tier ids,
+`{"A": "<tier id>", "B": "<tier id>"}` — for files whose tier column uses a
+surveyor's codes rather than the estate's labels or sizes. Keys match ignoring
+case and spaces; values not in the mapping still match by label or size; a
+mapped retired tier is still `TIER_RETIRED`. A malformed mapping, or one
+pointing at another estate's tier, is a 400 for the whole request — one
+mistake in the request, not one per plot. Proven red.
+
 **Not built**: a per-feature size override for unit-type tiers, and a
 per-feature status. Both are one property each if needed.
 
@@ -3702,14 +3748,15 @@ The rule now, in one place (`PortalEstateService.expectedPropertyType`):
   before this rule may still disagree (the dev database has one, from the
   walkthrough that found it); nothing corrects them automatically.
 
-### Conflict copy no longer promises an estate boundary correction
+### Conflict copy matches what the portal can actually do
 
-Estate-level guidance used to say "correcting the coordinates clears this" /
-"a correction to the boundary is itself reviewed". An estate boundary cannot
-be changed from the portal at all, so that sent developers looking for a
-control that doesn't exist (caught in the BG-1 walkthrough). Estate messages
-now say to contact support; the *plot* message keeps "correcting the plot
-coordinates clears this automatically", which IE-9 made true.
+Estate-level guidance once promised a correction the portal didn't offer
+(caught in the BG-1 walkthrough), so it said "contact support". Since FP-2,
+estate boundaries can be corrected, so the copy says so again — carefully:
+a **cross-company** conflict says "correct it — our team reviews the
+correction before publication can resume", never that a correction clears
+it (that would teach the shaving exploit); a **same-company** one says
+correcting it clears it, which is true. The plot message is unchanged.
 
 ## No boundary, no listing (BG-1) — and no grandfathering
 
@@ -3767,9 +3814,8 @@ can set an estate up before the survey is ready) and add this route, rather
 than make it required at creation.
 
 - **Only when there is no boundary yet** (409 `BOUNDARY_ALREADY_SET`).
-  *Changing* an existing boundary is a different operation (every plot and
-  every overlap it used to satisfy would need re-checking) and stays out of
-  scope, along with extension — adjacent land is a new estate.
+  *Changing* an existing one is its own route — see "Correcting an estate
+  boundary" below.
 - **Every plot that already has a boundary must sit inside the new one**,
   checked in one statement for the whole estate (`GeometryCalculator.plotsOutside`),
   never per plot. Refused with `PLOT_OUTSIDE_ESTATE` naming each plot
@@ -3789,6 +3835,85 @@ hole. `MarketplaceIT.anEstateWithNoBoundaryCannotBePublishedAndSaysWhy` and
 `aLiveEstateWithoutABoundaryLeavesTheFeedAndReturnsWhenOneIsAdded` were each
 proven red by removing their half of the rule (the endpoint check, the view
 term).
+
+## Correcting an estate boundary (FP-2): option C
+
+`PUT /api/portal/estates/{id}/boundary` `{ footprint, reason }`
+(`portal.estates.manage`), `GET .../boundary-changes` (`portal.estates.view`),
+`POST .../boundary-changes/{changeId}/withdraw`; for Super Admins
+`GET /api/admin/boundary-changes?status=pending`, `POST .../{id}/approve`
+`{ note? }`, `POST .../{id}/reject` `{ note }` (`admin.marketplace.conflicts`).
+`EstateBoundaryCorrectionService`, changeset **069**.
+
+**Decided with the user — option C**: a correction applies at once **unless
+the estate is published and more than 5% of its land changes**
+(`landvault.estates.boundary-correction.review-threshold-pct`), in which case
+it waits for a Super Admin and the current boundary stays live (202). The
+reasoning: real survey corrections are small; a big change to a live listing
+is exactly what a human should see before buyers do — and it's the one case
+detection can't police, because a boundary moved onto land *no other company
+has listed* raises no conflict. Option A (never review) left that open;
+option B (review every change to a published estate) queued trivial fixes.
+
+- **"Changed" is the symmetric difference** — land added plus land removed,
+  as a share of the old area (`GeometryCalculator.changedArea`, geography
+  cast) — so a boundary that slides sideways counts even if its area doesn't.
+  An area comparison alone would wave a relocation through.
+- **Same checks as adding one**: inside the declared state, and every mapped
+  plot still inside (`PLOT_OUTSIDE_ESTATE` names them). **Approval re-checks
+  both**, because a plot can be mapped near the edge while a request waits —
+  proven red.
+- **Applying re-runs `detectForEstateBoundary`**, so CD-9's rules finally
+  reach estates: a same-company overlap that clears auto-resolves; a
+  cross-company one that clears gets `geometry_cleared_at` and **stays
+  blocking until a Super Admin dismisses it** (the shaving defence); a new
+  cross-company overlap blocks publication. Never names the other company.
+- **One pending correction per estate** (partial unique index, plus a
+  service check with its own code `BOUNDARY_CHANGE_PENDING`); withdrawing
+  frees it. `BOUNDARY_UNCHANGED` for an identical shape, `BOUNDARY_NOT_SET`
+  when there's nothing to correct (use `POST .../boundary`).
+- **History, never overwrite**: every correction is an
+  `estate_boundary_changes` row with both shapes (GiST-indexed, as every
+  geometry column must be), status `APPLIED` / `PENDING` / `APPROVED` /
+  `REJECTED` / `WITHDRAWN`, the reason, and who decided. RLS-policied in the
+  same changeset (tenant + branch, platform for reviewers) — not deferred.
+- Audit: `estate.boundary_corrected`, `estate.boundary_change_requested`,
+  `estate.boundary_change_approved`, `estate.boundary_change_rejected`,
+  `estate.boundary_change_withdrawn`, each with old/new area and % changed.
+- **No notification** reaches a reviewer yet — pending corrections sit in the
+  admin queue. Worth an email (like invitation approval) once someone relies
+  on it.
+
+Proven red: the threshold, published-only review, the approval re-check, and
+re-running detection.
+
+### Itemised conflicts: what a boundary change raised and cleared
+
+Every route that changes a boundary — `POST .../boundary` (add), `PUT
+.../boundary` (estate correction, and its approval), `PUT
+.../plots/{plotId}/boundary` (IE-9) — now returns `conflictChanges`:
+`raised`, `resolved`, `awaitingReview` (overlap gone, but a cross-company
+conflict needs a person to close it — still blocking), and `stillOpen`.
+Counts alone (`plotOverlapsInEstateBefore/After`, `warningConflictCount`)
+couldn't tell a developer *which* overlap cleared, which the frontend raised.
+
+- Built from **two snapshots of the tenant's own view**
+  (`ConflictDetectionApi.conflictsOf`, which reads through
+  `landvault_tenant_estate_conflicts` — the CD-11 function), compared by
+  `ConflictChanges.between`. So the other company is never named, by
+  construction: nothing in a snapshot could name it.
+- **The "before" snapshot is taken against current state**: IE-9 already
+  re-runs plot detection first, so its snapshot comes after that; the estate
+  routes snapshot before the footprint is swapped.
+- `ConflictItem` / `ConflictChanges` live in the conflicts module's **base
+  package**, not `conflicts.dto`: `dto` packages aren't Modulith named
+  interfaces (the `identity.dto` finding), so `inventory` couldn't carry
+  `TenantConflictDto` in its own responses.
+- For a conflict between two of the **same** company's estates, both sides are
+  the caller's, so the item may name either estate.
+
+`ConflictChangesTest` pins the four buckets; the boundary ITs pin them over
+HTTP. Proven red: the awaiting-review bucket, and a missing "before" snapshot.
 
 ## The OpenAPI document describes what exists, and stays dev-only
 

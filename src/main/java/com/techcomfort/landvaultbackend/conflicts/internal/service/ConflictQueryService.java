@@ -295,8 +295,8 @@ public class ConflictQueryService {
         }
         if (severity == ConflictSeverity.MEDIUM) {
             return "Two of your own estate boundaries share some ground. This usually means one of the "
-                    + "surveys needs adjusting; contact support if a boundary was entered incorrectly. "
-                    + "Publication is not affected.";
+                    + "surveys needs adjusting; correcting whichever boundary was entered incorrectly "
+                    + "clears this. Publication is not affected.";
         }
         if (!blocks) {
             return "This estate's boundary shares ground with another listing on the platform. Our team "
@@ -307,8 +307,8 @@ public class ConflictQueryService {
                 + "listing. Our team is reviewing the update, and publication will resume once that "
                 + "review is complete. No action is needed from you right now."
                 : "This estate's boundary shares ground with another listing on the platform. Publication "
-                + "is paused while our team reviews it. If the boundary was entered incorrectly, contact "
-                + "support — any change to it is reviewed before publication can resume. We will be in "
+                + "is paused while our team reviews it. If the boundary was entered incorrectly, correct "
+                + "it — our team reviews the correction before publication can resume. We will be in "
                 + "touch if we need anything from you.";
     }
 }

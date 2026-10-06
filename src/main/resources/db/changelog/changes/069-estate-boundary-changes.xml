@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Correcting an estate's boundary (FP-2). Every correction is a row,
+        never an overwrite: APPLIED straight away when it is small or the
+        estate isn't published; PENDING for a Super Admin when a published
+        estate's land changes by more than the review threshold, then
+        APPROVED / REJECTED / WITHDRAWN. Both shapes are kept, so the history
+        of what an estate claimed, and who allowed it, is never lost.
+        See AGENTS.md, "Correcting an estate boundary".
+    -->
+    <changeSet id="069-create-estate-boundary-changes" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE estate_boundary_changes (
+                id                   uuid NOT NULL PRIMARY KEY,
+                tenant_id            uuid NOT NULL REFERENCES organizations (id),
+                branch_id            uuid REFERENCES branches (id),
+                created_at           timestamp(6) with time zone NOT NULL,
+                updated_at           timestamp(6) with time zone,
+                created_by           varchar(255),
+                updated_by           varchar(255),
+                deleted              boolean NOT NULL,
+
+                estate_id            uuid NOT NULL REFERENCES estates (id),
+                previous_footprint   geometry(Polygon, 4326) NOT NULL,
+                proposed_footprint   geometry(Polygon, 4326) NOT NULL,
+                previous_area_sqm    numeric(14, 2) NOT NULL,
+                proposed_area_sqm    numeric(14, 2) NOT NULL,
+                changed_area_sqm     numeric(14, 2) NOT NULL,
+                changed_pct          numeric(9, 2) NOT NULL,
+                reason               varchar(500) NOT NULL,
+                status               varchar(16) NOT NULL,
+                requested_by         uuid NOT NULL REFERENCES users (id),
+                decided_by           uuid REFERENCES users (id),
+                decided_at           timestamp(6) with time zone,
+                decision_note        varchar(500),
+
+                CONSTRAINT chk_estate_boundary_changes_status
+                    CHECK (status IN ('APPLIED', 'PENDING', 'APPROVED', 'REJECTED', 'WITHDRAWN')),
+                CONSTRAINT chk_estate_boundary_changes_decided
+                    CHECK ((status IN ('APPROVED', 'REJECTED')) = (decided_by IS NOT NULL AND decided_at IS NOT NULL)),
+                CONSTRAINT chk_estate_boundary_changes_rejection_note
+                    CHECK (status <> 'REJECTED' OR decision_note IS NOT NULL)
+            );
+            CREATE INDEX idx_estate_boundary_changes_estate ON estate_boundary_changes (estate_id, created_at DESC);
+            CREATE INDEX idx_estate_boundary_changes_status ON estate_boundary_changes (status, created_at);
+            -- Every geometry column gets a GiST index (AGENTS.md).
+            CREATE INDEX idx_estate_boundary_changes_previous ON estate_boundary_changes USING GIST (previous_footprint);
+            CREATE INDEX idx_estate_boundary_changes_proposed ON estate_boundary_changes USING GIST (proposed_footprint);
+            -- One correction waiting at a time per estate.
+            CREATE UNIQUE INDEX uq_estate_boundary_changes_one_pending
+                ON estate_boundary_changes (estate_id) WHERE status = 'PENDING' AND deleted = false;
+            COMMENT ON TABLE estate_boundary_changes IS
+                'Every correction to an estate boundary, applied or reviewed. Append-only history; see AGENTS.md.';
+            COMMENT ON COLUMN estate_boundary_changes.changed_pct IS
+                'Area of the symmetric difference between old and new boundary, as a percentage of the old area. Above the review threshold on a published estate means PENDING.';
+
+            ALTER TABLE estate_boundary_changes ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE estate_boundary_changes FORCE ROW LEVEL SECURITY;
+            CREATE POLICY estate_boundary_changes_platform ON estate_boundary_changes FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY estate_boundary_changes_tenant ON estate_boundary_changes FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                );
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE estate_boundary_changes;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

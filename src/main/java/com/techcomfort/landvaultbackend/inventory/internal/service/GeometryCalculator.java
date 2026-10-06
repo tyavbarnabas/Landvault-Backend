@@ -99,6 +99,23 @@ public class GeometryCalculator {
         return labels.stream().map(Object::toString).toList();
     }
 
+    /**
+     * How much land differs between two boundaries, in square metres: the
+     * area of their symmetric difference (land added plus land removed), so
+     * a boundary that shifts sideways counts as changed even if its area
+     * doesn't. Geography cast — see {@link #areaInSquareMetres}.
+     */
+    public BigDecimal changedArea(Polygon before, Polygon after) {
+        Object result = entityManager
+                .createNativeQuery("SELECT ST_Area(ST_SymDifference(ST_GeomFromText(:a, :srid), "
+                        + "ST_GeomFromText(:b, :srid))::geography)")
+                .setParameter("a", before.toText())
+                .setParameter("b", after.toText())
+                .setParameter("srid", SRID_WGS84)
+                .getSingleResult();
+        return new BigDecimal(result.toString()).setScale(AREA_SCALE, RoundingMode.HALF_UP);
+    }
+
     public boolean isWithin(Polygon inner, Polygon outer) {
         Object result = entityManager
                 .createNativeQuery(

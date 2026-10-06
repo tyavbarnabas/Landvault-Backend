@@ -93,7 +93,7 @@ public class TwoFactorController {
     @Operation(
             summary = "Complete a login with a second factor",
             description = """
-                    Exchanges the `challengeId` from login, plus a TOTP **or** a recovery code, for \
+                    Exchanges the `challengeToken` from login, plus a TOTP **or** a recovery code, for \
                     real tokens.
 
                     Public: the caller has no token yet, which is the whole point.

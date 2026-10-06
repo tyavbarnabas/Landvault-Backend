@@ -91,9 +91,14 @@ public class PlotImportService {
     @Value("${landvault.conflicts.min-overlap-sqm:1.0}")
     private BigDecimal minOverlapSqm;
 
-    /** Which property in each feature carries what, and the status every imported plot gets. */
+    /**
+     * Which property in each feature carries what, and the status every
+     * imported plot gets. {@code tierMapping} is an optional JSON object from
+     * a file's own values to tier ids — {@code {"A": "<tier id>"}} — for files
+     * whose tier column doesn't use the estate's labels or sizes.
+     */
     public record Options(String plotNumberProperty, String blockProperty, String tierProperty,
-                          String cornerProperty, String status) {
+                          String cornerProperty, String status, String tierMapping) {
     }
 
     // --- FU-2: preview ---
@@ -211,6 +216,7 @@ public class PlotImportService {
         }
         Analysis analysis = new Analysis();
         List<PriceTier> tiers = priceTierRepository.findByEstateIdOrderBySizeSqmAsc(estate.getId());
+        Map<String, PriceTier> mapped = tierMapping(options.tierMapping(), tiers);
         for (Block block : blockRepository.findByEstateIdOrderByNameAsc(estate.getId())) {
             analysis.existingBlockIds.put(key(block.getName()), block.getId());
         }
@@ -285,7 +291,7 @@ public class PlotImportService {
                 }
             }
 
-            PriceTier tier = resolveTier(analysis, tiers, text(properties.path(options.tierProperty())),
+            PriceTier tier = resolveTier(analysis, tiers, mapped, text(properties.path(options.tierProperty())),
                     options.tierProperty(), position, plotNumber);
 
             GeoJsonPolygonDto footprintDto = polygonDto(analysis, features.get(i).path("geometry"), position, plotNumber);
@@ -367,11 +373,54 @@ public class PlotImportService {
         }
     }
 
-    private PriceTier resolveTier(Analysis analysis, List<PriceTier> tiers, String value, String property,
-                                  int position, String plotNumber) {
+    /**
+     * Parses the optional mapping. A bad mapping is refused outright (400)
+     * rather than reported per feature: it's one mistake in the request, not
+     * one per plot. Keys match the file's values ignoring case and spaces.
+     */
+    private Map<String, PriceTier> tierMapping(String json, List<PriceTier> tiers) {
+        Map<String, PriceTier> mapped = new HashMap<>();
+        if (json == null || json.isBlank()) {
+            return mapped;
+        }
+        JsonNode root;
+        try {
+            root = jsonMapper.readTree(json);
+        } catch (RuntimeException e) {
+            throw new InventoryException.InvalidRequest(
+                    "tierMapping must be a JSON object from file values to tier ids, e.g. {\"A\": \"<tier id>\"}.");
+        }
+        if (!root.isObject()) {
+            throw new InventoryException.InvalidRequest(
+                    "tierMapping must be a JSON object from file values to tier ids, e.g. {\"A\": \"<tier id>\"}.");
+        }
+        Map<String, PriceTier> byId = new HashMap<>();
+        tiers.forEach(t -> byId.put(t.getId().toString(), t));
+        for (Map.Entry<String, JsonNode> entry : root.properties()) {
+            PriceTier tier = byId.get(entry.getValue().asString("").trim().toLowerCase(Locale.ROOT));
+            if (tier == null) {
+                throw new InventoryException.InvalidRequest("tierMapping: '" + entry.getKey()
+                        + "' points at a tier that isn't on this estate.");
+            }
+            mapped.put(key(entry.getKey()), tier);
+        }
+        return mapped;
+    }
+
+    private PriceTier resolveTier(Analysis analysis, List<PriceTier> tiers, Map<String, PriceTier> mapped,
+                                  String value, String property, int position, String plotNumber) {
         if (value == null) {
             analysis.error(position, plotNumber, "MISSING_TIER", "No '" + property + "' property.");
             return null;
+        }
+        PriceTier explicit = mapped.get(key(value));
+        if (explicit != null) {
+            if (explicit.getRetiredAt() != null) {
+                analysis.error(position, plotNumber, "TIER_RETIRED",
+                        "'" + value + "' maps to a retired tier, which accepts no new plots.");
+                return null;
+            }
+            return explicit;
         }
         List<PriceTier> matches = tiers.stream()
                 .filter(t -> t.getLabel() != null && t.getLabel().trim().equalsIgnoreCase(value))

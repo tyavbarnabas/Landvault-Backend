@@ -120,6 +120,12 @@ landvault:
     state-check:
       enabled: true
       margin-metres: 1000
+    # Option C (decided with the user): a correction to a PUBLISHED estate's
+    # boundary that changes more than this share of its land (land added plus
+    # land removed, as % of the old area) waits for a Super Admin. Smaller
+    # corrections, and any on an unpublished estate, apply at once.
+    boundary-correction:
+      review-threshold-pct: 5
   checkout:
     # RS-1's 45-minute plot hold. Configuration so a test can shorten it,
     # not so it can be negotiated per buyer: a hold cannot be extended

@@ -564,6 +564,38 @@ class StaffInvitationUnderRlsIT {
                 .as("staying a company-wide director is fine").isEqualTo(HttpStatus.OK);
     }
 
+    // --- the roles a company can assign ---
+
+    @Test
+    void theRolesListShowsEveryTenantRoleAndWhatTheCallerCouldGrant() {
+        String all = restTemplate.exchange("/api/portal/roles", HttpMethod.GET, entity(director, null), String.class).getBody();
+        assertThat(all).contains("\"code\":\"executive_director\"").contains("\"scope\":\"company\"")
+                .contains("\"code\":\"branch_manager\"").contains("\"scope\":\"branch\"")
+                .contains("\"code\":\"surveyor_project_manager\"").contains("portal.estates.manage")
+                .contains("\"custom\":false")
+                .as("buyer and platform roles are never assignable").doesNotContain("\"code\":\"buyer\"")
+                .doesNotContain("\"code\":\"super_admin\"")
+                .as("the director holds everything").doesNotContain("\"canGrant\":false");
+
+        String manager = staffToken(tenantId, "branch_manager", doubleKing);
+        String theirs = restTemplate.exchange("/api/portal/roles", HttpMethod.GET, entity(manager, null), String.class).getBody();
+        assertThat(roleGrant(theirs, "sales_manager")).isTrue();
+        assertThat(roleGrant(theirs, "surveyor_project_manager")).as("lacks portal.estates.manage").isFalse();
+        assertThat(roleGrant(theirs, "executive_director")).isFalse();
+
+        String buyer = "buyer+" + UUID.randomUUID() + "@example.com";
+        restTemplate.postForEntity("/api/auth/register", new RegisterRequest(
+                "Ada", "Buyer", buyer, "+2348000000000", PASSWORD, "NG", Currency.NGN), String.class);
+        assertThat(restTemplate.exchange("/api/portal/roles", HttpMethod.GET, entity(login(buyer), null), String.class)
+                .getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    private static boolean roleGrant(String body, String code) {
+        String from = body.substring(body.indexOf("\"code\":\"" + code + "\""));
+        String grant = from.substring(from.indexOf("\"canGrant\":") + 11);
+        return grant.startsWith("true");
+    }
+
     // --- fixtures ---
 
     private ResponseEntity<String> invite(String token, String email, String role, UUID branch) {

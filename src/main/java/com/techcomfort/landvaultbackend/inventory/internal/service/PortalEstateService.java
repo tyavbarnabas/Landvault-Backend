@@ -5,6 +5,8 @@ import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
 import com.techcomfort.landvaultbackend.common.TenantContext;
 import com.techcomfort.landvaultbackend.common.TenantScope;
 import com.techcomfort.landvaultbackend.conflicts.ConflictDetectionApi;
+import com.techcomfort.landvaultbackend.conflicts.ConflictChanges;
+import com.techcomfort.landvaultbackend.conflicts.ConflictItem;
 import com.techcomfort.landvaultbackend.conflicts.ConflictPublicationCheck;
 import com.techcomfort.landvaultbackend.marketplace.EstateEligibility;
 import com.techcomfort.landvaultbackend.marketplace.MarketplaceApi;
@@ -201,6 +203,7 @@ public class PortalEstateService {
                             + ". Check the boundary, or correct those plots first.");
         }
 
+        List<ConflictItem> before = conflictDetection.conflictsOf(estateId, estate.getTenantId());
         estate.setFootprint(footprint);
         // Through the repository, so a constraint violation is still
         // translated rather than escaping as a 500 — see AGENTS.md.
@@ -208,6 +211,7 @@ public class PortalEstateService {
 
         int conflicts = conflictDetection.detectForEstateBoundary(estateId);
         ConflictPublicationCheck check = conflictDetection.publicationCheckFor(estateId);
+        ConflictChanges changes = ConflictChanges.between(before, conflictDetection.conflictsOf(estateId, estate.getTenantId()));
         BigDecimal area = geometry.areaInSquareMetres(footprint);
 
         auditApi.record(AuditEntryRequest.of(
@@ -216,7 +220,8 @@ public class PortalEstateService {
                         + conflicts + " live conflict(s) after detection."));
         log.info("Boundary added to estate {} by actor {}; {} live conflict(s)", estateId, scope.userId(), conflicts);
 
-        return new EstateBoundaryDto(estateId, area, check.blocked(), check.blockReason(), check.warningConflictCount());
+        return new EstateBoundaryDto(estateId, area, check.blocked(), check.blockReason(), check.warningConflictCount(),
+                changes);
     }
 
     /**

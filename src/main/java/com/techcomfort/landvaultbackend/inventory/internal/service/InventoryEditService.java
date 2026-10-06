@@ -17,6 +17,8 @@ import com.techcomfort.landvaultbackend.inventory.dto.PlotBoundaryDto;
 import com.techcomfort.landvaultbackend.inventory.dto.MovePlotTierRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CorrectPlotBoundaryRequest;
 import com.techcomfort.landvaultbackend.conflicts.ConflictDetectionApi;
+import com.techcomfort.landvaultbackend.conflicts.ConflictItem;
+import com.techcomfort.landvaultbackend.conflicts.ConflictChanges;
 import com.techcomfort.landvaultbackend.common.PlotPricing;
 import com.techcomfort.landvaultbackend.common.TenantContext;
 import com.techcomfort.landvaultbackend.common.TenantScope;
@@ -258,12 +260,15 @@ public class InventoryEditService {
 
         BigDecimal previousArea = plot.getActualAreaSqm();
         int before = conflictDetection.detectForEstatePlots(estateId);
+        // After that fresh detection, so the baseline is current.
+        List<ConflictItem> snapshot = conflictDetection.conflictsOf(estateId, estate.getTenantId());
 
         plot.setFootprint(footprint);
         plot.setActualAreaSqm(geometry.areaInSquareMetres(footprint));
         plotRepository.saveAndFlush(plot);
 
         int after = conflictDetection.detectForEstatePlots(estateId);
+        ConflictChanges changes = ConflictChanges.between(snapshot, conflictDetection.conflictsOf(estateId, estate.getTenantId()));
 
         auditApi.record(AuditEntryRequest.of(
                 scope.userId(), "estate.plot_boundary_corrected", "plot", plotId, estate.getTenantId(),
@@ -273,7 +278,7 @@ public class InventoryEditService {
                         + before + " -> " + after + "."));
         log.info("Plot {} boundary corrected on estate {} by {}", plotId, estateId, scope.userId());
 
-        return new PlotBoundaryDto(plotId, previousArea, plot.getActualAreaSqm(), before, after);
+        return new PlotBoundaryDto(plotId, previousArea, plot.getActualAreaSqm(), before, after, changes);
     }
 
     // --- plot tier (IE-10) ---

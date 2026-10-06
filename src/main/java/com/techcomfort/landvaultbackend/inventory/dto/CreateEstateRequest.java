@@ -20,10 +20,11 @@ import java.util.UUID;
  * first request that supplied someone else's. Same rule as everywhere else in
  * this codebase.
  * <p>
- * {@code branchId} is only required when the caller's own scope is
- * organization-wide (an Executive Director), and is validated as belonging to
- * their tenant via {@code TenancyApi}. A branch-scoped caller has theirs
- * resolved for them and any supplied value is ignored.
+ * {@code branchId} is optional for an organization-wide caller (an Executive
+ * Director): left out, the estate belongs to the company with no branch
+ * (EB-1); given, it is validated as belonging to their tenant via
+ * {@code TenancyApi}. A branch-scoped caller has theirs resolved for them and
+ * any supplied value is ignored.
  * <p>
  * {@code footprint} is optional — an estate exists as a draft before its
  * boundary is surveyed, and absent means absent.

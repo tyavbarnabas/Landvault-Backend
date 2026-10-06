@@ -636,10 +636,11 @@ class ListingConflictDetectionIT {
         assertThat(body).doesNotContain(theirs.id().toString());
         assertThat(body).doesNotContain("Omicron");
         assertThat(body)
-                .as("tone: factual and solution-oriented, never an accusation — and it points at "
-                        + "support, not at an estate boundary correction the portal doesn't offer")
+                .as("tone: factual and solution-oriented, never an accusation — and honest that a "
+                        + "correction is reviewed, never that it clears the block by itself")
                 .contains("entered incorrectly")
-                .contains("contact support");
+                .contains("reviews the correction")
+                .doesNotContain("automatically");
     }
 
     @Test

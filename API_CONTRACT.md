@@ -522,3 +522,37 @@ replaces all roles; `POST .../{userId}/deactivate` `{ reason }`;
 plus the invitation role codes. Branch requests may now name any branch-level
 role (surveyor included); `CANNOT_GRANT_ROLE` comes at approval instead.
 
+**Roles**: `GET /api/portal/roles` (`portal.staff.invite` or
+`portal.staff.request`) → `[{ code, name, description, scope:
+"company"|"branch"|"either", permissions: string[], canGrant, custom }]`.
+Replaces the role list hard-coded in the frontend's `staffService.ts`; use
+`canGrant` to grey out roles the caller would get `CANNOT_GRANT_ROLE` for.
+
+**Correcting an estate boundary (FP-2)**: `PUT /api/portal/estates/{id}/boundary`
+`{ footprint, reason }` → `BoundaryChangeDto` with **200 `applied`** (and
+`publicationBlocked` / `blockReason` / `warningConflictCount`) or **202
+`pending`** when a published estate's land changes by more than 5% — the old
+boundary stays live until a Super Admin decides. `GET .../boundary-changes`
+(history, both shapes as GeoJSON), `POST .../boundary-changes/{id}/withdraw`.
+Super Admin: `GET /api/admin/boundary-changes?status=pending`,
+`POST .../{id}/approve` `{ note? }`, `POST .../{id}/reject` `{ note }`.
+Codes: `BOUNDARY_NOT_SET`, `BOUNDARY_CHANGE_PENDING`, `BOUNDARY_UNCHANGED`,
+`BOUNDARY_CHANGE_NOT_PENDING`, plus `PLOT_OUTSIDE_ESTATE` and
+`BOUNDARY_OUTSIDE_STATE`. Conflict guidance for a cross-company overlap now
+says "correct it — our team reviews the correction", not "contact support".
+
+**Import tier mapping**: `POST .../plots/import/preview` and `.../plots/import`
+accept an optional `tierMapping` form field, a JSON object
+`{"<file value>": "<tier id>"}`; unmapped values still match by label or size;
+a bad mapping is a 400. **Tenant create clashes** are now labelled by what
+actually clashed: `RC_NUMBER_ALREADY_REGISTERED`, `EMAIL_ALREADY_REGISTERED`,
+or `DUPLICATE_RECORD` — only route the user to the RC field on the first.
+
+**Itemised conflicts**: the add-boundary, estate-correction (and its approval)
+and plot-boundary responses carry `conflictChanges: { raised, resolved,
+awaitingReview, stillOpen }`, each a list of `{ id, conflictType,
+yourEntityId, yourEntityLabel, overlapAreaSqm, severity, status, live,
+blocksPublication, underReview, guidance }` — the caller's side only.
+`awaitingReview` means the overlap is gone but a cross-company conflict still
+blocks until our team closes it. The existing counts remain for compatibility.
+

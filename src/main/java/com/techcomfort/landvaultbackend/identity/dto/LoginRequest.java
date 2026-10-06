@@ -5,7 +5,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 
-/** {@code POST /api/auth/login} body — credential step only, OTP is a TODO. */
+/** {@code POST /api/auth/login} body. With 2FA confirmed, login returns a challenge; see {@code TwoFactorController}. */
 @Schema(
         name = "LoginRequest",
         example = """

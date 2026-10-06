@@ -74,6 +74,7 @@
     <include file="changes/066-branch-office-details.xml" relativeToChangelogFile="true"/>
     <include file="changes/067-staff-invitations.xml" relativeToChangelogFile="true"/>
     <include file="changes/068-staff-invitation-approval.xml" relativeToChangelogFile="true"/>
+    <include file="changes/069-estate-boundary-changes.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

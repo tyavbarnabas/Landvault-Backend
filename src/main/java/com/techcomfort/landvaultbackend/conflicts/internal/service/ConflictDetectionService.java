@@ -4,6 +4,9 @@ import com.techcomfort.landvaultbackend.conflicts.ConflictDetectionApi;
 import com.techcomfort.landvaultbackend.conflicts.ConflictPublicationCheck;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
+import com.techcomfort.landvaultbackend.conflicts.ConflictItem;
+import com.techcomfort.landvaultbackend.conflicts.internal.enums.ConflictStatus;
+import java.util.List;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -36,6 +39,7 @@ import java.util.UUID;
 public class ConflictDetectionService implements ConflictDetectionApi {
 
     private final ConflictProperties properties;
+    private final ConflictQueryService queries;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -120,9 +124,8 @@ public class ConflictDetectionService implements ConflictDetectionApi {
             return ConflictPublicationCheck.blocked(
                     "This estate's boundary overlaps land claimed by another listing. "
                             + "Publication is paused while our team reviews the overlap. If the boundary "
-                            + "was entered incorrectly, contact support — an estate's boundary can't be "
-                            + "changed from the portal, and any change is reviewed before publication "
-                            + "can resume.",
+                            + "was entered incorrectly, correct it — our team reviews the correction "
+                            + "before publication can resume.",
                     blocking, warning);
         }
         return warning > 0 ? ConflictPublicationCheck.warning(warning) : ConflictPublicationCheck.clear();
@@ -135,6 +138,16 @@ public class ConflictDetectionService implements ConflictDetectionApi {
                 .createNativeQuery("SELECT landvault_plot_has_conflict_history(:plotId)")
                 .setParameter("plotId", plotId)
                 .getSingleResult());
+    }
+
+    @Override
+    public List<ConflictItem> conflictsOf(UUID estateId, UUID tenantId) {
+        return queries.forTenantEstate(estateId, tenantId).stream()
+                .map(c -> new ConflictItem(c.id(), c.conflictType(),
+                        c.yourEntityId(), c.yourEntityLabel(), c.overlapAreaSqm(), c.severity(), c.status(),
+                        ConflictStatus.fromValue(c.status()).isLive(),
+                        c.blocksPublication(), c.underReview(), c.guidance()))
+                .toList();
     }
 
     /** Exposed for the threshold's own tests; not part of the public API. */
