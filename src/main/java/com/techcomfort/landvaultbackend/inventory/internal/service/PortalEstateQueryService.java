@@ -166,6 +166,7 @@ public class PortalEstateQueryService {
                 checks,
                 plotCounts(List.of(estateId)).getOrDefault(estateId, PlotCountsDto.empty()),
                 eligibilityOf(estateId),
+                plotRepository.countByEstateIdAndFootprintIsNull(estateId),
                 estate.getCreatedAt());
     }
 

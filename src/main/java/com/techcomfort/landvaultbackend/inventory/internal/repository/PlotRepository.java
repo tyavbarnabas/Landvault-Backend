@@ -57,6 +57,9 @@ public interface PlotRepository extends JpaRepository<Plot, UUID>, JpaSpecificat
             """)
     List<Object[]> countGroupedByStatusForTier(@Param("tierId") UUID tierId);
 
+    /** Live plots with no surveyed boundary — not on the public map (soft-deleted ones excluded by the entity filter). */
+    long countByEstateIdAndFootprintIsNull(UUID estateId);
+
     /**
      * A tier size change, applied to <strong>available plots only</strong>
      * (IE-4): a reserved or sold plot's size is what its buyer agreed to, and

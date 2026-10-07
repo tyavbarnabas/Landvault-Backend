@@ -99,7 +99,8 @@ public class SecurityConfig {
     private static final String[] PUBLIC_GET_PATHS = {
             "/api/marketplace/estates",
             "/api/marketplace/estates/*",
-            "/api/marketplace/estates/*/geojson"
+            "/api/marketplace/estates/*/geojson",
+            "/api/marketplace/estates/*/plots"
     };
 
     // A publicly readable OpenAPI document hands an attacker the complete

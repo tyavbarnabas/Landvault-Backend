@@ -557,6 +557,41 @@ class MarketplaceIT {
 
     // --- fixtures ---
 
+    /**
+     * A plot with no surveyed boundary can't be drawn, but it's for sale: the
+     * list shows it, marked, so a buyer can still choose it — and the
+     * developer's portal counts it so they know it's missing from the map.
+     */
+    @Test
+    void plotsWithoutABoundaryAreListedMarkedAndCountedForTheDeveloper() {
+        Listing listing = publishedListing("Listed Plots");
+        String tierId = queryString("SELECT id FROM price_tiers WHERE estate_id = '" + listing.estateId() + "'");
+        assertThat(restTemplate.exchange("/api/portal/estates/" + listing.estateId() + "/plots", HttpMethod.POST,
+                entity(listing.tenant().token(), new CreatePlotsRequest(List.of(new CreatePlotRequest("4", null,
+                        UUID.fromString(tierId), false, "available-dev", null, null, null, null, null, null)))),
+                String.class).getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        String unsurveyed = queryString("SELECT id FROM plots WHERE estate_id = '" + listing.estateId()
+                + "' AND plot_number = '4'");
+
+        ResponseEntity<String> all = anonymous("/api/marketplace/estates/" + listing.estateId() + "/plots");
+        assertThat(all.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(all.getBody()).contains("\"total\":4").contains(unsurveyed)
+                .contains("\"hasBoundary\":false").contains("\"hasBoundary\":true")
+                .as("availability stays collapsed").doesNotContain("RESERVED").doesNotContain("SOLD")
+                .doesNotContain(listing.tenant().id().toString());
+
+        String available = anonymous("/api/marketplace/estates/" + listing.estateId() + "/plots?available=true").getBody();
+        assertThat(available).contains("\"total\":2").contains(unsurveyed).doesNotContain("UNAVAILABLE");
+
+        assertThat(anonymous("/api/marketplace/estates/" + listing.estateId() + "/geojson").getBody())
+                .as("the map still can't draw it").doesNotContain(unsurveyed);
+        assertThat(restTemplate.exchange("/api/portal/estates/" + listing.estateId(), HttpMethod.GET,
+                entity(listing.tenant().token(), null), String.class).getBody())
+                .contains("\"plotsWithoutBoundary\":1");
+        assertThat(anonymous("/api/marketplace/estates/" + UUID.randomUUID() + "/plots").getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
     private record Tenant(UUID id, String name, String rcNumber, UUID branchId, String token) {
     }
 

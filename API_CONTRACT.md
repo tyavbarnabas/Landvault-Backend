@@ -556,3 +556,11 @@ blocksPublication, underReview, guidance }` — the caller's side only.
 `awaitingReview` means the overlap is gone but a cross-company conflict still
 blocks until our team closes it. The existing counts remain for compatibility.
 
+**Public plot list**: `GET /api/marketplace/estates/{id}/plots?available=&limit=&cursor=`
+(no auth) → `Page<{ id, plotNumber, blockName, availability, isCorner,
+priceTierId, nominalSizeSqm, actualAreaSqm, hasBoundary }>` — every plot,
+including those the map can't draw (`hasBoundary: false`; tell the buyer the
+boundary isn't surveyed). Portal estate detail gains `plotsWithoutBoundary`
+for a developer warning. **No grid positions exist or will be added**: the
+`/estates` grid stays mock-only; live mode uses `/marketplace`.
+

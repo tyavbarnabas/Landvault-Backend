@@ -4,6 +4,7 @@ import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.ErrorResponse;
 import com.techcomfort.landvaultbackend.common.EstateIntent;
 import com.techcomfort.landvaultbackend.common.PageResponse;
+import com.techcomfort.landvaultbackend.marketplace.dto.MarketplacePlotDto;
 import com.techcomfort.landvaultbackend.common.PageResponses;
 import com.techcomfort.landvaultbackend.common.TitleType;
 import com.techcomfort.landvaultbackend.common.geojson.GeoJsonFeatureCollectionDto;
@@ -165,6 +166,31 @@ public class MarketplaceController {
     @GetMapping("/{id}/geojson")
     public ResponseEntity<GeoJsonFeatureCollectionDto> geoJson(@PathVariable UUID id) {
         return ResponseEntity.ok(service.geoJson(id));
+    }
+
+    @Operation(
+            summary = "Every plot on an estate, as a list (no authentication)",
+            description = """
+                    The list beside the map. **Includes plots with no surveyed boundary** \
+                    (`hasBoundary: false`), which the map can't draw but which are still for sale — \
+                    show them, and tell the buyer the boundary isn't surveyed yet. Same fields as a \
+                    map feature, no price (tier price × corner premium, computed by the client). \
+                    `available=true` lists only plots that can be reserved. Ordered by block, then \
+                    plot number; up to 500 per page.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "A page of plots"),
+            @ApiResponse(responseCode = "404", description = "No such estate, or not eligible",
+                    content = @Content())
+    })
+    @SecurityRequirements
+    @GetMapping("/{id}/plots")
+    public ResponseEntity<PageResponse<MarketplacePlotDto>> plots(
+            @PathVariable UUID id,
+            @RequestParam(defaultValue = "false") boolean available,
+            @RequestParam(required = false) Integer limit,
+            @RequestParam(required = false) String cursor) {
+        int size = limit == null || limit <= 0 ? 100 : Math.min(limit, 500);
+        return ResponseEntity.ok(service.plots(id, available, PageResponses.pageable(cursor, size)));
     }
 
     @ExceptionHandler(MarketplaceQueryService.ListingNotFound.class)

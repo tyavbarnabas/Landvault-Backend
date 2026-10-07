@@ -44,6 +44,13 @@ public record EstateDetailDto(
          * publish and reading the answer off an exception.
          */
         EstateEligibilityDto eligibility,
+        /**
+         * Plots with no surveyed boundary. Still for sale, but not on the
+         * public map — buyers find them only in the list, marked as having
+         * no boundary — and outside double-allocation detection until they
+         * get one. Worth a warning in the portal; zero when every plot has one.
+         */
+        long plotsWithoutBoundary,
         Instant createdAt
 ) {
 }

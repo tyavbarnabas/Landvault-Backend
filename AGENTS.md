@@ -3915,6 +3915,38 @@ couldn't tell a developer *which* overlap cleared, which the frontend raised.
 `ConflictChangesTest` pins the four buckets; the boundary ITs pin them over
 HTTP. Proven red: the awaiting-review bucket, and a missing "before" snapshot.
 
+## Plots without a boundary are for sale, listed, and flagged — not hidden
+
+Found from the frontend side (2026-10-07): the public map draws only plots
+with a surveyed boundary, so a plot without one was **invisible to buyers and
+therefore unsellable, with nothing telling the developer**. Three options
+were weighed with the user — list them, require a boundary to sell, or both —
+and **listing them was chosen**: in Nigeria individual plots are often
+surveyed and allocated after an estate is set up, so requiring a boundary
+would block legitimate sales.
+
+- **`GET /api/marketplace/estates/{id}/plots`** (public, GET-only, rate
+  limited like the rest) lists every plot of a published estate from
+  `marketplace_plots` — boundary or not — with `hasBoundary`, the same fields
+  as a map feature, availability still collapsed to AVAILABLE/UNAVAILABLE,
+  and no price (client computes, as for the map). `available=true` filters to
+  reservable plots. Paged (`limit` ≤ 500), ordered by block then plot number.
+- **The honest cost, stated to the buyer**: a plot without a boundary is
+  outside double-allocation detection (there's nothing to intersect) and its
+  position within the estate isn't confirmed. The frontend must say so beside
+  any `hasBoundary: false` plot — never present it like a surveyed one.
+- **The developer is told**: the portal estate detail carries
+  `plotsWithoutBoundary` (live plots with no footprint), so the portal can
+  warn "N plots aren't on the map".
+- If buyer protection ever needs to be stronger, the rejected alternatives
+  were: no sale without a boundary, or listed but not reservable. Both are
+  small changes on top of this.
+
+The `/estates` grid page in the frontend is the other half of this
+discussion: it is being retired in live mode in favour of `/marketplace`,
+and **the backend will not add grid positions** (row/column) — a made-up
+layout that could disagree with the real map.
+
 ## The OpenAPI document describes what exists, and stays dev-only
 
 `OpenApiConfig` (in `common`) carries the title, the JWT bearer scheme and

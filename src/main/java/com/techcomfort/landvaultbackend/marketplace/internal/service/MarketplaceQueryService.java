@@ -17,6 +17,9 @@ import com.techcomfort.landvaultbackend.common.CommitmentCalculator;
 import com.techcomfort.landvaultbackend.common.DueTrigger;
 import com.techcomfort.landvaultbackend.common.FeeType;
 import com.techcomfort.landvaultbackend.common.PageResponse;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.domain.PageRequest;
+import com.techcomfort.landvaultbackend.marketplace.dto.MarketplacePlotDto;
 import com.techcomfort.landvaultbackend.common.PageResponses;
 import com.techcomfort.landvaultbackend.common.geojson.GeoJsonFeatureCollectionDto;
 import com.techcomfort.landvaultbackend.common.geojson.GeoJsonFeatureDto;
@@ -128,6 +131,25 @@ public class MarketplaceQueryService {
             features.add(GeoJsonFeatureDto.of(GeoJsonPolygonWriter.toGeoJson(plot.getFootprint()), properties));
         }
         return GeoJsonFeatureCollectionDto.of(features);
+    }
+
+    /**
+     * Every plot on a published estate, including those with no surveyed
+     * boundary — the map can't draw them, but they are for sale and a buyer
+     * must be able to choose them, knowing the boundary is missing.
+     * Availability stays collapsed, exactly as on the map.
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<MarketplacePlotDto> plots(UUID estateId, boolean availableOnly, Pageable pageable) {
+        listings.findById(estateId).orElseThrow(ListingNotFound::new);
+        Pageable ordered = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),
+                Sort.by(Sort.Order.asc("blockName").nullsFirst(), Sort.Order.asc("plotNumber")));
+        Page<PlotView> page = availableOnly
+                ? plots.findByEstateIdAndAvailability(estateId, "AVAILABLE", ordered)
+                : plots.findByEstateId(estateId, ordered);
+        return PageResponses.from(page, p -> new MarketplacePlotDto(p.getPlotId(), p.getPlotNumber(),
+                p.getBlockName(), p.getAvailability(), p.isCorner(), p.getPriceTierId(), p.getNominalSizeSqm(),
+                p.getActualAreaSqm(), p.getFootprint() != null));
     }
 
     /** Tiers, checks and amenities for a whole page in three queries, never one per listing. */
