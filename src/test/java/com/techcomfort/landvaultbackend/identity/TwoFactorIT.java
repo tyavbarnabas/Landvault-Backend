@@ -57,7 +57,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers
 class TwoFactorIT {
 
-    private static final String PASSWORD = "correct horse battery staple";
+    private static final String PASSWORD = "correct horse battery staple 9";
     private static final String ADMIN_EMAIL = "admin+" + UUID.randomUUID() + "@example.com";
     private static final int PERIOD_SECONDS = 30;
 

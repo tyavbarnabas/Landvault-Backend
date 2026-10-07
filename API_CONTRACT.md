@@ -564,3 +564,15 @@ boundary isn't surveyed). Portal estate detail gains `plotsWithoutBoundary`
 for a developer warning. **No grid positions exist or will be added**: the
 `/estates` grid stays mock-only; live mode uses `/marketplace`.
 
+**Password rule** (register, reset-password, change-password, invitation accept;
+never login): 400 `{ message, code: "WEAK_PASSWORD", fieldErrors: { password |
+newPassword: message } }`, first failing rule, the frontend's own sentences —
+plus one extra: "That password is too long — use fewer accented or special
+characters." (under 64 characters but over 72 bytes). Change-password also
+refuses the current password reused. Reset judges the password only after the
+code is proven, and a refusal leaves the code (or invitation link) usable.
+
+**Plot list by tier**: `GET /api/marketplace/estates/{id}/plots?priceTierId=…`
+pages one tier's plots (`limit` default 100, max 500; `cursor` from the
+previous page). Use it instead of loading the whole estate and filtering.
+

@@ -15,6 +15,7 @@ import com.techcomfort.landvaultbackend.identity.internal.enums.OtpChannel;
 import com.techcomfort.landvaultbackend.identity.internal.enums.OtpPurpose;
 import com.techcomfort.landvaultbackend.identity.internal.enums.UserStatus;
 import com.techcomfort.landvaultbackend.identity.internal.exceptions.AuthException;
+import com.techcomfort.landvaultbackend.identity.internal.exceptions.WeakPasswordException;
 import com.techcomfort.landvaultbackend.identity.internal.domain.OtpCode;
 import com.techcomfort.landvaultbackend.identity.internal.domain.RefreshToken;
 import com.techcomfort.landvaultbackend.identity.internal.domain.Role;
@@ -124,6 +125,7 @@ public class AuthService {
         if (userRepository.existsByEmailIgnoreCase(request.email())) {
             throw new AuthException.EmailAlreadyRegistered();
         }
+        PasswordPolicy.require(request.password(), "password", request.email(), request.firstName(), request.lastName());
 
         User user = User.builder()
                 .firstName(request.firstName())
@@ -431,6 +433,11 @@ public class AuthService {
             otpCodeRepository.save(code);
             throw new AuthException.InvalidOrExpiredResetCode();
         }
+        // Only after the code is proven: checked earlier, the "don't use your
+        // name" answer would let anyone without the code probe an account's
+        // name. Nothing has been written yet, so a refusal leaves the code
+        // usable for a retry with a better password.
+        PasswordPolicy.require(request.newPassword(), "newPassword", user.getEmail(), user.getFirstName(), user.getLastName());
 
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
         // Using a code delivered to this address proves control of it — the
@@ -489,6 +496,10 @@ public class AuthService {
             // Deliberately the same exception login uses for a bad password.
             // Nothing about a wrong current password warrants its own code.
             throw new AuthException.InvalidCredentials();
+        }
+        PasswordPolicy.require(request.newPassword(), "newPassword", user.getEmail(), user.getFirstName(), user.getLastName());
+        if (passwordEncoder.matches(request.newPassword(), user.getPasswordHash())) {
+            throw new WeakPasswordException("newPassword", PasswordPolicy.SAME_AS_CURRENT);
         }
 
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));

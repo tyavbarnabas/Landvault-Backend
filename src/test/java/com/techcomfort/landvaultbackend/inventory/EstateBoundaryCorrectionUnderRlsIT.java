@@ -61,7 +61,7 @@ class EstateBoundaryCorrectionUnderRlsIT {
     private static final String APP_ROLE = "landvault_app_boundary_fix_it";
     private static final String APP_ROLE_PASSWORD = "boundary-fix-it-password";
     private static final String ADMIN_EMAIL = "admin+" + UUID.randomUUID() + "@example.com";
-    private static final String PASSWORD = "correct horse battery staple";
+    private static final String PASSWORD = "correct horse battery staple 9";
     /** Each test gets its own patch of the FCT, so estates from different tests never overlap. */
     private static final java.util.concurrent.atomic.AtomicInteger PATCH = new java.util.concurrent.atomic.AtomicInteger();
 

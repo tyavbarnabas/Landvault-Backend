@@ -175,8 +175,10 @@ public class MarketplaceController {
                     (`hasBoundary: false`), which the map can't draw but which are still for sale — \
                     show them, and tell the buyer the boundary isn't surveyed yet. Same fields as a \
                     map feature, no price (tier price × corner premium, computed by the client). \
-                    `available=true` lists only plots that can be reserved. Ordered by block, then \
-                    plot number; up to 500 per page.""")
+                    `available=true` lists only plots that can be reserved; `priceTierId` lists one \
+                    tier's plots — page through them with `limit` and `cursor` rather than loading \
+                    the whole estate. Ordered by block, then plot number; 100 per page by default, \
+                    up to 500.""")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "A page of plots"),
             @ApiResponse(responseCode = "404", description = "No such estate, or not eligible",
@@ -187,10 +189,11 @@ public class MarketplaceController {
     public ResponseEntity<PageResponse<MarketplacePlotDto>> plots(
             @PathVariable UUID id,
             @RequestParam(defaultValue = "false") boolean available,
+            @RequestParam(required = false) UUID priceTierId,
             @RequestParam(required = false) Integer limit,
             @RequestParam(required = false) String cursor) {
         int size = limit == null || limit <= 0 ? 100 : Math.min(limit, 500);
-        return ResponseEntity.ok(service.plots(id, available, PageResponses.pageable(cursor, size)));
+        return ResponseEntity.ok(service.plots(id, priceTierId, available, PageResponses.pageable(cursor, size)));
     }
 
     @ExceptionHandler(MarketplaceQueryService.ListingNotFound.class)

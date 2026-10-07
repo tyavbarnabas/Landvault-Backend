@@ -55,7 +55,7 @@ class AdminTenantControllerIT {
     private static final String APP_ROLE = "landvault_app_tenant_it";
     private static final String APP_ROLE_PASSWORD = "tenant-it-app-password";
     private static final String ADMIN_EMAIL = "admin+" + UUID.randomUUID() + "@example.com";
-    private static final String ADMIN_PASSWORD = "correct horse battery staple";
+    private static final String ADMIN_PASSWORD = "correct horse battery staple 9";
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>(
@@ -130,7 +130,7 @@ class AdminTenantControllerIT {
     void buyerGets403NotAnEmptyList() {
         String email = "buyer+" + UUID.randomUUID() + "@example.com";
         RegisterRequest register = new RegisterRequest(
-                "Test", "Buyer", email, "+2348000000000", "correct horse battery staple", "NG", Currency.NGN);
+                "Test", "Buyer", email, "+2348000000000", "correct horse battery staple 9", "NG", Currency.NGN);
         AuthResponse registered = restTemplate.postForEntity("/api/auth/register", register, AuthResponse.class).getBody();
         assertThat(registered).isNotNull();
 

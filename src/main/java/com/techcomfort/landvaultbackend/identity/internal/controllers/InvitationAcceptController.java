@@ -63,7 +63,7 @@ public class InvitationAcceptController {
                     `EMAIL_HAS_ACCOUNT` if that email has registered in the meantime.""")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Account created; signed in"),
-            @ApiResponse(responseCode = "400", description = "`INVITATION_INVALID`, or a blank password", content = @Content()),
+            @ApiResponse(responseCode = "400", description = "`INVITATION_INVALID`, or `WEAK_PASSWORD`: the password breaks the password rule (8+ characters, at most 64, letters and a number, not common, not your name or email); `message` says which, `fieldErrors` names the field — the link stays usable", content = @Content()),
             @ApiResponse(responseCode = "403", description = "`TENANT_NOT_ACTIVE`", content = @Content()),
             @ApiResponse(responseCode = "409", description = "`EMAIL_HAS_ACCOUNT`", content = @Content())
     })

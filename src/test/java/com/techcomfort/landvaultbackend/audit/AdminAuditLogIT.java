@@ -56,7 +56,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AdminAuditLogIT {
 
     private static final String ADMIN_EMAIL = "admin+" + UUID.randomUUID() + "@example.com";
-    private static final String ADMIN_PASSWORD = "correct horse battery staple";
+    private static final String ADMIN_PASSWORD = "correct horse battery staple 9";
 
     @Container
     @org.springframework.boot.testcontainers.service.connection.ServiceConnection

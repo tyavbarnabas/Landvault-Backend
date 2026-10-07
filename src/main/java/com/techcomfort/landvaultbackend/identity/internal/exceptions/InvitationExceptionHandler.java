@@ -74,4 +74,10 @@ public class InvitationExceptionHandler {
     private static ResponseEntity<ErrorResponse> body(HttpStatus status, InvitationException ex, String code) {
         return ResponseEntity.status(status).body(ErrorResponse.of(ex.getMessage(), code));
     }
+
+    @ExceptionHandler(WeakPasswordException.class)
+    public ResponseEntity<ErrorResponse> handleWeakPassword(WeakPasswordException ex) {
+        return ResponseEntity.badRequest().body(new ErrorResponse(ex.getMessage(), "WEAK_PASSWORD",
+                java.util.Map.of(ex.field(), ex.getMessage())));
+    }
 }

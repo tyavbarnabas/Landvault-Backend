@@ -67,7 +67,7 @@ class TenantContextIT {
     @Autowired
     private PasswordEncoder passwordEncoder;
 
-    private static final String STAFF_PASSWORD = "correct horse battery staple";
+    private static final String STAFF_PASSWORD = "correct horse battery staple 9";
 
     @Test
     void buyerResolvesToNoTenantAndNoBranchEverywhere() {

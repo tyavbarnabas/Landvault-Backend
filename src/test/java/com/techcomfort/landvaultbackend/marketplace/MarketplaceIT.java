@@ -83,7 +83,7 @@ class MarketplaceIT {
     private static final String APP_ROLE = "landvault_app_marketplace_it";
     private static final String APP_ROLE_PASSWORD = "marketplace-it-password";
     private static final String ADMIN_EMAIL = "admin+" + UUID.randomUUID() + "@example.com";
-    private static final String PASSWORD = "correct horse battery staple";
+    private static final String PASSWORD = "correct horse battery staple 9";
 
     /** Each test method gets its own 0.1° longitude band, so estates never overlap across tests. */
     private static final AtomicInteger AREA_BAND = new AtomicInteger();
@@ -590,6 +590,31 @@ class MarketplaceIT {
                 .contains("\"plotsWithoutBoundary\":1");
         assertThat(anonymous("/api/marketplace/estates/" + UUID.randomUUID() + "/plots").getStatusCode())
                 .isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    /** One tier's plots, a page at a time — not the whole estate scrolled endlessly. */
+    @Test
+    void thePlotListFiltersByTierAndPages() {
+        Listing listing = publishedListing("Tiered Plots");
+        UUID standard = UUID.fromString(queryString("SELECT id FROM price_tiers WHERE estate_id = '" + listing.estateId() + "'"));
+        UUID large = post(listing.tenant(), "/api/portal/estates/" + listing.estateId() + "/price-tiers",
+                new CreatePriceTierRequest("LAND_SIZE", new BigDecimal("500.00"), new BigDecimal("35000000.0000"),
+                        Currency.NGN, "Large 500"), PriceTierDto.class).id();
+        assertThat(restTemplate.exchange("/api/portal/estates/" + listing.estateId() + "/plots", HttpMethod.POST,
+                entity(listing.tenant().token(), new CreatePlotsRequest(List.of(new CreatePlotRequest("9", null, large,
+                        false, "available-dev", null, null, null, null, null, null)))), String.class).getStatusCode())
+                .isEqualTo(HttpStatus.CREATED);
+        String base = "/api/marketplace/estates/" + listing.estateId() + "/plots";
+
+        assertThat(anonymous(base + "?priceTierId=" + large).getBody()).contains("\"total\":1").contains("\"plotNumber\":\"9\"");
+        assertThat(anonymous(base + "?priceTierId=" + standard).getBody()).contains("\"total\":3").doesNotContain("\"plotNumber\":\"9\"");
+        assertThat(anonymous(base + "?priceTierId=" + standard + "&available=true").getBody())
+                .as("one of the three is available").contains("\"total\":1");
+
+        String first = anonymous(base + "?priceTierId=" + standard + "&limit=2").getBody();
+        assertThat(first).contains("\"hasMore\":true").contains("\"cursor\":\"1\"").contains("\"plotNumber\":\"1\"");
+        String second = anonymous(base + "?priceTierId=" + standard + "&limit=2&cursor=1").getBody();
+        assertThat(second).contains("\"hasMore\":false").contains("\"plotNumber\":\"3\"").doesNotContain("\"plotNumber\":\"1\"");
     }
 
     private record Tenant(UUID id, String name, String rcNumber, UUID branchId, String token) {

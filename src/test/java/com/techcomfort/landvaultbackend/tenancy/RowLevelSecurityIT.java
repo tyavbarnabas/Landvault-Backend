@@ -289,7 +289,7 @@ class RowLevelSecurityIT {
     void registrationAndLoginStillWorkAfterRls() {
         String email = "rls+" + UUID.randomUUID() + "@example.com";
         RegisterRequest register = new RegisterRequest(
-                "RLS", "Buyer", email, "+2348000000000", "correct horse battery staple", "NG", Currency.NGN);
+                "RLS", "Buyer", email, "+2348000000000", "correct horse battery staple 9", "NG", Currency.NGN);
 
         ResponseEntity<AuthResponse> response = restTemplate.postForEntity("/api/auth/register", register, AuthResponse.class);
 
@@ -306,7 +306,7 @@ class RowLevelSecurityIT {
     void meStillWorksForABuyer() {
         String email = "rls-me+" + UUID.randomUUID() + "@example.com";
         RegisterRequest register = new RegisterRequest(
-                "RLS", "Me", email, "+2348000000000", "correct horse battery staple", "NG", Currency.NGN);
+                "RLS", "Me", email, "+2348000000000", "correct horse battery staple 9", "NG", Currency.NGN);
         AuthResponse registered = restTemplate.postForEntity("/api/auth/register", register, AuthResponse.class).getBody();
         assertThat(registered).isNotNull();
 

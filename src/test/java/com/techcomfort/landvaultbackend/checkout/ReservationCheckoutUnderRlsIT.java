@@ -84,7 +84,7 @@ class ReservationCheckoutUnderRlsIT {
     private static final String APP_ROLE = "landvault_app_checkout_it";
     private static final String APP_ROLE_PASSWORD = "checkout-it-password";
     private static final String ADMIN_EMAIL = "admin+" + UUID.randomUUID() + "@example.com";
-    private static final String PASSWORD = "correct horse battery staple";
+    private static final String PASSWORD = "correct horse battery staple 9";
 
     private static final BigDecimal TIER_PRICE = new BigDecimal("20000000.0000");
     private static final BigDecimal CORNER_PREMIUM_PCT = new BigDecimal("10.00");

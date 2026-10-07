@@ -407,6 +407,9 @@ public class StaffInvitationService {
             throw new InvitationException.TenantNotActive();
         }
         requireNoAccount(invitation.getEmail());
+        // Before anything is written, so a refused password leaves the link usable.
+        PasswordPolicy.require(password, "password", invitation.getEmail(), invitation.getFirstName(),
+                invitation.getLastName());
         Role role = roleRepository.findById(invitation.getRoleId())
                 .orElseThrow(() -> new IllegalStateException("Invited role no longer exists."));
 

@@ -83,7 +83,7 @@ class FullCostDisclosureUnderRlsIT {
     private static final String APP_ROLE = "landvault_app_disclosure_it";
     private static final String APP_ROLE_PASSWORD = "disclosure-it-password";
     private static final String ADMIN_EMAIL = "admin+" + UUID.randomUUID() + "@example.com";
-    private static final String PASSWORD = "correct horse battery staple";
+    private static final String PASSWORD = "correct horse battery staple 9";
 
     private static final BigDecimal DOUBLE_KING_LAND = new BigDecimal("6000000.0000");
     private static final BigDecimal TOP_RANK_LAND = new BigDecimal("4500000.0000");

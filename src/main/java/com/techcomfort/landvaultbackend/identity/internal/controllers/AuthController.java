@@ -75,7 +75,8 @@ public class AuthController {
             @ApiResponse(responseCode = "201", description = "Created; the body carries an access "
                     + "token and the user's permission slugs, and the refresh token is set as an "
                     + "HttpOnly cookie — never in the body"),
-            @ApiResponse(responseCode = "400", description = "Validation failed; see `fieldErrors`",
+            @ApiResponse(responseCode = "400", description = "Validation failed; see `fieldErrors`. Or "
+                    + "`WEAK_PASSWORD`: the password breaks the password rule (8+ characters, at most 64, letters and a number, not common, not your name or email); `message` says which, `fieldErrors` names the field",
                     content = @io.swagger.v3.oas.annotations.media.Content()),
             @ApiResponse(responseCode = "409", description = "That email already has an account",
                     content = @io.swagger.v3.oas.annotations.media.Content())
@@ -257,7 +258,9 @@ public class AuthController {
                     a user who thinks they are compromised.""")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Password changed; all refresh tokens revoked"),
-            @ApiResponse(responseCode = "400", description = "One message for every failure mode, by design",
+            @ApiResponse(responseCode = "400", description = "`INVALID_OR_EXPIRED_CODE`: one message for every "
+                    + "code failure, by design. Or, only once the code is proven, " + "`WEAK_PASSWORD`: the password breaks the password rule (8+ characters, at most 64, letters and a number, not common, not your name or email); `message` says which, `fieldErrors` names the field"
+                    + " — the code stays usable, so retry with a better password",
                     content = @io.swagger.v3.oas.annotations.media.Content())
     })
     @PostMapping("/reset-password")
@@ -285,10 +288,12 @@ public class AuthController {
 
                     **"Sessions revoked" means refresh tokens.** An access token already issued                     rides out its remaining lifetime, up to 15 minutes — the same accepted                     trade-off as password reset and tenant suspension. Do not present this as                     instant severance.
 
-                    The new password carries the same rule as registration: a password acceptable                     when the account was created does not become unacceptable when it is changed.""")
+                    The new password must meet the password rule (`WEAK_PASSWORD`), and must differ                     from the current one. Existing passwords are never re-checked at login.""")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Changed; other sessions revoked, a fresh "
                     + "refresh cookie set for this one"),
+            @ApiResponse(responseCode = "400", description = "`WEAK_PASSWORD`: the password breaks the password rule (8+ characters, at most 64, letters and a number, not common, not your name or email); `message` says which, `fieldErrors` names the field; or the new password is the current one",
+                    content = @io.swagger.v3.oas.annotations.media.Content()),
             @ApiResponse(responseCode = "401", description = "The current password is wrong — the "
                     + "same response a bad password gets at login",
                     content = @io.swagger.v3.oas.annotations.media.Content())

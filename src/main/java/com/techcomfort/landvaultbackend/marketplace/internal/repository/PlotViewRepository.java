@@ -17,6 +17,11 @@ public interface PlotViewRepository extends Repository<PlotView, UUID> {
 
     Page<PlotView> findByEstateIdAndAvailability(UUID estateId, String availability, Pageable pageable);
 
+    Page<PlotView> findByEstateIdAndPriceTierId(UUID estateId, UUID priceTierId, Pageable pageable);
+
+    Page<PlotView> findByEstateIdAndPriceTierIdAndAvailability(UUID estateId, UUID priceTierId, String availability,
+                                                               Pageable pageable);
+
     /** Only plots with a boundary: the rest have nothing to draw. */
     List<PlotView> findByEstateIdAndFootprintIsNotNull(UUID estateId);
 

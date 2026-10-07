@@ -61,7 +61,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers
 class PortalEstateCreationIT {
 
-    private static final String PASSWORD = "correct horse battery staple";
+    private static final String PASSWORD = "correct horse battery staple 9";
     private static final String ADMIN_EMAIL = "admin+" + UUID.randomUUID() + "@example.com";
 
     /** ~2.2km x 2.2km in Lagos — about 4.9 million square metres. */

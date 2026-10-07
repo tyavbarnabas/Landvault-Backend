@@ -77,6 +77,22 @@ public class SuperAdminBootstrap implements ApplicationRunner {
                             + "BOOTSTRAP_SUPER_ADMIN.");
         }
 
+        String problem = PasswordPolicy.problemWith(properties.password(), properties.email(),
+                properties.firstName(), properties.lastName());
+        if (PasswordPolicy.TOO_MANY_BYTES.equals(problem)
+                || properties.password().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > PasswordPolicy.MAX_BYTES) {
+            // Not a matter of strength: BCrypt cannot hash it at all, so the
+            // account could never be created. Say so, instead of the hasher's error.
+            throw new IllegalStateException("BOOTSTRAP_SUPER_ADMIN_PASSWORD is longer than "
+                    + PasswordPolicy.MAX_BYTES + " bytes, which the password hasher cannot accept. Use a shorter one.");
+        }
+        if (problem != null) {
+            // A warning, not a refusal: the account is flagged to change its
+            // password at first sign-in anyway. The rule, never the password.
+            log.warn("BOOTSTRAP_SUPER_ADMIN_PASSWORD does not meet the password rule ({}). The account is "
+                    + "created anyway and must change it at first sign-in.", problem);
+        }
+
         User user = User.builder()
                 // Not configurable beyond first/last name — country/currency
                 // are NOT NULL columns shared by every kind of account, but

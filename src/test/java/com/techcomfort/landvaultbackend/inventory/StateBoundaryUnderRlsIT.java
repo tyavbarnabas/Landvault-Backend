@@ -55,7 +55,7 @@ class StateBoundaryUnderRlsIT {
     private static final String APP_ROLE = "landvault_app_state_boundary_it";
     private static final String APP_ROLE_PASSWORD = "state-boundary-it-password";
     private static final String ADMIN_EMAIL = "admin+" + UUID.randomUUID() + "@example.com";
-    private static final String PASSWORD = "correct horse battery staple";
+    private static final String PASSWORD = "correct horse battery staple 9";
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>(

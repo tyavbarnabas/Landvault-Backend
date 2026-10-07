@@ -81,7 +81,7 @@ class ListingConflictDetectionIT {
     private static final String APP_ROLE = "landvault_app_conflicts_it";
     private static final String APP_ROLE_PASSWORD = "conflicts-it-password";
     private static final String ADMIN_EMAIL = "admin+" + UUID.randomUUID() + "@example.com";
-    private static final String PASSWORD = "correct horse battery staple";
+    private static final String PASSWORD = "correct horse battery staple 9";
 
     /**
      * Each test method gets its own longitude band, 0.1° wide.

@@ -57,7 +57,7 @@ class AdminTenantWriteIT {
     private static final String APP_ROLE = "landvault_app_tenant_write_it";
     private static final String APP_ROLE_PASSWORD = "tenant-write-it-app-password";
     private static final String ADMIN_EMAIL = "admin+" + UUID.randomUUID() + "@example.com";
-    private static final String ADMIN_PASSWORD = "correct horse battery staple";
+    private static final String ADMIN_PASSWORD = "correct horse battery staple 9";
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>(
@@ -145,7 +145,7 @@ class AdminTenantWriteIT {
         String superAdminToken = loginAsSuperAdmin();
         String existingEmail = "taken+" + UUID.randomUUID() + "@example.com";
         RegisterRequest register = new RegisterRequest(
-                "Existing", "Buyer", existingEmail, "+2348000000000", "correct horse battery staple", "NG", Currency.NGN);
+                "Existing", "Buyer", existingEmail, "+2348000000000", "correct horse battery staple 9", "NG", Currency.NGN);
         assertThat(restTemplate.postForEntity("/api/auth/register", register, AuthResponse.class).getStatusCode())
                 .isEqualTo(HttpStatus.CREATED);
 
@@ -326,7 +326,7 @@ class AdminTenantWriteIT {
     private String registerBuyer() {
         String email = "buyer+" + UUID.randomUUID() + "@example.com";
         RegisterRequest register = new RegisterRequest(
-                "Test", "Buyer", email, "+2348000000000", "correct horse battery staple", "NG", Currency.NGN);
+                "Test", "Buyer", email, "+2348000000000", "correct horse battery staple 9", "NG", Currency.NGN);
         ResponseEntity<AuthResponse> response = restTemplate.postForEntity("/api/auth/register", register, AuthResponse.class);
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         return response.getBody().token();

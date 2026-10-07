@@ -4628,6 +4628,48 @@ and the two would drift apart with nothing failing. The class is now public
 *within* `identity.internal` — still invisible to every other module, since
 the whole package is `internal`.
 
+## One password rule, wherever a password is set (`PasswordPolicy`)
+
+`identity.internal.service.PasswordPolicy` is the only place the rule lives,
+called from register, reset, change and invitation accept — never from login,
+so existing weak passwords keep working and nobody is forced to reset.
+**It must stay identical to the frontend's `src/lib/passwordPolicy.ts`**: same
+checks, same order, same sentences. Changing one means changing both, or the
+screen accepts what the server refuses (or the reverse).
+
+The rule, first failure reported: 8+ characters; at most 64 characters; at
+most 72 **bytes** (BCrypt can't hash more, and Spring Security 7 throws — a
+500 — rather than truncating); a letter `[a-zA-Z]` and a digit; not in the
+common list, compared whole and as its "core" (leading/trailing non-letters
+stripped, so `password123!` is `password`); not one repeated character; not
+starting `0123`/`1234`/`abcd`; not containing the email's local part, first
+name or last name (each 3+ characters). Refusal: 400 `WEAK_PASSWORD` with the
+sentence as `message` and under `fieldErrors.<field>` (`password` for register
+and accept, `newPassword` for reset and change). No forced symbols or capitals.
+
+- **One deliberate addition to the frontend's sentences**: a password under 64
+  characters but over 72 bytes (40 accented letters) gets "That password is
+  too long — use fewer accented or special characters." "Use at most 64
+  characters" would have been false for it. The frontend never produces this
+  case today (its input stops at 64 characters, and ordinary text stays well
+  under 72 bytes).
+- **Reset checks the code first, then the rule.** The rule's "don't use your
+  name" answer would otherwise let anyone without a code probe an account's
+  owner by email. Nothing is written before the rule passes, so a weak attempt
+  leaves the code usable. Invitation accept is the same: refused before the
+  token is consumed.
+- **Change** verifies the current password first (401 as before), then the
+  rule, then refuses the current password reused ("Choose a password
+  different from your current one.").
+- **Bootstrap**: a password breaking the rule only logs a warning (the account
+  must change it at first sign-in) — but one over 72 bytes fails startup
+  clearly, since BCrypt can't hash it and the account could never exist.
+- The test suite's shared password became `correct horse battery staple 9` —
+  the old one had no digit.
+
+Proven red: the rule removed from reset and from accept, and the
+same-as-current check.
+
 ## Change password verifies a password; reset verifies a mailbox
 
 `POST /api/auth/change-password` is authenticated and takes

@@ -140,13 +140,20 @@ public class MarketplaceQueryService {
      * Availability stays collapsed, exactly as on the map.
      */
     @Transactional(readOnly = true)
-    public PageResponse<MarketplacePlotDto> plots(UUID estateId, boolean availableOnly, Pageable pageable) {
+    public PageResponse<MarketplacePlotDto> plots(UUID estateId, UUID priceTierId, boolean availableOnly, Pageable pageable) {
         listings.findById(estateId).orElseThrow(ListingNotFound::new);
         Pageable ordered = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),
                 Sort.by(Sort.Order.asc("blockName").nullsFirst(), Sort.Order.asc("plotNumber")));
-        Page<PlotView> page = availableOnly
-                ? plots.findByEstateIdAndAvailability(estateId, "AVAILABLE", ordered)
-                : plots.findByEstateId(estateId, ordered);
+        Page<PlotView> page;
+        if (priceTierId != null) {
+            page = availableOnly
+                    ? plots.findByEstateIdAndPriceTierIdAndAvailability(estateId, priceTierId, "AVAILABLE", ordered)
+                    : plots.findByEstateIdAndPriceTierId(estateId, priceTierId, ordered);
+        } else {
+            page = availableOnly
+                    ? plots.findByEstateIdAndAvailability(estateId, "AVAILABLE", ordered)
+                    : plots.findByEstateId(estateId, ordered);
+        }
         return PageResponses.from(page, p -> new MarketplacePlotDto(p.getPlotId(), p.getPlotNumber(),
                 p.getBlockName(), p.getAvailability(), p.isCorner(), p.getPriceTierId(), p.getNominalSizeSqm(),
                 p.getActualAreaSqm(), p.getFootprint() != null));

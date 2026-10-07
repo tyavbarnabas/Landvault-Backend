@@ -40,7 +40,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SuperAdminBootstrapIT {
 
     private static final String EMAIL = "admin+" + UUID.randomUUID() + "@example.com";
-    private static final String PASSWORD = "correct horse battery staple";
+    private static final String PASSWORD = "correct horse battery staple 9";
 
     @Container
     @ServiceConnection

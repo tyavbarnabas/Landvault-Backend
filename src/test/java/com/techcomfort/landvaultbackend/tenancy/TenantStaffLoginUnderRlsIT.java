@@ -70,7 +70,7 @@ class TenantStaffLoginUnderRlsIT {
     private static final String APP_ROLE = "landvault_app_rls_login_it";
     private static final String APP_ROLE_PASSWORD = "rls-login-it-password";
     private static final String ADMIN_EMAIL = "admin+" + UUID.randomUUID() + "@example.com";
-    private static final String PASSWORD = "correct horse battery staple";
+    private static final String PASSWORD = "correct horse battery staple 9";
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>(

@@ -56,7 +56,7 @@ class PortalBranchUnderRlsIT {
     private static final String APP_ROLE = "landvault_app_branch_it";
     private static final String APP_ROLE_PASSWORD = "branch-it-password";
     private static final String ADMIN_EMAIL = "admin+" + UUID.randomUUID() + "@example.com";
-    private static final String PASSWORD = "correct horse battery staple";
+    private static final String PASSWORD = "correct horse battery staple 9";
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>(

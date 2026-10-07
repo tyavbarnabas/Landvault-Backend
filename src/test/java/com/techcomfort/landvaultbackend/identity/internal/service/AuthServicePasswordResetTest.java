@@ -194,10 +194,10 @@ class AuthServicePasswordResetTest {
         when(userRepository.findByEmailIgnoreCase(anyString())).thenReturn(Optional.of(user));
         when(otpCodeRepository.findFirstByUserIdAndPurposeAndConsumedAtIsNullOrderByCreatedAtDesc(
                 userId, OtpPurpose.PASSWORD_RESET)).thenReturn(Optional.of(stored));
-        when(passwordEncoder.encode("a brand new password")).thenReturn("new-hash");
+        when(passwordEncoder.encode("a brand new password 5")).thenReturn("new-hash");
         when(refreshTokenRepository.findByUserIdAndRevokedAtIsNull(userId)).thenReturn(List.of(active));
 
-        authService.resetPassword(new ResetPasswordRequest("ada@example.com", "123456", "a brand new password"));
+        authService.resetPassword(new ResetPasswordRequest("ada@example.com", "123456", "a brand new password 5"));
 
         assertThat(user.getPasswordHash()).isEqualTo("new-hash");
         assertThat(stored.getConsumedAt()).as("a used code can never be reused").isNotNull();
@@ -241,7 +241,7 @@ class AuthServicePasswordResetTest {
         when(passwordEncoder.encode(anyString())).thenReturn("new-hash");
         when(refreshTokenRepository.findByUserIdAndRevokedAtIsNull(userId)).thenReturn(List.of());
 
-        authService.resetPassword(new ResetPasswordRequest("ada@example.com", "123456", "a brand new password"));
+        authService.resetPassword(new ResetPasswordRequest("ada@example.com", "123456", "a brand new password 5"));
 
         assertThat(user.getPasswordHash()).isEqualTo("new-hash");
     }

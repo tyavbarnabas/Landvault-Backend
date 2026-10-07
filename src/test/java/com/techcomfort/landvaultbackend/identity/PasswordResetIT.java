@@ -13,6 +13,11 @@ import com.techcomfort.landvaultbackend.identity.dto.ResetPasswordRequest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpEntity;
+import com.techcomfort.landvaultbackend.identity.dto.ChangePasswordRequest;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.resttestclient.TestRestTemplate;
@@ -56,8 +61,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers
 class PasswordResetIT {
 
-    private static final String OLD_PASSWORD = "correct horse battery staple";
-    private static final String NEW_PASSWORD = "an entirely different passphrase";
+    private static final String OLD_PASSWORD = "correct horse battery staple 9";
+    private static final String NEW_PASSWORD = "an entirely different passphrase 4";
     private static final String LOGGING_DELIVERY_LOGGER =
             "com.techcomfort.landvaultbackend.identity.internal.service.LoggingOtpDeliveryService";
     private static final Pattern CODE_IN_LOG = Pattern.compile("code=(\\d{6})");
@@ -284,6 +289,80 @@ class PasswordResetIT {
         requestCode(suspended);
         resetPassword(suspended, deliveredCodes().getLast(), NEW_PASSWORD);
         assertThat(singleString("SELECT status FROM users WHERE email = '" + suspended + "'")).isEqualTo("SUSPENDED");
+    }
+
+    // --- the password rule (PasswordPolicy) where a password is set ---
+
+    @Test
+    void registrationRefusesAWeakPasswordNamingTheFieldAndTheRule() {
+        assertWeak(registerWith("password123!"), "password", "That password is too common");
+        assertWeak(registerWith("lovelace2026"), "password", "Don't use your name or email");
+        assertWeak(registerWith("no digits here"), "password", "Use letters and at least one number.");
+        ResponseEntity<String> tooManyBytes = registerWith("é".repeat(40) + "1a");
+        assertThat(tooManyBytes.getStatusCode()).as("82 bytes is refused, not a 500").isEqualTo(HttpStatus.BAD_REQUEST);
+        assertWeak(tooManyBytes, "password", "too long");
+        assertThat(registerWith("harmattan7").getStatusCode()).isEqualTo(HttpStatus.CREATED);
+    }
+
+    /** A weak attempt must not burn the single-use code. */
+    @Test
+    void aWeakResetLeavesTheCodeUsableForARetry() {
+        String email = register();
+        requestCode(email);
+        String code = onlyDeliveredCode();
+
+        assertWeak(resetPassword(email, code, "abc"), "newPassword", "Use at least 8 characters.");
+        assertThat(resetPassword(email, code, "harmattan7").getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(login(email, "harmattan7").getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    /** The code is checked first, so the rule — which names the account's owner — can't be probed without it. */
+    @Test
+    void aWrongCodeIsRefusedBeforeThePasswordIsJudged() {
+        String email = register();
+        requestCode(email);
+        String code = onlyDeliveredCode();
+
+        assertThat(resetPassword(email, wrongCodeOtherThan(code), "lovelace2026").getBody())
+                .contains("INVALID_OR_EXPIRED_CODE").doesNotContain("WEAK_PASSWORD");
+    }
+
+    @Test
+    void changingThePasswordAppliesTheRuleAndRefusesTheSameOne() {
+        String email = register();
+        String token = login(email, OLD_PASSWORD).getBody().token();
+
+        assertThat(change(token, "not the password 1", "harmattan7").getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertWeak(change(token, OLD_PASSWORD, "qwerty123"), "newPassword", "too common");
+        assertWeak(change(token, OLD_PASSWORD, OLD_PASSWORD), "newPassword", "Choose a password different from your current one.");
+        assertThat(change(token, OLD_PASSWORD, "harmattan7").getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    /** The rule applies when a password is set — an existing weak one still signs in. */
+    @Test
+    void loginStillAcceptsAnExistingWeakPassword() {
+        String email = register();
+        execute("UPDATE users SET password_hash = '" + new BCryptPasswordEncoder().encode("1")
+                + "' WHERE email = '" + email + "'");
+        assertThat(login(email, "1").getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    private ResponseEntity<String> registerWith(String password) {
+        return restTemplate.postForEntity("/api/auth/register", new RegisterRequest("Ada", "Lovelace",
+                "rule+" + UUID.randomUUID() + "@example.com", "+2348000000000", password, "NG", Currency.NGN), String.class);
+    }
+
+    private ResponseEntity<String> change(String token, String current, String next) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(token);
+        return restTemplate.exchange("/api/auth/change-password", HttpMethod.POST,
+                new HttpEntity<>(new ChangePasswordRequest(current, next), headers), String.class);
+    }
+
+    private static void assertWeak(ResponseEntity<String> response, String field, String sentence) {
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).contains("\"code\":\"WEAK_PASSWORD\"").contains(sentence)
+                .contains("\"fieldErrors\":{\"" + field + "\":");
     }
 
     @Test

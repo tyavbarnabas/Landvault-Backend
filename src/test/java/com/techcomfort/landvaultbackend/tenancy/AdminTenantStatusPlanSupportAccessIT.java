@@ -56,7 +56,7 @@ class AdminTenantStatusPlanSupportAccessIT {
     private static final String APP_ROLE = "landvault_app_status_plan_it";
     private static final String APP_ROLE_PASSWORD = "status-plan-it-app-password";
     private static final String ADMIN_EMAIL = "admin+" + UUID.randomUUID() + "@example.com";
-    private static final String ADMIN_PASSWORD = "correct horse battery staple";
+    private static final String ADMIN_PASSWORD = "correct horse battery staple 9";
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>(
@@ -299,7 +299,7 @@ class AdminTenantStatusPlanSupportAccessIT {
     private String registerBuyer() {
         String email = "buyer+" + UUID.randomUUID() + "@example.com";
         RegisterRequest register = new RegisterRequest(
-                "Test", "Buyer", email, "+2348000000000", "correct horse battery staple", "NG", Currency.NGN);
+                "Test", "Buyer", email, "+2348000000000", "correct horse battery staple 9", "NG", Currency.NGN);
         ResponseEntity<AuthResponse> response = restTemplate.postForEntity("/api/auth/register", register, AuthResponse.class);
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         return response.getBody().token();

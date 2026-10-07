@@ -70,7 +70,7 @@ class AuthenticationIT {
     void registerLoginProtectedEndpointRefreshAndCallAgain() {
         String email = "ada+" + UUID.randomUUID() + "@example.com";
         RegisterRequest register = new RegisterRequest(
-                "Ada", "Lovelace", email, "+2348000000000", "correct horse battery staple", "NG", Currency.NGN);
+                "Ada", "Lovelace", email, "+2348000000000", "correct horse battery staple 9", "NG", Currency.NGN);
 
         ResponseEntity<AuthResponse> registerResponse = restTemplate.postForEntity("/api/auth/register", register, AuthResponse.class);
         assertThat(registerResponse.getStatusCode()).isEqualTo(HttpStatus.CREATED);
@@ -81,7 +81,7 @@ class AuthenticationIT {
         assertThat(registered.user().kycStatus()).isEqualTo("unsubmitted");
 
         ResponseEntity<AuthResponse> loginResponse = restTemplate.postForEntity(
-                "/api/auth/login", new LoginRequest(email, "correct horse battery staple"), AuthResponse.class);
+                "/api/auth/login", new LoginRequest(email, "correct horse battery staple 9"), AuthResponse.class);
         assertThat(loginResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
         AuthResponse loggedIn = loginResponse.getBody();
         assertThat(loggedIn).isNotNull();
@@ -153,7 +153,7 @@ class AuthenticationIT {
     void protectedEndpointWithInsufficientPermissionIsForbidden() {
         String email = "buyer+" + UUID.randomUUID() + "@example.com";
         RegisterRequest register = new RegisterRequest(
-                "Regular", "Buyer", email, "+2348000000000", "another correct horse battery staple", "NG", Currency.NGN);
+                "Regular", "Buyer", email, "+2348000000000", "another correct horse battery staple 9", "NG", Currency.NGN);
         AuthResponse registered = restTemplate.postForEntity("/api/auth/register", register, AuthResponse.class).getBody();
         assertThat(registered).isNotNull();
 
@@ -169,7 +169,7 @@ class AuthenticationIT {
     void duplicateEmailRegistrationConflicts() {
         String email = "dup+" + UUID.randomUUID() + "@example.com";
         RegisterRequest register = new RegisterRequest(
-                "First", "User", email, "+2348000000000", "correct horse battery staple", "NG", Currency.NGN);
+                "First", "User", email, "+2348000000000", "correct horse battery staple 9", "NG", Currency.NGN);
         restTemplate.postForEntity("/api/auth/register", register, AuthResponse.class);
 
         ResponseEntity<AuthResponse> second = restTemplate.postForEntity("/api/auth/register", register, AuthResponse.class);
@@ -180,7 +180,7 @@ class AuthenticationIT {
     void loginWithWrongPasswordAndUnknownEmailReturnTheSameStatusAndGenericMessage() {
         String email = "known+" + UUID.randomUUID() + "@example.com";
         RegisterRequest register = new RegisterRequest(
-                "Known", "User", email, "+2348000000000", "correct horse battery staple", "NG", Currency.NGN);
+                "Known", "User", email, "+2348000000000", "correct horse battery staple 9", "NG", Currency.NGN);
         restTemplate.postForEntity("/api/auth/register", register, AuthResponse.class);
 
         ResponseEntity<String> wrongPassword = restTemplate.postForEntity(
@@ -207,8 +207,8 @@ class AuthenticationIT {
     @Test
     void changingAPasswordRequiresTheCurrentOneAndEndsOtherSessions() {
         String email = "chg+" + UUID.randomUUID() + "@example.com";
-        String original = "correct horse battery staple";
-        String replacement = "a completely different passphrase";
+        String original = "correct horse battery staple 9";
+        String replacement = "a completely different passphrase 3";
 
         ResponseEntity<AuthResponse> registerResponse = restTemplate.postForEntity("/api/auth/register",
                 new RegisterRequest("Ada", "L", email, "+2348000000000", original, "NG", Currency.NGN),
@@ -271,7 +271,7 @@ class AuthenticationIT {
         String email = "scope+" + UUID.randomUUID() + "@example.com";
         AuthResponse registered = restTemplate.postForEntity("/api/auth/register",
                 new RegisterRequest("Ada", "L", email, "+2348000000000",
-                        "correct horse battery staple", "NG", Currency.NGN),
+                        "correct horse battery staple 9", "NG", Currency.NGN),
                 AuthResponse.class).getBody();
 
         assertThat(registered.user().tenantId()).as("a buyer belongs to no company").isNull();

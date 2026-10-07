@@ -55,7 +55,7 @@ class RefreshTokenCookieIT {
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>(
             DockerImageName.parse("postgis/postgis:16-3.4-alpine").asCompatibleSubstituteFor("postgres"));
 
-    private static final String PASSWORD = "correct horse battery staple";
+    private static final String PASSWORD = "correct horse battery staple 9";
     private static final String ALLOWED_ORIGIN = "http://localhost:8443";
 
     @DynamicPropertySource
@@ -256,7 +256,7 @@ class RefreshTokenCookieIT {
         headers.setBearerAuth(login.getBody().token());
         headers.setContentType(MediaType.APPLICATION_JSON);
         assertThat(restTemplate.exchange("/api/auth/change-password", HttpMethod.POST,
-                new HttpEntity<>(new ChangePasswordRequest(PASSWORD, "a completely different passphrase"), headers),
+                new HttpEntity<>(new ChangePasswordRequest(PASSWORD, "a completely different passphrase 3"), headers),
                 String.class).getStatusCode()).isEqualTo(HttpStatus.OK);
 
         assertThat(refresh(original).getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
@@ -275,7 +275,7 @@ class RefreshTokenCookieIT {
         headers.setBearerAuth(login.getBody().token());
         headers.setContentType(MediaType.APPLICATION_JSON);
         ResponseEntity<String> changed = restTemplate.exchange("/api/auth/change-password", HttpMethod.POST,
-                new HttpEntity<>(new ChangePasswordRequest(PASSWORD, "a completely different passphrase"), headers),
+                new HttpEntity<>(new ChangePasswordRequest(PASSWORD, "a completely different passphrase 3"), headers),
                 String.class);
 
         assertThat(changed.getStatusCode()).isEqualTo(HttpStatus.OK);

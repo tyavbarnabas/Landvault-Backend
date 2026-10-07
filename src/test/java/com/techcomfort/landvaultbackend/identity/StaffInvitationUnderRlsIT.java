@@ -63,7 +63,7 @@ class StaffInvitationUnderRlsIT {
     private static final String APP_ROLE = "landvault_app_invitation_it";
     private static final String APP_ROLE_PASSWORD = "invitation-it-password";
     private static final String ADMIN_EMAIL = "admin+" + UUID.randomUUID() + "@example.com";
-    private static final String PASSWORD = "correct horse battery staple";
+    private static final String PASSWORD = "correct horse battery staple 9";
     private static final String DELIVERY_LOGGER =
             "com.techcomfort.landvaultbackend.identity.internal.service.LoggingInvitationDeliveryService";
 
@@ -163,6 +163,22 @@ class StaffInvitationUnderRlsIT {
     }
 
     // --- the role's scope ---
+
+    /** The invited person's own name counts as personal; a refusal must not burn the link. */
+    @Test
+    void aWeakPasswordOnAcceptLeavesTheLinkUsable() {
+        String email = "kemi.obi+" + UUID.randomUUID() + "@example.com";
+        invite(director, email, "sales_manager", null);
+        String token = lastToken();
+
+        ResponseEntity<String> weak = post("/api/auth/invitations/accept", null,
+                "{\"token\":\"" + token + "\",\"password\":\"staffTest2026\"}");
+        assertThat(weak.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(weak.getBody()).contains("WEAK_PASSWORD").contains("\"fieldErrors\":{\"password\":")
+                .as("the invitation's first name is Test").contains("Don't use your name or email");
+        assertThat(post("/api/auth/invitations/accept", null,
+                "{\"token\":\"" + token + "\",\"password\":\"harmattan7\"}").getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
 
     @Test
     void theRolesScopeDecidesWhetherABranchIsRequiredForbiddenOrOptional() {

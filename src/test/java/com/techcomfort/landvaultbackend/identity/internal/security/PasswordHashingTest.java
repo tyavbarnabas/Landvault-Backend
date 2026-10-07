@@ -12,10 +12,10 @@ class PasswordHashingTest {
 
     @Test
     void hashesNeverEqualTheRawPasswordAndVerifyCorrectly() {
-        String hash = encoder.encode("correct horse battery staple");
+        String hash = encoder.encode("correct horse battery staple 9");
 
-        assertThat(hash).isNotEqualTo("correct horse battery staple");
-        assertThat(encoder.matches("correct horse battery staple", hash)).isTrue();
+        assertThat(hash).isNotEqualTo("correct horse battery staple 9");
+        assertThat(encoder.matches("correct horse battery staple 9", hash)).isTrue();
         assertThat(encoder.matches("wrong password", hash)).isFalse();
     }
 

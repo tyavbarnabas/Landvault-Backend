@@ -89,7 +89,7 @@ class PortalEstateReadUnderRlsIT {
     private static final String APP_ROLE = "landvault_app_inventory_read_it";
     private static final String APP_ROLE_PASSWORD = "inventory-read-it-password";
     private static final String ADMIN_EMAIL = "admin+" + UUID.randomUUID() + "@example.com";
-    private static final String PASSWORD = "correct horse battery staple";
+    private static final String PASSWORD = "correct horse battery staple 9";
 
     /** ~2.2km x 2.2km in Lagos. Lagos deliberately — see PortalEstateCreationIT. */
     private static final List<List<BigDecimal>> ESTATE_RING = ring(

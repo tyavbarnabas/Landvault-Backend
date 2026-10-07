@@ -71,7 +71,7 @@ class SuperAdminBootstrapMisconfiguredIT {
         List<String> args = new ArrayList<>(baseArgs());
         args.add("--landvault.bootstrap.super-admin.enabled=true");
         args.add("--landvault.bootstrap.super-admin.email=");
-        args.add("--landvault.bootstrap.super-admin.password=correct horse battery staple");
+        args.add("--landvault.bootstrap.super-admin.password=correct horse battery staple 9");
 
         assertThatThrownBy(() -> context = new SpringApplicationBuilder(LandvaultApplication.class)
                 .run(args.toArray(new String[0])))
