@@ -78,7 +78,7 @@ public class PaymentConfirmationService {
         if (verification.succeeded()) {
             payment.setChannel(verification.channel());
             payment.setGatewayResponse(verification.gatewayResponse());
-            payment.setCardLast4(verification.cardLast4());
+            payment.setLast4(verification.last4());
             payment.setCardBin(verification.cardBin());
             payment.setPaidAt(verification.paidAt());
             payment.setVerifiedAt(Instant.now());

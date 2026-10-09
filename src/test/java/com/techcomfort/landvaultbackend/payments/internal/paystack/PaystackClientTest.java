@@ -115,7 +115,7 @@ class PaystackClientTest {
         assertThat(v.succeeded()).as("status:true at the top, but the payment failed").isFalse();
         assertThat(v.paymentStatus()).isEqualTo("failed");
         assertThat(v.gatewayResponse()).isEqualTo("Insufficient Funds");
-        assertThat(v.cardLast4()).isEqualTo("4081");
+        assertThat(v.last4()).isEqualTo("4081");
         assertThat(v.cardBin()).isEqualTo("408408");
         assertThat(v.rawBody()).as("kept exactly as received").contains("\"gateway_response\":\"Insufficient Funds\"");
     }

@@ -68,8 +68,9 @@ public class Payment extends AbstractEntity {
     @Column(name = "channel")
     private String channel;
 
-    @Column(name = "card_last4")
-    private String cardLast4;
+    /** Last 4 digits of what paid: a card, or the paying account for a bank transfer (see {@link #channel}). */
+    @Column(name = "last4")
+    private String last4;
 
     @Column(name = "card_bin")
     private String cardBin;

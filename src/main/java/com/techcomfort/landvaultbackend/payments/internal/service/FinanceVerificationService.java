@@ -99,7 +99,7 @@ public class FinanceVerificationService {
         Optional<Payment> payment = confirmedPaymentFor(row.transactionId());
         FinanceQueueItemDto.GatewayRecord record = payment.map(p -> new FinanceQueueItemDto.GatewayRecord(
                 p.getReference(), p.getAmount(), p.getCurrency().name(), p.getChannel(), p.getPaidAt(),
-                p.getCardLast4(), p.getGatewayResponse())).orElse(null);
+                p.getLast4(), p.getGatewayResponse())).orElse(null);
         return new FinanceQueueItemDto(row.transactionId(), row.transactionReference(), row.estateId(),
                 row.estateName(), row.plotId(), row.plotLabel(), identityApi.emailOf(row.buyerUserId()).orElse(null),
                 row.totalPrice(), row.currency().name(), row.awaitingSince(), record,

@@ -27,14 +27,18 @@ public record FinanceQueueItemDto(
         boolean amountsMatch
 ) {
 
-    /** What Paystack recorded. Only a card's last 4 digits, never more. */
+    /**
+     * What Paystack recorded. {@code last4}: the last 4 digits of what paid — a
+     * card, or the paying account for a bank transfer ({@code channel} says
+     * which). Never more.
+     */
     public record GatewayRecord(
             String reference,
             BigDecimal amountPaid,
             String currency,
             String channel,
             Instant paidAt,
-            String cardLast4,
+            String last4,
             String gatewayResponse
     ) {
     }

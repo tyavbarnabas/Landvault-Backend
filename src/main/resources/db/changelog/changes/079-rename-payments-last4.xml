@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        "card_last4" was wrong whenever the buyer didn't pay by card: for a bank
+        transfer Paystack reports the paying account's last digits (seen live:
+        "X890"). Renamed to what it is — the last 4 of whatever paid; `channel`
+        says which. No data changes.
+    -->
+    <changeSet id="079-rename-payments-last4" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE payments RENAME COLUMN card_last4 TO last4;
+            COMMENT ON COLUMN payments.last4 IS
+                'Last 4 digits of what the buyer paid with, as Paystack reports it: a card, or the paying bank account for a transfer (see channel). Never more.';
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE payments RENAME COLUMN last4 TO card_last4;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

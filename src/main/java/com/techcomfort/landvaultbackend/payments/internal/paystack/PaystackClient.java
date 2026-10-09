@@ -50,11 +50,12 @@ public class PaystackClient {
      * Paystack's verdict on one payment. {@code paymentStatus} is
      * {@code data.status} (success, failed, abandoned, ...). {@code rawBody} is
      * the reply exactly as received, kept for disputes (PY-10). Only
-     * {@code last4} and {@code bin} of a card are ever read.
+     * {@code last4} and {@code bin} are ever read — of a card, or of the
+     * paying account for a bank transfer.
      */
     public record Verification(boolean found, String paymentStatus, String reference, long amountKobo,
                                String currency, String gatewayResponse, Instant paidAt, String channel,
-                               String cardLast4, String cardBin, String rawBody) {
+                               String last4, String cardBin, String rawBody) {
 
         public boolean succeeded() {
             return found && "success".equals(paymentStatus);

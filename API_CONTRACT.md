@@ -612,7 +612,7 @@ contact you", never "you own this plot".
 (add to the frontend's permission list). `GET /api/portal/finance/transactions`
 → `[{ transactionId, transactionReference, estateName, plotLabel, buyerEmail,
 expectedAmount, currency, awaitingSince, payment: { reference, amountPaid,
-channel, paidAt, cardLast4, gatewayResponse } | null, amountsMatch }]`.
+channel, paidAt, last4, gatewayResponse } | null, amountsMatch }]`.
 `POST …/{id}/verify` → `{ status: "verified" }` (plot sold, reservation
 `converted` — only now may the buyer be told the plot is theirs);
 `POST …/{id}/reject` `{ reason }` → `{ status: "rejected" }`. Errors: 404
@@ -662,4 +662,8 @@ company-wide; 403 `COMPANY_WIDE_SCOPE_REQUIRED` when narrowed to a branch) → t
 own `PayoutDto[]`, newest first, read-only. `PayoutDto` gains `reviewReason` (non-null =
 LandVault is looking into it). A payout's status can change after the fact: `success` can
 become `reversed` (the part is owed again and reappears on the admin ready list).
+
+**Renamed (changeset 079): `payment.cardLast4` → `payment.last4`** in the finance queue. It is
+the last 4 digits of whatever paid — a card, or the paying bank account for a transfer;
+read it with `channel` ("card ending 4081" vs "account ending X890").
 
