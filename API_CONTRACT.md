@@ -576,3 +576,90 @@ code is proven, and a refusal leaves the code (or invitation link) usable.
 pages one tier's plots (`limit` default 100, max 500; `cursor` from the
 previous page). Use it instead of loading the whole estate and filtering.
 
+**Payments (Paystack), step 3**: `POST /api/transactions/{id}/payments` (no
+body) → **201** new, or **200** the open link from the last 30 minutes →
+`{ id, transactionId, reference, status: "initialized", amount, currency,
+authorizationUrl, createdAt }`. Redirect the buyer to `authorizationUrl`;
+Paystack returns them to `/payments/return?reference=…` on the frontend.
+**Showing "paid" on that page is wrong** — wait for the backend to verify
+(step 4). Errors: 404 `TRANSACTION_NOT_FOUND`, 409 `TRANSACTION_NOT_PAYABLE`,
+400 `PAYMENT_PLAN_NOT_SUPPORTED` / `CURRENCY_NOT_SUPPORTED`, 502
+`PAYMENT_PROVIDER_REFUSED`, 503 `PAYMENT_PROVIDER_UNAVAILABLE`.
+
+**Payments, step 4 — confirm**: the return page (`/payments/return?reference=…`)
+calls `POST /api/payments/{reference}/verify` (buyer's own, no body) →
+`PaymentDto` with `status`, `gatewayResponse`, `channel`, `paidAt`.
+`succeeded` → the transaction is `awaiting_finance` — say "payment received,
+pending verification", **never** "you own this plot". `failed` → show
+`gatewayResponse` and offer to pay again. `initialized` → not finished yet
+(transfers take minutes): poll again shortly. `mismatched` → "we're reviewing
+this payment". 404 `PAYMENT_NOT_FOUND`.
+
+**Payments, step 5 — webhook** (server-to-server; not called by the frontend):
+`POST /api/payments/webhook/paystack`, signed by Paystack. Effect for the
+frontend: a payment can turn `succeeded` **without the buyer ever returning**
+(a closed tab during a bank transfer) — so a buyer's transaction page should
+read the transaction's status from the server, not assume the return page ran.
+
+**Payments, step 6 — abandonment**: a purchase with nothing paid 15 minutes
+after its hold ends becomes transaction status **`abandoned`** (new — add it to
+`TransactionStatus` in `marketplaceCheckoutService.ts`); the plot is back on
+sale. `PaymentDto` gains **`underReview`**: true when money arrived after the
+purchase was abandoned — show "we've received your payment and our team will
+contact you", never "you own this plot".
+
+**Payments, step 7 — finance (developer portal)**: `portal.payments.verify`
+(add to the frontend's permission list). `GET /api/portal/finance/transactions`
+→ `[{ transactionId, transactionReference, estateName, plotLabel, buyerEmail,
+expectedAmount, currency, awaitingSince, payment: { reference, amountPaid,
+channel, paidAt, cardLast4, gatewayResponse } | null, amountsMatch }]`.
+`POST …/{id}/verify` → `{ status: "verified" }` (plot sold, reservation
+`converted` — only now may the buyer be told the plot is theirs);
+`POST …/{id}/reject` `{ reason }` → `{ status: "rejected" }`. Errors: 404
+`TRANSACTION_NOT_FOUND`, 409 `TRANSACTION_NOT_AWAITING_FINANCE` /
+`PAYMENT_NOT_CONFIRMED` / `PLOT_NOT_RESERVED`, 403 `COMPANY_SCOPE_REQUIRED`.
+
+**Payments, step 8a — payout account.** New permissions `portal.settlement.manage`
+(Executive Director) and `admin.payouts.manage` (Super Admin) — add both to the
+frontend's list. Portal: `GET /api/portal/settlement/banks` → `[{ code, name }]`;
+`GET /api/portal/settlement/account` → `{ approved, pending, history[] }` of
+`{ id, bankCode, bankName, accountNumber, accountName, currency, status, submittedAt,
+decidedAt, decisionNote }` (`status`: pending | approved | rejected | withdrawn |
+superseded); `POST /api/portal/settlement/account` `{ bankCode, accountNumber }` → 201
+(**no account name field — the bank supplies it**; show it back to the user to
+confirm); `POST /api/portal/settlement/account/{id}/withdraw`. Errors: 400
+`UNKNOWN_BANK`, `ACCOUNT_NOT_RESOLVED`, `SETTLEMENT_ACCOUNT_UNCHANGED`; 403
+`SETTLEMENT_REQUIRES_COMPANY_WIDE_SCOPE`; 409 `SETTLEMENT_ACCOUNT_PENDING`. Admin:
+`GET /api/admin/settlement-accounts?status=pending|…|all` → review items with
+`registeredName`, `tradingName`, `account`, `nameMatchesCompany`, onboarding fields,
+`matchesOnboardingAccount` (null = none declared), `currentApproved`; `POST
+…/{id}/approve`, `POST …/{id}/reject` `{ reason }`. Show the two match flags as
+warnings, never as blockers.
+
+**Payments, step 8b — payouts (Super Admin).** `admin.payouts.manage`, plus the
+caller's own 2FA to send. `GET /api/admin/payouts/ready` → `[{ transactionId,
+transactionReference, tenantId, companyName, estateName, plotLabel, amount, currency,
+verifiedAt, payoutAccount: { bankName, accountLast4, accountName } | null, blockers[],
+lastAttempt }]`; `GET /api/admin/payouts?status=` → `PayoutDto[]` `{ id,
+transactionId, tenantId, amount, currency, status, reference, gatewayMessage, bankName,
+accountLast4, createdAt, transferredAt }` (`status`: sending | awaiting_otp | pending |
+success | failed | reversed | cancelled). `POST /api/admin/payouts` `{ transactionId }`
+→ usually `awaiting_otp`: prompt for the code Paystack sent the account owner, then
+`POST /api/admin/payouts/{id}/otp` `{ otp }`; `…/resend-otp`; `…/cancel`. Errors: 403
+`TWO_FACTOR_REQUIRED`; 404 `SALE_NOT_PAYABLE`; 409 `PAYOUT_IN_PROGRESS`,
+`COMPANY_NOT_ACTIVE`, `NO_APPROVED_PAYOUT_ACCOUNT`, `PAYOUT_NOT_AWAITING_OTP`; 400
+`OTP_REJECTED`; 502 `PAYMENT_PROVIDER_REFUSED` (recorded as failed); 503
+`PAYOUT_OUTCOME_UNKNOWN` — tell the user it's safe to press send again.
+
+**Payouts in parts.** A sale above Paystack's per-transfer cap (₦10M) is paid in equal
+parts: each `PayoutDto` carries `partNumber`/`partCount` and `amount` is the part.
+`/api/admin/payouts/ready` items add `amountOwed`, `partCount`, `partsPaid`, `nextPart`,
+`nextPartAmount` (null with blocker `CURRENCY_NOT_SUPPORTED` for non-NGN). Pressing pay
+out sends the next part (one OTP per part); 409 `SALE_ALREADY_PAID` once all are paid.
+
+**Payments, step 8c — payout outcomes.** `GET /api/portal/payouts` (`portal.payments.verify`,
+company-wide; 403 `COMPANY_WIDE_SCOPE_REQUIRED` when narrowed to a branch) → the company's
+own `PayoutDto[]`, newest first, read-only. `PayoutDto` gains `reviewReason` (non-null =
+LandVault is looking into it). A payout's status can change after the fact: `success` can
+become `reversed` (the part is owed again and reappears on the admin ready list).
+

@@ -7,10 +7,10 @@ import com.fasterxml.jackson.annotation.JsonValue;
  * Where a purchase stands. Wire values are the frontend's
  * {@code TransactionStatus} union verbatim.
  * <p>
- * <strong>This module only ever writes {@link #PENDING_PAYMENT}.</strong>
- * Every other constant belongs to {@code finance}, which does not exist yet:
- * a payment signal is never treated as confirmation, and allocation happens
- * only after a finance-role human verifies it (TX-3, and AGENTS.md's
+ * Written here: {@link #PENDING_PAYMENT} at creation; {@link #AWAITING_FINANCE}
+ * when the payments module confirms the money with Paystack; {@link #ABANDONED}
+ * when nothing was paid after the hold ran out. A payment signal is never
+ * treated as allocation — that follows a finance-role human (TX-3, AGENTS.md's
  * two-step payment rule).
  * <p>
  * The full union is declared here anyway, rather than narrowed to the one
@@ -35,7 +35,12 @@ public enum TransactionStatus {
     VERIFIED("verified"),
 
     /** finance: the payment did not check out. */
-    REJECTED("rejected");
+    REJECTED("rejected"),
+    /**
+     * Nothing was paid after the hold ran out (plus a grace period); the plot
+     * went back on sale. Backend-added — the frontend's union needs it too.
+     */
+    ABANDONED("abandoned");
 
     private final String value;
 

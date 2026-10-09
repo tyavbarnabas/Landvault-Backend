@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        One row per payment ATTEMPT against a transaction (PY-1): a declined
+        card and a retry are two rows. `reference` is ours and is what Paystack
+        echoes back on verify and in the webhook. Amounts are stored in naira
+        (numeric, two decimals) and in kobo exactly as sent, so what we asked
+        Paystack for is never re-derived later.
+
+        Buyer-owned like `transactions`, so NOT RLS-policied: a buyer has no
+        tenant scope, and rows are reached only by the buyer's own id or by the
+        reference. `seller_tenant_id` records whose sale it is. See AGENTS.md,
+        "Payments".
+    -->
+    <changeSet id="070-create-payments" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE payments (
+                id                 uuid NOT NULL PRIMARY KEY,
+                tenant_id          uuid,
+                branch_id          uuid,
+                created_at         timestamp(6) with time zone NOT NULL,
+                updated_at         timestamp(6) with time zone,
+                created_by         varchar(255),
+                updated_by         varchar(255),
+                deleted            boolean NOT NULL,
+
+                transaction_id     uuid NOT NULL REFERENCES transactions (id),
+                buyer_user_id      uuid NOT NULL REFERENCES users (id),
+                seller_tenant_id   uuid NOT NULL REFERENCES organizations (id),
+                reference          varchar(64) NOT NULL UNIQUE,
+                amount             numeric(19,2) NOT NULL,
+                currency           varchar(3) NOT NULL,
+                amount_kobo        bigint NOT NULL,
+                status             varchar(16) NOT NULL,
+                authorization_url  text,
+                access_code        varchar(64),
+                gateway_response   varchar(255),
+                channel            varchar(32),
+                card_last4         varchar(4),
+                card_bin           varchar(8),
+                paid_at            timestamp(6) with time zone,
+                verified_at        timestamp(6) with time zone,
+
+                CONSTRAINT chk_payments_status
+                    CHECK (status IN ('INITIALIZED', 'SUCCEEDED', 'FAILED', 'ABANDONED', 'MISMATCHED')),
+                CONSTRAINT chk_payments_amount_positive CHECK (amount > 0 AND amount_kobo > 0)
+            );
+            CREATE INDEX idx_payments_transaction ON payments (transaction_id, created_at DESC);
+            CREATE INDEX idx_payments_status ON payments (status, created_at);
+            COMMENT ON TABLE payments IS
+                'Payment attempts against a transaction (Paystack). Buyer-owned, not RLS-policied. Only card last4/bin are ever stored. See AGENTS.md.';
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE payments;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

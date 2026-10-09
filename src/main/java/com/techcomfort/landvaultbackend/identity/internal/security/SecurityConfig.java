@@ -23,6 +23,7 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import org.springframework.http.HttpMethod;
 
 /**
  * Stateless JWT security: no session cookie, {@link JwtAuthenticationFilter}
@@ -96,6 +97,13 @@ public class SecurityConfig {
      * (a "save" on {@code /api/marketplace/estates/{id}}, say) doesn't
      * inherit anonymous access either.
      */
+    // Called by Paystack, which has no login: the HMAC signature checked in
+    // PaystackWebhookService is its only proof of origin. POST only, one exact
+    // path — never a wildcard under /api/payments.
+    private static final String[] PUBLIC_POST_PATHS = {
+            "/api/payments/webhook/paystack"
+    };
+
     private static final String[] PUBLIC_GET_PATHS = {
             "/api/marketplace/estates",
             "/api/marketplace/estates/*",
@@ -156,7 +164,8 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(publicPaths.toArray(new String[0])).permitAll()
-                        .requestMatchers(org.springframework.http.HttpMethod.GET, PUBLIC_GET_PATHS).permitAll()
+                        .requestMatchers(HttpMethod.GET, PUBLIC_GET_PATHS).permitAll()
+                        .requestMatchers(HttpMethod.POST, PUBLIC_POST_PATHS).permitAll()
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions
                         .authenticationEntryPoint((request, response, ex) -> writeError(response, 401,

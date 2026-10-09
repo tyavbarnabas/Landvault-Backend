@@ -90,6 +90,32 @@ public class PlotLockGateway {
     }
 
     /**
+     * Whether the caller can see this plot at all. An ordinary query, so the
+     * caller's own row-level security decides: another company's plot, or a
+     * plot outside a branch-scoped officer's branch, is simply not there.
+     */
+    public boolean isVisible(UUID plotId) {
+        Object count = entityManager.createNativeQuery("SELECT count(*) FROM plots WHERE id = :plotId")
+                .setParameter("plotId", plotId)
+                .getSingleResult();
+        return ((Number) count).longValue() > 0;
+    }
+
+    /**
+     * FV-3: a held plot becomes sold. Not a definer function, unlike acquire
+     * and release: the caller is the selling company's own finance staff, so
+     * the plots policy permits the write and still walls it to their branch.
+     * Once only — true for exactly one caller.
+     */
+    public boolean sell(UUID plotId) {
+        int updated = entityManager.createNativeQuery("UPDATE plots SET status = 'SOLD', updated_at = now() "
+                        + "WHERE id = :plotId AND status = 'RESERVED' AND deleted = false")
+                .setParameter("plotId", plotId)
+                .executeUpdate();
+        return updated == 1;
+    }
+
+    /**
      * What the acquire returns: enough to price the hold, taken from the
      * same locked snapshot that granted it, so the price cannot be read
      * from a tier that changed in between.

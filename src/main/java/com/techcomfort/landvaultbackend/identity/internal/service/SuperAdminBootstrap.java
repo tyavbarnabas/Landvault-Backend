@@ -16,6 +16,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+import java.nio.charset.StandardCharsets;
 
 /**
  * Creates the platform's first Super Admin account — the only way one can
@@ -80,7 +81,7 @@ public class SuperAdminBootstrap implements ApplicationRunner {
         String problem = PasswordPolicy.problemWith(properties.password(), properties.email(),
                 properties.firstName(), properties.lastName());
         if (PasswordPolicy.TOO_MANY_BYTES.equals(problem)
-                || properties.password().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > PasswordPolicy.MAX_BYTES) {
+                || properties.password().getBytes(StandardCharsets.UTF_8).length > PasswordPolicy.MAX_BYTES) {
             // Not a matter of strength: BCrypt cannot hash it at all, so the
             // account could never be created. Say so, instead of the hasher's error.
             throw new IllegalStateException("BOOTSTRAP_SUPER_ADMIN_PASSWORD is longer than "

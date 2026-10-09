@@ -10,6 +10,8 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.SQLRestriction;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 
 /**
  * A named set of permissions. {@code systemRole} rows are seeded and must
@@ -38,7 +40,7 @@ public class Role extends AbstractEntity {
     private Boolean systemRole;
 
     /** How a tenant may assign this role; null means not assignable by a tenant. Changeset 067. */
-    @jakarta.persistence.Enumerated(jakarta.persistence.EnumType.STRING)
+    @Enumerated(EnumType.STRING)
     @Column(name = "scope", length = 16)
     private com.techcomfort.landvaultbackend.identity.internal.enums.RoleScope scope;
 }

@@ -25,6 +25,8 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 
 /**
  * Bootstrap enabled with valid configuration — the account gets created
@@ -121,6 +123,6 @@ class SuperAdminBootstrapIT {
 
     private static String decodeJwtPayload(String jwt) {
         String payload = jwt.split("\\.")[1];
-        return new String(java.util.Base64.getUrlDecoder().decode(payload), java.nio.charset.StandardCharsets.UTF_8);
+        return new String(Base64.getUrlDecoder().decode(payload), StandardCharsets.UTF_8);
     }
 }

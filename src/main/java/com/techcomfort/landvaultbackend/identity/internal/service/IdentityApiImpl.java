@@ -3,11 +3,13 @@ package com.techcomfort.landvaultbackend.identity.internal.service;
 import com.techcomfort.landvaultbackend.identity.IdentityApi;
 import com.techcomfort.landvaultbackend.identity.dto.UserDto;
 import com.techcomfort.landvaultbackend.identity.internal.domain.User;
+import com.techcomfort.landvaultbackend.identity.internal.enums.UserStatus;
 import com.techcomfort.landvaultbackend.identity.internal.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -26,6 +28,9 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class IdentityApiImpl implements IdentityApi {
 
+    private static final String EXECUTIVE_DIRECTOR = "executive_director";
+    private static final String SUPER_ADMIN = "super_admin";
+
     private final UserRepository userRepository;
 
     @Override
@@ -38,6 +43,34 @@ public class IdentityApiImpl implements IdentityApi {
     @Transactional(readOnly = true)
     public Optional<String> countryOf(UUID userId) {
         return userRepository.findById(userId).map(User::getCountry);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<String> emailOf(UUID userId) {
+        return userRepository.findById(userId).map(User::getEmail);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<String> executiveDirectorEmails(UUID tenantId) {
+        return userRepository.findCompanyWideHolders(tenantId, EXECUTIVE_DIRECTOR, UserStatus.ACTIVE).stream()
+                .map(User::getEmail)
+                .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public boolean hasConfirmedTwoFactor(UUID userId) {
+        return userRepository.findById(userId)
+                .map(u -> Boolean.TRUE.equals(u.getTwoFaEnabled()) && u.getTwoFaConfirmedAt() != null)
+                .orElse(false);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<String> superAdminEmails() {
+        return userRepository.findRoleHolders(SUPER_ADMIN, UserStatus.ACTIVE).stream().map(User::getEmail).toList();
     }
 
     private static UserDto toDto(User user) {

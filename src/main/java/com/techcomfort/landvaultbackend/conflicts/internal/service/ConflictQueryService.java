@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.Comparator;
 
 /**
  * The two read surfaces, which differ in what they are allowed to say.
@@ -207,7 +208,7 @@ public class ConflictQueryService {
         // and area.
         return rows.stream()
                 .map(row -> toTenantDto(row, estateNames, plotLabels))
-                .sorted(java.util.Comparator.comparing(
+                .sorted(Comparator.comparing(
                         (TenantConflictDto dto) -> !ConflictStatus.fromValue(dto.status()).isLive()))
                 .toList();
     }

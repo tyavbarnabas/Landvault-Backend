@@ -68,6 +68,38 @@ landvault:
   # Staff invitations (SI-1..SI-7). `delivery` works exactly like otp.delivery:
   # email (default) or log — and `log` is for tests only, because it writes a
   # live credential into a company to the application log.
+  # Paystack (payments). The secret key comes from the environment only and is
+  # never logged; a missing key fails startup. TEST keys start sk_test_.
+  paystack:
+    base-url: https://api.paystack.co
+    secret-key: ${PAYSTACK_SECRET_KEY:}
+    # The FRONTEND page Paystack sends the buyer back to. Arriving there proves
+    # nothing — a payment counts only once verified with Paystack.
+    callback-url: ${PAYSTACK_CALLBACK_URL:http://localhost:8443/payments/return}
+    connect-timeout: 5s
+    read-timeout: 15s
+  payments:
+    alerts:
+      # Who is told when a payout account changes. "log" is for tests only.
+      delivery: ${PAYMENT_ALERT_DELIVERY:email}
+      from-address: ${MAIL_FROM:noreply@landvault.com}
+    # Pressing pay again inside this window hands back the open link instead
+    # of opening a second payment for the same plot.
+    link-reuse-window: 30m
+    # PY-5: a purchase with nothing paid is abandoned this long after its hold
+    # ends (a Paystack transfer account lasts 30 minutes), and the plot released.
+    abandon-grace: 15m
+    sweep-interval: 5m
+  payouts:
+    # Paystack's cap on ONE transfer for our account (found live: ₦10,000,000).
+    # A sale above it is paid in equal parts. If Paystack raises the cap, change
+    # this number; a sale already part-paid keeps its original split.
+    max-transfer-amount: 10000000
+    # TR-3: how often Paystack is asked about payouts whose outcome we don't know,
+    # and when one counts as stuck (no reply at all / accepted but not finished).
+    sweep-interval: 15m
+    stuck-sending-after: 5m
+    stuck-pending-after: 30m
   invitations:
     delivery: ${INVITATION_DELIVERY:email}
     from-address: ${MAIL_FROM:noreply@landvault.com}

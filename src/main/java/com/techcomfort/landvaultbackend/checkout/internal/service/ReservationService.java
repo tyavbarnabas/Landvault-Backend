@@ -20,6 +20,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -39,6 +40,9 @@ import java.util.UUID;
 @RequiredArgsConstructor
 @EnableConfigurationProperties(CheckoutProperties.class)
 public class ReservationService {
+
+    /** Kobo: the finest unit a payment can charge. */
+    private static final int AGREED_PRICE_SCALE = 2;
 
     private static final String ACTOR = "reservation";
 
@@ -87,8 +91,13 @@ public class ReservationService {
         BigDecimal cornerPremiumPct = Boolean.TRUE.equals(acquired.isCorner())
                 ? acquired.cornerPremiumPct()
                 : null;
+        // Rounded to the kobo once, here: this is the amount the buyer agrees
+        // to, and it must be one that can actually be charged. The price list
+        // keeps PlotPricing's finer scale; only the agreed figure is rounded,
+        // so what the buyer sees, what is stored and what is charged agree.
         BigDecimal totalPrice = PlotPricing.price(
-                acquired.tierPrice(), Boolean.TRUE.equals(acquired.isCorner()), acquired.cornerPremiumPct());
+                        acquired.tierPrice(), Boolean.TRUE.equals(acquired.isCorner()), acquired.cornerPremiumPct())
+                .setScale(AGREED_PRICE_SCALE, RoundingMode.HALF_UP);
 
         Instant now = Instant.now();
         Reservation reservation = reservationRepository.save(Reservation.builder()

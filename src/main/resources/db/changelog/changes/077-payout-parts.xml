@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Paystack caps a single transfer (₦10,000,000 on our account, found live),
+        so a sale above it is paid in equal PARTS (decided with the user). Each
+        row is still one transfer; part_number/part_count say which piece.
+
+        The never-pay-twice rule moves from the sale to the part: each part may
+        be live or paid at most once. The parts add up exactly to the sale, so
+        the total paid can never exceed what is owed. Replaces 076's per-sale
+        index (076 has been applied, so it is not edited).
+    -->
+    <changeSet id="077-payout-parts" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE payouts ADD COLUMN part_number integer NOT NULL DEFAULT 1;
+            ALTER TABLE payouts ADD COLUMN part_count integer NOT NULL DEFAULT 1;
+            ALTER TABLE payouts ADD CONSTRAINT chk_payouts_part
+                CHECK (part_count >= 1 AND part_number BETWEEN 1 AND part_count);
+            DROP INDEX uq_payouts_one_live_per_sale;
+            CREATE UNIQUE INDEX uq_payouts_one_live_per_part ON payouts (transaction_id, part_number)
+                WHERE status IN ('SENDING', 'AWAITING_OTP', 'PENDING', 'SUCCESS') AND deleted = false;
+            COMMENT ON COLUMN payouts.part_count IS
+                'How many equal parts the sale is paid in (Paystack caps one transfer). Fixed once a part has been paid.';
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP INDEX uq_payouts_one_live_per_part;
+            CREATE UNIQUE INDEX uq_payouts_one_live_per_sale ON payouts (transaction_id)
+                WHERE status IN ('SENDING', 'AWAITING_OTP', 'PENDING', 'SUCCESS') AND deleted = false;
+            ALTER TABLE payouts DROP CONSTRAINT chk_payouts_part;
+            ALTER TABLE payouts DROP COLUMN part_count;
+            ALTER TABLE payouts DROP COLUMN part_number;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

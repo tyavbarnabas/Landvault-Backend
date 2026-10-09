@@ -1,7 +1,12 @@
 package com.techcomfort.landvaultbackend.tenancy.internal.service;
 
+import com.techcomfort.landvaultbackend.tenancy.CompanyBankProfile;
 import com.techcomfort.landvaultbackend.tenancy.TenancyApi;
+import com.techcomfort.landvaultbackend.tenancy.internal.domain.Branch;
 import com.techcomfort.landvaultbackend.tenancy.internal.domain.Organization;
+import com.techcomfort.landvaultbackend.tenancy.internal.domain.OrganizationFinancial;
+import com.techcomfort.landvaultbackend.tenancy.internal.repository.BranchRepository;
+import com.techcomfort.landvaultbackend.tenancy.internal.repository.OrganizationFinancialRepository;
 import com.techcomfort.landvaultbackend.tenancy.internal.repository.OrganizationRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
@@ -12,6 +17,7 @@ import java.util.Collection;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import java.util.Optional;
 
 /**
  * Both methods here answer questions asked <strong>before any tenant scope
@@ -39,12 +45,14 @@ import java.util.stream.Collectors;
 public class TenancyApiImpl implements TenancyApi {
 
     private final OrganizationRepository organizationRepository;
-    private final com.techcomfort.landvaultbackend.tenancy.internal.repository.BranchRepository branchRepository;
+    private final BranchRepository branchRepository;
+    private final OrganizationFinancialRepository financialRepository;
 
-    public TenancyApiImpl(OrganizationRepository organizationRepository,
-                          com.techcomfort.landvaultbackend.tenancy.internal.repository.BranchRepository branchRepository) {
+    public TenancyApiImpl(OrganizationRepository organizationRepository, BranchRepository branchRepository,
+                          OrganizationFinancialRepository financialRepository) {
         this.organizationRepository = organizationRepository;
         this.branchRepository = branchRepository;
+        this.financialRepository = financialRepository;
     }
 
     @PersistenceContext
@@ -105,10 +113,23 @@ public class TenancyApiImpl implements TenancyApi {
     }
 
     @Override
-    @org.springframework.transaction.annotation.Transactional(readOnly = true)
-    public java.util.Optional<String> branchNameFor(UUID branchId, UUID tenantId) {
+    @Transactional(readOnly = true)
+    public Optional<String> branchNameFor(UUID branchId, UUID tenantId) {
         return branchRepository.findById(branchId)
                 .filter(b -> b.getOrganizationId().equals(tenantId))
-                .map(com.techcomfort.landvaultbackend.tenancy.internal.domain.Branch::getName);
+                .map(Branch::getName);
+    }
+
+    /** A plain read under the caller's RLS, like {@link #organizationNamesFor}. */
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<CompanyBankProfile> companyBankProfile(UUID tenantId) {
+        return organizationRepository.findById(tenantId).map(organization -> {
+            Optional<OrganizationFinancial> declared = financialRepository.findByOrganizationId(tenantId);
+            return new CompanyBankProfile(organization.getRegisteredName(), organization.getTradingName(),
+                    declared.map(OrganizationFinancial::getBankName).orElse(null),
+                    declared.map(OrganizationFinancial::getAccountNumber).orElse(null),
+                    declared.map(OrganizationFinancial::getAccountName).orElse(null));
+        });
     }
 }

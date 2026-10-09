@@ -9,6 +9,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.List;
 import java.util.UUID;
+import org.locationtech.jts.geom.Geometry;
 
 /**
  * The two PostGIS calls this slice needs. Both go through the shared
@@ -59,7 +60,7 @@ public class GeometryCalculator {
      * which can come out as a polygon, multipolygon or collection. Null for
      * an empty one.
      */
-    public BigDecimal areaOf(org.locationtech.jts.geom.Geometry shape) {
+    public BigDecimal areaOf(Geometry shape) {
         if (shape == null || shape.isEmpty()) {
             return null;
         }

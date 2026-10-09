@@ -41,6 +41,9 @@ public class OpenApiConfig {
     public static final String TAG_KYC = "Verification";
     public static final String TAG_RESERVATIONS = "Reservations";
     public static final String TAG_CHECKOUT = "Checkout";
+    public static final String TAG_PAYMENTS = "Payments";
+    public static final String TAG_PORTAL_FINANCE = "Portal — Finance";
+    public static final String TAG_PORTAL_SETTLEMENT = "Portal — Payout account";
     public static final String TAG_PORTAL_ESTATES = "Portal — Estates";
     public static final String TAG_PORTAL_CONFLICTS = "Portal — Conflicts";
     public static final String TAG_PORTAL_BRANCHES = "Portal — Branches";
@@ -49,6 +52,7 @@ public class OpenApiConfig {
     public static final String TAG_ADMIN_KYC = "Admin — Verification";
     public static final String TAG_ADMIN_CONFLICTS = "Admin — Conflicts";
     public static final String TAG_ADMIN_AUDIT = "Admin — Audit";
+    public static final String TAG_ADMIN_PAYOUTS = "Admin — Payouts";
 
     private static final String DESCRIPTION = """
             The backend for LandVault, a multi-tenant land-investment platform for Nigeria \
@@ -137,6 +141,16 @@ public class OpenApiConfig {
                         new Tag().name(TAG_CHECKOUT)
                                 .description("The pending purchase record. Price is captured at "
                                         + "reservation; nothing here allocates a plot."),
+                        new Tag().name(TAG_PORTAL_FINANCE)
+                                .description("A developer's finance staff verify payments before a plot is sold. "
+                                        + "Approving allocates the plot; rejecting puts it back on sale."),
+                        new Tag().name(TAG_PORTAL_SETTLEMENT)
+                                .description("The bank account a company is paid to. The Executive Director "
+                                        + "submits it; LandVault checks the name with the bank and approves it "
+                                        + "before any payout uses it."),
+                        new Tag().name(TAG_PAYMENTS)
+                                .description("Paying for a transaction through Paystack. A payment counts only "
+                                        + "once verified with Paystack, never because a browser came back."),
                         new Tag().name(TAG_PORTAL_ESTATES)
                                 .description("A developer's own estates, blocks, price tiers and plots, "
                                         + "plus publishing to the marketplace."),
@@ -159,6 +173,9 @@ public class OpenApiConfig {
                                 .description("The spatial conflict review queue: overlapping land claims "
                                         + "across companies."),
                         new Tag().name(TAG_ADMIN_AUDIT)
-                                .description("The append-only audit trail. Read-only by design.")));
+                                .description("The append-only audit trail. Read-only by design."),
+                        new Tag().name(TAG_ADMIN_PAYOUTS)
+                                .description("Approving companies' payout accounts, and paying them out. "
+                                        + "Money leaving can't be undone, so a person decides each step.")));
     }
 }

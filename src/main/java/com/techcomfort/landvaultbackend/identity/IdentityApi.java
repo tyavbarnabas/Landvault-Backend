@@ -2,6 +2,7 @@ package com.techcomfort.landvaultbackend.identity;
 
 import com.techcomfort.landvaultbackend.identity.dto.UserDto;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -42,4 +43,24 @@ public interface IdentityApi {
      * country cannot accidentally come to depend on the rest of a user row.
      */
     Optional<String> countryOf(UUID userId);
+
+    /** The account's email — what a payment provider sends the receipt to. A single field, like {@link #countryOf}. */
+    Optional<String> emailOf(UUID userId);
+
+    /**
+     * The email of every active, company-wide Executive Director of a
+     * company — who is alerted when its payout account changes. Empty when
+     * there is none.
+     */
+    List<String> executiveDirectorEmails(UUID tenantId);
+
+    /**
+     * Whether this account has two-factor authentication switched on AND
+     * proven (both flags — see AGENTS.md, "Setup and confirmation are
+     * separate states"). Sending money requires it.
+     */
+    boolean hasConfirmedTwoFactor(UUID userId);
+
+    /** The email of every active Super Admin — who is told when a payout fails or is reversed. */
+    List<String> superAdminEmails();
 }

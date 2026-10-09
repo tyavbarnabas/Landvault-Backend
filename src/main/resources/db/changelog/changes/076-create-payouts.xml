@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        TR-1/TR-3: money sent to a company for a verified sale. One row per
+        ATTEMPT, never overwritten (decided with the user): a failed or
+        reversed payout keeps its row and a retry is a new one.
+
+        The row is written BEFORE Paystack is asked (status SENDING), so a lost
+        reply can never lose track of a request; a retry reuses its reference,
+        which Paystack refuses to accept twice.
+
+        The one rule that matters most: at most one LIVE payout per sale
+        (SENDING, AWAITING_OTP, PENDING or SUCCESS) — a unique index, so two
+        clicks or two Super Admins can never pay the same sale twice.
+
+        settlement_account_id/recipient_code record where THIS money went, even
+        if the company later changes its account. RLS: platform staff send;
+        a company may read its own (for a future portal view). History is
+        never deleted.
+    -->
+    <changeSet id="076-create-payouts" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE payouts (
+                id                     uuid NOT NULL PRIMARY KEY,
+                tenant_id              uuid NOT NULL REFERENCES organizations (id),
+                branch_id              uuid,
+                created_at             timestamp(6) with time zone NOT NULL,
+                updated_at             timestamp(6) with time zone,
+                created_by             varchar(255),
+                updated_by             varchar(255),
+                deleted                boolean NOT NULL,
+
+                transaction_id         uuid NOT NULL REFERENCES transactions (id),
+                settlement_account_id  uuid NOT NULL REFERENCES settlement_accounts (id),
+                recipient_code         varchar(64) NOT NULL,
+                amount                 numeric(19,2) NOT NULL,
+                currency               varchar(3) NOT NULL,
+                amount_kobo            bigint NOT NULL,
+                reference              varchar(64) NOT NULL UNIQUE,
+                transfer_code          varchar(64),
+                status                 varchar(16) NOT NULL,
+                gateway_message        varchar(500),
+                initiated_by           uuid NOT NULL REFERENCES users (id),
+                finalized_by           uuid REFERENCES users (id),
+                cancelled_by           uuid REFERENCES users (id),
+                transferred_at         timestamp(6) with time zone,
+
+                CONSTRAINT chk_payouts_status CHECK (status IN
+                    ('SENDING', 'AWAITING_OTP', 'PENDING', 'SUCCESS', 'FAILED', 'REVERSED', 'CANCELLED')),
+                CONSTRAINT chk_payouts_amount_positive CHECK (amount > 0 AND amount_kobo > 0),
+                CONSTRAINT chk_payouts_currency CHECK (currency = 'NGN')
+            );
+            CREATE UNIQUE INDEX uq_payouts_one_live_per_sale ON payouts (transaction_id)
+                WHERE status IN ('SENDING', 'AWAITING_OTP', 'PENDING', 'SUCCESS') AND deleted = false;
+            CREATE INDEX idx_payouts_status ON payouts (status, created_at);
+            CREATE INDEX idx_payouts_transaction ON payouts (transaction_id, created_at DESC);
+
+            ALTER TABLE payouts ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE payouts FORCE ROW LEVEL SECURITY;
+            CREATE POLICY payouts_platform ON payouts FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY payouts_tenant_read ON payouts FOR SELECT
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                );
+            REVOKE DELETE, TRUNCATE ON payouts FROM ${appDbUsername};
+
+            COMMENT ON TABLE payouts IS
+                'Payout attempts to a company for a verified sale. At most one live attempt per sale (unique index). Written before Paystack is asked. Never deleted. See AGENTS.md, "Payments".';
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE payouts;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

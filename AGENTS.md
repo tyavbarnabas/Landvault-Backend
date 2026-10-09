@@ -4628,6 +4628,450 @@ and the two would drift apart with nothing failing. The class is now public
 *within* `identity.internal` — still invisible to every other module, since
 the whole package is `internal`.
 
+## Payments (Paystack): built one step at a time
+
+Stories PY / FV / TR. Built **manually, step by step, with the user** —
+each step explained, decided, built, tested and tried before the next.
+Paystack's docs site blocks automated readers; the facts here come from
+Paystack's own GitHub: the official OpenAPI description
+(`PaystackOSS/openapi`) and the code snippets behind their docs pages
+(`PaystackOSS/doc-code-snippets`). Not confirmed from those: the webhook
+retry schedule, Paystack's IP addresses, the test card numbers.
+
+### Step 1 — naira ↔ kobo, in one place
+`payments.internal.paystack.PaystackAmounts`. The app keeps **exact
+`BigDecimal` naira everywhere** (never `double`); Paystack takes and reports
+**whole kobo** (`40333` = ₦403.33). Converting only at the Paystack edge was
+chosen over switching the app to integers: our sums are already exact, and
+percentages (corner premium, refunds, penalties) need more precision than a
+kobo mid-calculation.
+
+- **The agreed price is rounded to the kobo once, at reservation**
+  (`ReservationService`, half up): ₦20,000,001 × 1.125 = ₦22,500,001.125 →
+  agreed as ₦22,500,001.13. The price list keeps 4 decimals; only what the
+  buyer agrees to pay is rounded, so the figure shown, stored and charged agree.
+- `toKobo` is **exact and refuses** a sub-kobo amount rather than rounding
+  again — one reaching it means a bug upstream. Zero/negative refused.
+- **NGN only** (`CURRENCY_NOT_SUPPORTED`): dollar tiers exist, but diaspora
+  rails are out of scope and Paystack USD needs separate approval.
+
+### Step 2 — the Paystack client
+`PaystackClient` (`initialize`, `verify`) over a `RestClient` built in
+`PaystackConfig`. **`PAYSTACK_SECRET_KEY` comes from the environment only**,
+goes out solely as `Authorization: Bearer` to `api.paystack.co`, is never
+logged or put in an error; startup logs only "TEST"/"LIVE" mode, and a missing
+key fails startup. 5s connect / 15s read timeouts.
+
+- **The top-level `status` is not the payment.** It means the API call
+  worked; whether money arrived is `data.status`. The client exposes only the
+  latter (`paymentStatus`, `succeeded()`), so nobody can read the wrong one.
+- Refusals carry Paystack's own message (`GatewayRefused`); a 5xx or no
+  connection is `GatewayUnavailable` (retryable). An unknown reference on
+  verify is `found = false`, not an error. Only a card's `last4` and `bin` are
+  ever read; the raw reply is kept for disputes (PY-10, stored later).
+- The injected `RestClient.Builder` is Spring Boot's prepared one (app JSON
+  settings, metrics); `clone()` keeps the key header on our copy only — Spring's
+  docs call builders stateful and recommend exactly this. Timeouts go through
+  Boot's own `HttpClientSettings` + `ClientHttpRequestFactoryBuilder.detect()`
+  (it picks the HTTP library and applies settings consistently), not a
+  hand-built factory. Tests use a plain builder with `MockRestServiceServer` as
+  a stand-in Paystack.
+- **RestClient, not WebClient or RestTemplate**: this is a Spring MVC app;
+  WebClient is for reactive WebFlux apps, RestTemplate is legacy and no longer
+  auto-configured.
+
+### A test-scoped dependency hid a startup failure
+`spring-boot-starter-restclient` was in `pom.xml` with `<scope>test</scope>`
+(added for the tests' HTTP calls). In Boot 4 that module is what provides the
+auto-configured `RestClient.Builder`. So **all 378 integration tests passed —
+the test classpath had the builder — while the real app could not start**
+("required a bean of type RestClient$Builder"). Found by starting the app, not
+by the suite. Fixed by making it a main dependency. **The lesson: a library the
+app uses at runtime must never be test-scoped**, and a green suite is not proof
+the app boots — start it after adding anything that depends on
+auto-configuration.
+
+### Step 3 — starting a payment (PY-1, PY-9)
+`POST /api/transactions/{id}/payments` (`client.checkout.reserve` — decided
+with the user: paying is part of the purchase flow), `PaymentService`,
+changeset **070** (`payments`: one row per attempt). Decided with the user:
+**outright only** (`PAYMENT_PLAN_NOT_SUPPORTED` for installments — they need
+saved-card charging), and **pressing pay again within 30 minutes returns the
+same open link** (200) instead of opening a second payment (201).
+
+- **The amount is the transaction's agreed price**, never the request; the
+  transaction must be the caller's own (404 otherwise, via the new narrow
+  `CheckoutApi.transactionForBuyer`) and `pending_payment` (409
+  `TRANSACTION_NOT_PAYABLE`). The buyer's email comes from the new
+  `IdentityApi.emailOf`.
+- Our reference `LV-PAY-…`; `metadata` carries payment, transaction,
+  reservation and plot ids so any later webhook traces back (PY-9).
+  `callback_url` is the **frontend** page `/payments/return`
+  (`PAYSTACK_CALLBACK_URL`) — **arriving there proves nothing**; a payment
+  counts only once verified with Paystack (step 4).
+- **The row is saved before Paystack is called**, so its database-assigned id
+  can go into the metadata; if Paystack then fails, the transaction rolls back
+  and no payment is left behind (tested). Setting the id by hand instead made
+  Spring treat the new row as an existing one — the base entity generates ids.
+- The Paystack call runs inside the DB transaction (a connection is held up to
+  the 15s read timeout) — acceptable at today's volume; revisit with load.
+- `payments` is buyer-owned like `transactions`: **not RLS-policied**,
+  `seller_tenant_id` records whose sale it is.
+
+Proven red: the ownership check (another buyer reached Paystack without it),
+and the open-link reuse.
+
+### Step 4 — confirming a payment (PY-3, PY-4, PY-6, PY-8)
+`POST /api/payments/{reference}/verify` (`client.checkout.reserve`, own
+payment only — 404 otherwise), `PaymentConfirmationService`. The frontend's
+return page calls it; **it claims nothing** — LandVault asks Paystack itself
+(`verify`), so calling it any number of times can't fake a payment. The
+webhook (step 5) will call the same `confirm`.
+
+- **Locked, then decided once.** The payment row is read `FOR UPDATE`, so the
+  return page and the webhook confirming at the same moment take turns; a
+  payment already `succeeded`/`failed`/`mismatched` is returned untouched
+  without calling Paystack (a duplicate is a no-op, not an error). Moving the
+  transaction is a second line of defence: one `UPDATE … WHERE status =
+  'PENDING_PAYMENT'`, so it can only ever move once.
+- **`success` must match exactly what we asked for** — kobo, NGN and our
+  reference. Otherwise **`mismatched`**: not paid, not failed, transaction not
+  moved, audited for a person (decided with the user: money arrived but not
+  what was agreed, so neither label is honest).
+- **`failed`/`reversed` → `failed`**, keeping Paystack's own reason
+  (`gatewayResponse`, e.g. "Insufficient Funds") for the buyer (PY-6); paying
+  again opens a new attempt.
+- **Anything else (`pending`, `abandoned`, `ongoing`) leaves it
+  `initialized`** (decided with the user): a bank transfer can confirm minutes
+  later — seen live in the first test payment. The sweeper (step 6) settles
+  what never finishes.
+- **The transaction goes straight from `pending_payment` to
+  `awaiting_finance`** (decided with the user — nothing happens in between,
+  so `payment_received` is not used as a resting state). The plot **stays
+  `RESERVED`**: paid is not sold; finance verifies first (FV-1, step 7).
+  `CheckoutApi.recordPaymentReceived` is the only write `payments` makes into
+  checkout. Audit entries for verdicts are system entries (no person decided;
+  Paystack did), shown as "System".
+
+Proven red: the amount check, the finished-is-a-no-op return, the ownership
+check (another buyer made Paystack calls about someone else's payment), and
+treating `pending` as final.
+
+### Step 5 — Paystack's webhook (PY-7, PY-10, PY-4)
+`POST /api/payments/webhook/paystack` (`PaystackWebhookController`,
+`PaystackWebhookService`), changeset **071** (`payment_gateway_events`).
+Public — Paystack has no login — and listed in `SecurityConfig` as one exact
+path, **POST only** (`PUBLIC_POST_PATHS`), never a wildcard.
+
+- **The signature is the only proof of origin.** `x-paystack-signature` is an
+  HMAC-SHA512 of the **raw body** with the secret key (Paystack's own code
+  samples). The controller takes `byte[]`, and the check runs over those exact
+  bytes before anything is parsed — re-serialising changes the bytes and so
+  the signature (proven: checking a re-serialised copy refused a genuine
+  call). Constant-time comparison (`MessageDigest.isEqual`). A missing or
+  wrong signature → 401 `WEBHOOK_SIGNATURE_INVALID`, a warning logged, and
+  **nothing stored** (decided with the user: a public URL must not be a way to
+  fill the database).
+- **Stored exactly as received** (PY-10): `raw_body` is `text`, not `jsonb`
+  (jsonb would reformat it). Every delivery is kept, duplicates included.
+  **Append-only is the database's rule**: the app role is revoked UPDATE,
+  DELETE and TRUNCATE (proven: without the REVOKE the app could rewrite events).
+- **Stored in its own transaction first** (`GatewayEventRecorder`,
+  `REQUIRES_NEW`), then acted on; if acting fails (Paystack's verify down) the
+  reply is 503 and Paystack retries (decided with the user). Today `handle` has
+  no transaction of its own, so the two are separate anyway; `REQUIRES_NEW` is
+  what keeps it so if someone wraps `handle` in one — proven both ways.
+- **`charge.success` is a prompt, not proof**: it runs the same
+  `PaymentConfirmationService.confirm` as the return page, which asks
+  Paystack's verify API itself and never trusts the webhook's own amounts. Same
+  row lock, so webhook and return page can't double-confirm; a duplicate
+  delivery is recorded but confirms nothing new.
+- `transfer.*` events are stored for payouts (step 8); unknown references and
+  other events are stored and otherwise ignored. Processed in the request
+  (decided with the user); a background queue is a later optimisation.
+- **Localhost can't receive it**: register the ngrok URL in the Paystack
+  dashboard. Paystack's IP addresses were not confirmable (their docs block
+  automated readers), so no IP allow-list — the signature is the control.
+
+Proven red: signature bypassed (a forged call got 200), re-serialised bytes,
+the missing REVOKE, and `REQUIRES_NEW` (with `handle` made transactional, the
+event was lost on failure).
+
+### Step 6 — the payment sweep (PY-5, PY-2)
+`PaymentSweeper` (every 5 minutes, platform scope set and cleared like the
+reservation sweeper) → `PaymentSweepService.settle`, one purchase per
+transaction. Dev-only manual trigger: `POST /api/dev/payments/sweep`
+(`@Profile("dev")`, Super Admin).
+
+**Why it must exist**: Paystack sends no webhook for an abandoned payment, and
+a hold with a transaction behind it is never released by the reservation sweep
+(the double-sale fix) — so without this, **every abandoned checkout kept its
+plot off the market forever.**
+
+- **When**: a purchase still `pending_payment` whose hold ended more than
+  **15 minutes** ago (`abandon-grace`; decided with the user — a Paystack
+  transfer account lasts 30 minutes, so a transfer started late can land).
+- **Ask Paystack first**: every open payment is confirmed through the same
+  `confirm` as steps 4–5 — the webhook may have been lost. Paid → confirmed
+  and moved on, never abandoned (proven red: without this a paid purchase was
+  abandoned and its plot released). A `mismatched` payment leaves the plot alone
+  for the person reviewing it. Paystack down → that purchase rolls back and is
+  retried next run.
+- **Nothing paid**: open payments → `abandoned`; the transaction → new status
+  **`abandoned`** (decided with the user; backend-added — the frontend's
+  `TransactionStatus` union needs it); the reservation ends `expired` and the
+  plot returns to sale with its original availability, through the existing
+  `ReservationService.endHold`. The transaction moves by the same once-only
+  `UPDATE … WHERE status = 'PENDING_PAYMENT'` shape, under the reservation's row
+  lock. "Buy" pressed but never "pay" is abandoned too.
+- **Late money is real money** (decided with the user): `abandoned` is **not a
+  final payment state** — it means we stopped waiting, not that Paystack said
+  no — so a later webhook still confirms it (proven red: treating it as final
+  lost the money). The payment becomes `succeeded`; the transaction stays
+  `abandoned`; `payments.review_reason` (changeset **072**) flags it for finance
+  to re-allocate or refund; the buyer sees `underReview: true`. The plot is
+  never automatically snatched back from whoever may have reserved it since.
+
+Proven red: the grace period, ask-Paystack-first, and abandoned-is-not-final.
+
+### Step 7 — finance verification and allocation (FV-1..FV-3)
+`GET /api/portal/finance/transactions`, `POST …/{id}/verify`,
+`POST …/{id}/reject` `{ reason }` — `portal.payments.verify` (changeset
+**073**: `finance_officer`, `executive_director`). `FinanceVerificationService`
+(payments) over `CheckoutApi.awaitingFinance` / `verifyAndAllocate` /
+`rejectPayment`.
+
+- **Decided with the user: the developer's own finance staff verify.** They
+  know their buyers and the plot is theirs; LandVault still holds the money
+  until payout, which only follows verification.
+- **The queue sets the agreed price beside Paystack's record** (amount paid,
+  channel, paid time, card last 4, message) with `amountsMatch`. Company and
+  branch scoping come from the database: the queue joins plots/estates/blocks
+  under the caller's own RLS, so a branch-scoped officer sees only their
+  branch's sales with no branch condition in the query.
+- **Allocation is all or nothing (FV-3).** Under the reservation's row lock:
+  status checked, then the plot `RESERVED → SOLD` (a once-only `UPDATE`; not a
+  definer function — the caller is the selling company's own staff, so the
+  plots policy permits it and still walls the branch), then the transaction
+  `awaiting_finance → verified`, the reservation → `converted`, an audit entry
+  naming the person. A refusal returns before anything is written; a failure
+  after the sale throws and rolls the sale back (proven red: letting it carry
+  on verified a transaction whose plot wasn't sold). Verifying twice → 409.
+- **The human check backs the gateway**: verify also requires a `succeeded`
+  payment for exactly the agreed amount and currency (`PAYMENT_NOT_CONFIRMED`
+  otherwise; proven red).
+- **Reject (decided with the user)**: transaction → `rejected`, the hold
+  ends `released` and the plot goes back on sale (existing `endHold`), and every
+  succeeded payment gets `review_reason` "Refund due: …" — refunds are manual
+  for now, but can't be forgotten.
+- **A diagnostic must never act.** The first draft found out *why* a purchase
+  wasn't in the caller's queue by calling `verifyAndAllocate` — which would
+  have sold the plot, skipping the payment check, had it been allocatable.
+  Replaced by the read-only `CheckoutApi.financeStatusOf`.
+- **Portfolio entry and deed don't exist yet** (decided with the user:
+  allocation now is sold + verified + converted). **When the portfolio and
+  documents modules are built, they must join `verifyAndAllocate`'s same
+  transaction** — a plot sold with no deed, or a deed for a plot nobody
+  allocated, is exactly the corruption FV-3 exists to prevent.
+- Late-money (`underReview`) payments on abandoned purchases are not in this
+  queue yet; resolving them (re-allocate or refund) is its own follow-up.
+
+### Step 8 — payouts: the decisions (TR-1..TR-3)
+Decided with the user, one at a time, before building:
+1. **A Super Admin presses "pay out", per verified sale** (`admin.payouts.manage`).
+   Money leaving can't be undone; the developer approved the sale (step 7),
+   LandVault — which holds the money — releases it, so no one side can both
+   approve and pay itself. Automation (a daily batch with the same skip rules)
+   can come once it has run cleanly.
+2. **The full agreed price is paid out**; LandVault absorbs Paystack's fees
+   for now (₦2,000 on a ₦15M payment, read from the stored `charge.success`
+   event — the `fees` field). A commission is an undecided business question,
+   never an invented one.
+3. **The Executive Director submits the bank account; a Super Admin approves
+   it.** Payment diversion — swapping the account on file — is the cheapest
+   theft of a developer's money, so approval sits outside the company.
+4. **Paystack's transfer OTP stays ON** (first recommended off, changed): with
+   it off, the secret key alone can empty the balance from anywhere, bypassing
+   every control in this app. With a person already pressing each payout, the
+   code costs almost nothing. Revisit only when automating.
+5. **A failed or reversed payout keeps its row, flags the sale, and a person
+   retries as a new attempt.** Never retry while the outcome is unknown
+   (`pending`/`awaiting_otp`); at most one live payout per sale, enforced by
+   the database.
+
+### Step 8a — the payout account (changeset 074, 075)
+`GET /api/portal/settlement/banks`, `GET/POST /api/portal/settlement/account`,
+`POST …/account/{id}/withdraw` (`portal.settlement.manage` — Executive
+Director only, company-wide); `GET /api/admin/settlement-accounts?status=`,
+`GET …/{id}`, `POST …/{id}/approve`, `POST …/{id}/reject` `{ reason }`
+(`admin.payouts.manage` — Super Admin). `SettlementAccountService`.
+
+- **The request carries only a bank code and the 10-digit number.** The
+  account name is what **the bank** returns (Paystack's resolve) — a typed name
+  proves nothing. A number the bank can't find is `ACCOUNT_NOT_RESOLVED` (400),
+  nothing saved.
+- **`settlement_accounts`, one row per submission, never overwritten.**
+  `pending` → `approved` / `rejected` / `withdrawn`; an approved account becomes
+  `superseded` when replaced. At most one pending and one approved per company
+  (partial unique indexes); only `approved` carries a recipient code, and an
+  approved row must have one (CHECKs). RLS-policied in the same changeset; the
+  app role can't DELETE or TRUNCATE.
+- **The Paystack recipient is created at approval**, never at submission, so a
+  rejected or junk submission never reaches Paystack. Paystack down → 503 and
+  nothing changes. The old approved account keeps receiving payouts until the
+  new one is approved.
+- **Two warnings for the reviewer, never blocks (TR-2)**: `nameMatchesCompany`
+  (the bank's name against the registered and trading names, after dropping
+  case, punctuation and LTD/LIMITED/PLC-type words — `SettlementAccountNames`)
+  and `matchesOnboardingAccount` (against `organization_financial`, null when
+  nothing was declared). **`organization_financial` is never paid to** — nothing
+  ever verified it — and is never written to here (decided with the user).
+- **Every active company-wide Executive Director is emailed on submission**
+  (`SettlementAlertSender`; `landvault.payments.alerts.delivery=log` in tests
+  only), so a director who didn't ask can object before approval. The email
+  carries the last 4 digits only.
+- **Bank list**: fetched from Paystack (cursor-paged, active NUBAN banks) and
+  kept in memory for a day (`PaystackBankDirectory`); a failed refresh falls
+  back to the older list.
+- One submission waits at a time (`SETTLEMENT_ACCOUNT_PENDING`, 409 — withdraw
+  first); resubmitting the approved account is `SETTLEMENT_ACCOUNT_UNCHANGED`.
+- Audit: `settlement_account.submitted|approved|rejected|withdrawn`.
+
+Proven red: superseding removed (the unique index refused the second approval),
+the pending check removed, and company isolation — with the service's own
+company filter removed the other company still got 404 (the database walls it);
+with the row security removed as well it went red.
+
+### Step 8b — sending a payout (changeset 076)
+`GET /api/admin/payouts/ready`, `GET /api/admin/payouts?status=`,
+`POST /api/admin/payouts` `{ transactionId }`, `POST …/{id}/otp` `{ otp }`,
+`POST …/{id}/resend-otp`, `POST …/{id}/cancel` — `admin.payouts.manage`.
+`PayoutService` + `PayoutRecorder`. Decided with the user: A, A, A, A below.
+
+- **Only a verified sale is owed** (`CheckoutApi.verifiedSales`); the amount
+  is the transaction's agreed price and the destination the company's approved
+  account — neither is ever in the request. Each attempt records the account
+  and recipient it used, so a later account change doesn't rewrite history.
+- **The row is committed as `sending` BEFORE Paystack is asked.**
+  `PayoutRecorder` methods each run in their own short transaction and
+  `PayoutService.send` deliberately has none, so a reply lost in transit leaves
+  a record (proven red: wrapping `send` in one transaction lost the row).
+- **A lost reply (decision 1)** → 503 `PAYOUT_OUTCOME_UNKNOWN`, the payout stays
+  `sending`. Sending again **asks Paystack about that reference first**
+  (`/transfer/verify/{reference}`) and adopts its answer; only if Paystack has
+  never seen it is the transfer started again — **with the same reference**,
+  which Paystack refuses to accept twice. Never a fresh reference (proven red:
+  without asking first, a second transfer was started).
+- **At most one live payout per sale** (`sending`, `awaiting_otp`, `pending`,
+  `success`): the service checks under a row lock, and a partial unique index
+  backs it (proven: with the code check removed the index still refused; with
+  both removed the sale was paid twice).
+- **The OTP (decision 4 of step 8)**: Paystack replies `otp` → `awaiting_otp`
+  with its `TRF_…` code; the Super Admin enters the code Paystack sent the
+  account owner → usually `pending`. The code goes straight to Paystack: never
+  stored, never logged (`PayoutOtpRequest.toString` masks it; a test searches
+  every payout and audit row for it). If finalising fails or gets no answer,
+  Paystack is asked for the transfer's state, so a code that went through
+  before the reply was lost isn't reported as wrong; a genuinely wrong code is
+  400 `OTP_REJECTED` and the payout keeps waiting. Resend calls `resend_otp`
+  with reason **`transfer`** — Paystack's OpenAPI also lists `resend_otp` as a
+  reason, but the live API refuses it ("Reason is invalid. ['disable_otp' or
+  'transfer']"). Found in the first live test; the spec is not the API.
+- **Sending requires the sender's own confirmed 2FA (decision 2)** —
+  `TWO_FACTOR_REQUIRED` otherwise (`IdentityApi.hasConfirmedTwoFactor`, both
+  flags). Proven red. Cancelling doesn't need it — cancelling moves no money.
+- **Held, not paid (decision 3)**: a company not `ACTIVE`
+  (`COMPANY_NOT_ACTIVE`) or with no approved account
+  (`NO_APPROVED_PAYOUT_ACCOUNT`); both show as `blockers` on the ready list.
+- **Cancel (decision 4)**: only `awaiting_otp`; nothing was sent, since
+  Paystack moves money only once the code is entered. The sale is owed again.
+- **A refusal** (e.g. balance too low) → 502 with Paystack's message, the
+  attempt `failed` and kept; the sale returns to the ready list with
+  `lastAttempt`, and a retry is a new row with a new reference.
+- Paystack status mapping (`PayoutStatus.fromPaystack`): otp, success, failed,
+  reversed map directly; **anything unrecognised is `pending`** — "not
+  finished", never a failure that would free the sale for a second payment.
+- Audit: `payout.started`, `payout.awaiting_otp|pending|success|failed|reversed`,
+  `payout.otp_resent`, `payout.cancelled`.
+- `payouts` is RLS-policied (platform staff all; a company may read its own
+  for a future portal view), and the app role can't DELETE or TRUNCATE.
+- **Not yet (8c)**: the final outcome — `transfer.success|failed|reversed`
+  webhooks, a check with Paystack, and a sweep for payouts stuck `pending`.
+
+### Paystack's per-transfer cap: a sale is paid in equal parts (changeset 077)
+Found live, not from the docs: the first real payout (₦15,000,000) was refused
+with "The maximum you may send in a single transfer at this time is:
+10,000,000.00 NGN". Paystack's own article on raising it
+(support.paystack.com/en/articles/2169474) gives no figures; it lists what they
+check before raising a limit — industry and volume, a clear use case,
+**app-based 2FA for every dashboard user**, **transfer approval by OTP/URL**
+(why keeping the OTP on was right), and **IP whitelisting for API access**.
+**TODO at deployment**: whitelist the server's IPs in the Paystack dashboard —
+it also makes a stolen secret key useless off the server.
+
+Decided with the user — split, never move money outside Paystack:
+- **`landvault.payouts.max-transfer-amount`** (₦10,000,000). A sale above it is
+  paid in the fewest parts that fit, **split evenly**, leftover kobo on the last
+  (`PayoutSplit`): ₦15M → 2 × ₦7.5M, ₦30M → 3 × ₦10M, ₦31M → 4 × ₦7.75M. The
+  parts always add up exactly to the sale (unit-tested with odd kobo).
+- Each part is its own payout row (`part_number`/`part_count`), its own
+  reference, its **own OTP**. "Pay out" sends the next unpaid part; one part in
+  flight at a time per sale.
+- **The split is fixed by the first part paid** and copied by every later part,
+  so a cap raised halfway can't change what the parts add up to (proven red by
+  always following the current cap). While nothing has been paid, it follows
+  the current cap.
+- **Never pay twice moved from the sale to the part**: a part can be live or
+  paid once (`uq_payouts_one_live_per_part`, replacing 076's per-sale index).
+  Proven: with the code's in-flight check removed the index still refused;
+  with both removed the part was paid twice.
+- A failed part is retried alone; a paid part is never sent again. The sale is
+  paid when every part has succeeded (`SALE_ALREADY_PAID` after that); the ready
+  list shows `amountOwed`, `partsPaid`, `nextPart`, `nextPartAmount`.
+- `GatewayRefused.paystackMessage()` carries Paystack's words without our
+  prefix — the first live refusal showed "Paystack refused the request:" twice.
+
+### Step 8c — how a payout actually ended (TR-3, changeset 078)
+`PayoutOutcomeService.refresh(reference)`, prompted two ways: a signed
+`transfer.success|failed|reversed` webhook, and `PayoutSweeper` (every
+`sweep-interval` 15m: `sending` older than `stuck-sending-after` 5m, `pending`
+not updated for `stuck-pending-after` 30m). Plus `GET /api/portal/payouts`
+(`portal.payments.verify`, company-wide, read-only). Decided with the user:
+A, A, A, A.
+
+- **The webhook is a prompt, never proof** (decision 1): refresh asks
+  Paystack's verify and records its answer. Proven red: taking the event's word
+  turned an unconfirmed "success" into a recorded one.
+- **Paystack's latest verified word wins** (decision 2): `pending → success`,
+  and `success → failed/reversed` too — that part is owed again (back on the
+  ready list) and every active Super Admin is emailed. Proven red by treating
+  success as final. An ambiguous reply never steps a success back to pending.
+- **The rare one**: a payout we closed (failed/reversed/cancelled) that
+  Paystack says succeeded. With no other live attempt for that part, the truth
+  is recorded (`success`) and flagged; with one, the old row stays as it is (one
+  live attempt per part) and `review_reason` says the part **may have been paid
+  twice** — both alert the Super Admins. `payouts.review_reason` (078) holds it.
+- **Never reached Paystack**: `sending` past the threshold and unknown to
+  Paystack → `failed`, nothing moved, the part owed again.
+- **Both paths set the platform scope**, because `payouts` is platform-scope
+  only under RLS: the sweeper like the other sweepers, and the webhook for
+  exactly the refresh call, after the signature check (proven red without it —
+  the webhook silently found no payout).
+- **The sweep's query runs in a transaction** (`stuckReferences`). First built
+  calling the repository straight from the sweeper — outside a transaction no
+  tenant/platform GUC is set, RLS hid every row, and the sweep found nothing,
+  silently. Caught by the restricted-role IT; the same trap the plot-import
+  template hit. **Any repository read on an RLS table needs a transaction.**
+- Audit entries are system entries (`payout.success|failed|reversed`, actor
+  "System"): Paystack decided, no person did.
+- **Seen live**: Paystack's finalize reply says "Transfer has been queued" with
+  status `success`, and the `transfer.success` webhooks arrived seconds later.
+- **Seen live (test mode)**: `transferred_at` is **null** even on a successful
+  transfer, in the webhook and in verify, and `fee_charged` is 0. `transferredAt`
+  is therefore left null — deliberately not filled from Paystack's `updatedAt`,
+  which records when Paystack changed the row, not when money landed. Recheck in
+  live mode; the transfer fee is only knowable there.
+
 ## One password rule, wherever a password is set (`PasswordPolicy`)
 
 `identity.internal.service.PasswordPolicy` is the only place the rule lives,

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Money that needs a person (decided with the user): a payment Paystack
+        confirmed after its purchase was abandoned — the plot already back on
+        sale — is recorded truthfully as SUCCEEDED, because it is real money,
+        and flagged here for finance to re-allocate or refund. Null = nothing to
+        review.
+    -->
+    <changeSet id="072-payments-review-reason" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE payments ADD COLUMN review_reason varchar(500);
+            COMMENT ON COLUMN payments.review_reason IS
+                'Why finance must look at this payment by hand (e.g. money arrived after the purchase was abandoned). Null when nothing to review.';
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE payments DROP COLUMN review_reason;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

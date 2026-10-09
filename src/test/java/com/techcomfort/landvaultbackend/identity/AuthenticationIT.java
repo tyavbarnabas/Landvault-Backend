@@ -28,6 +28,10 @@ import org.testcontainers.utility.DockerImageName;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 /**
  * The proof the slice works: register -> login -> call a protected endpoint
@@ -54,11 +58,11 @@ class AuthenticationIT {
         registry.add("app.jwt.secret", () -> "integration-test-signing-secret-of-at-least-32-bytes");
     }
 
-    @org.springframework.beans.factory.annotation.Autowired
+    @Autowired
     private TestRestTemplate restTemplate;
 
-    @org.springframework.beans.factory.annotation.Autowired
-    private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     /** Moves a rotation outside the grace window, so reuse reads as theft again. */
     private void backdateRotation(String rawRefreshToken) {
@@ -289,6 +293,6 @@ class AuthenticationIT {
     // re-verifying JwtService's own (de)serialization.
     private static String decodeJwtPayload(String jwt) {
         String payload = jwt.split("\\.")[1];
-        return new String(java.util.Base64.getUrlDecoder().decode(payload), java.nio.charset.StandardCharsets.UTF_8);
+        return new String(Base64.getUrlDecoder().decode(payload), StandardCharsets.UTF_8);
     }
 }

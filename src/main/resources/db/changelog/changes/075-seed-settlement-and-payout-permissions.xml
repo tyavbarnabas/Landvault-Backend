@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Payouts (decided with the user): the company's Executive Director
+        submits the account money is paid to; LandVault, which holds the money,
+        approves accounts and releases payouts. Two organisations each say yes —
+        neither permission is ever granted to the same side as the other.
+    -->
+    <changeSet id="075-seed-settlement-and-payout-permissions" author="landvault">
+        <sql>
+            INSERT INTO permissions (id, created_at, created_by, deleted, code, description) VALUES
+                (gen_random_uuid(), now(), 'system', false, 'portal.settlement.manage',
+                 'Submit or withdraw the bank account your company is paid to. A LandVault Super Admin approves it before any payout uses it.'),
+                (gen_random_uuid(), now(), 'system', false, 'admin.payouts.manage',
+                 'Approve or reject companies'' payout bank accounts, and send payouts.');
+            INSERT INTO role_permissions (id, created_at, created_by, deleted, role_id, permission_id)
+            SELECT gen_random_uuid(), now(), 'system', false, r.id, p.id
+            FROM roles r, permissions p
+            WHERE (r.code = 'executive_director' AND p.code = 'portal.settlement.manage')
+               OR (r.code = 'super_admin' AND p.code = 'admin.payouts.manage');
+        </sql>
+        <rollback>
+            DELETE FROM role_permissions WHERE permission_id IN
+                (SELECT id FROM permissions WHERE code IN ('portal.settlement.manage', 'admin.payouts.manage'));
+            DELETE FROM permissions WHERE code IN ('portal.settlement.manage', 'admin.payouts.manage');
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

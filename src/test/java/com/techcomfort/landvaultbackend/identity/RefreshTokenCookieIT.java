@@ -38,6 +38,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import org.springframework.boot.test.web.server.LocalServerPort;
 
 /**
  * The refresh token as an {@code HttpOnly} cookie: issuing, reading,
@@ -73,7 +74,7 @@ class RefreshTokenCookieIT {
     @Autowired
     private RefreshTokenCleanupJob cleanupJob;
 
-    @org.springframework.boot.test.web.server.LocalServerPort
+    @LocalServerPort
     private int port;
 
     // --- issuing ---

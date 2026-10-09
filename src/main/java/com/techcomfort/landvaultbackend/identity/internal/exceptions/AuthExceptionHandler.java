@@ -133,6 +133,6 @@ public class AuthExceptionHandler {
     @ExceptionHandler(WeakPasswordException.class)
     public ResponseEntity<ErrorResponse> handleWeakPassword(WeakPasswordException ex) {
         return ResponseEntity.badRequest().body(new ErrorResponse(ex.getMessage(), "WEAK_PASSWORD",
-                java.util.Map.of(ex.field(), ex.getMessage())));
+                Map.of(ex.field(), ex.getMessage())));
     }
 }

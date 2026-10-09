@@ -69,6 +69,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
+import java.util.Objects;
+import java.util.function.Consumer;
 
 /**
  * Creating estates and everything under them. Reads live in
@@ -347,12 +349,12 @@ public class PortalEstateService {
 
     /** Null leaves it; blank clears it; anything else is trimmed and set if different. */
     private static void changeText(List<String> changes, String field, String current, String requested,
-                                   java.util.function.Consumer<String> setter) {
+                                   Consumer<String> setter) {
         if (requested == null) {
             return;
         }
         String value = requested.isBlank() ? null : requested.trim();
-        if (!java.util.Objects.equals(value, current)) {
+        if (!Objects.equals(value, current)) {
             changes.add(field + " '" + (current == null ? "" : current) + "' -> '" + (value == null ? "" : value) + "'");
             setter.accept(value);
         }

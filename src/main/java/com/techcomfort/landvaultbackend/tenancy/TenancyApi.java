@@ -3,6 +3,7 @@ package com.techcomfort.landvaultbackend.tenancy;
 import java.util.Collection;
 import java.util.Map;
 import java.util.UUID;
+import java.util.Optional;
 
 /**
  * The tenancy module's only public surface. Add methods here as other
@@ -54,5 +55,12 @@ public interface TenancyApi {
      * A branch's name, if it belongs to that tenant. A plain read under the
      * caller's RLS scope — used when an invitation snapshots the branch name.
      */
-    java.util.Optional<String> branchNameFor(UUID branchId, UUID tenantId);
+    Optional<String> branchNameFor(UUID branchId, UUID tenantId);
+
+    /**
+     * A company's names and onboarding bank declaration, for the payout-account
+     * review (TR-2). A plain read under the caller's RLS: platform staff see any
+     * company, a company sees only itself. Empty when the company isn't visible.
+     */
+    Optional<CompanyBankProfile> companyBankProfile(UUID tenantId);
 }

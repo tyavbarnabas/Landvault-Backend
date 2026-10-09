@@ -44,6 +44,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 
 /**
  * The audit log read endpoint, against entries produced by real tenancy
@@ -59,7 +60,7 @@ class AdminAuditLogIT {
     private static final String ADMIN_PASSWORD = "correct horse battery staple 9";
 
     @Container
-    @org.springframework.boot.testcontainers.service.connection.ServiceConnection
+    @ServiceConnection
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>(
             DockerImageName.parse("postgis/postgis:16-3.4-alpine").asCompatibleSubstituteFor("postgres"));
 

@@ -37,4 +37,8 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     List<Reservation> findByStatusAndExpiresAtBefore(ReservationStatus status, Instant cutoff);
+
+    /** The sweeper's lock — the same row lock opening a transaction and a buyer's cancel take. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    Optional<Reservation> findLockedById(UUID id);
 }

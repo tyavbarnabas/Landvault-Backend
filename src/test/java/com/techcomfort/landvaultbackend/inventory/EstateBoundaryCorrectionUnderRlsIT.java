@@ -40,6 +40,7 @@ import java.util.Locale;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * SB-1 with the boundary-in-state check switched ON (the general suite turns
@@ -63,7 +64,7 @@ class EstateBoundaryCorrectionUnderRlsIT {
     private static final String ADMIN_EMAIL = "admin+" + UUID.randomUUID() + "@example.com";
     private static final String PASSWORD = "correct horse battery staple 9";
     /** Each test gets its own patch of the FCT, so estates from different tests never overlap. */
-    private static final java.util.concurrent.atomic.AtomicInteger PATCH = new java.util.concurrent.atomic.AtomicInteger();
+    private static final AtomicInteger PATCH = new AtomicInteger();
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>(

@@ -63,6 +63,8 @@ import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 
 /**
  * The inventory read endpoints against a database where row-level security
@@ -261,8 +263,8 @@ class PortalEstateReadUnderRlsIT {
 
     /** The email inside a token's payload, so a test can log the same user in again. */
     private String emailOf(String token) {
-        String payload = new String(java.util.Base64.getUrlDecoder()
-                .decode(token.split("\\.")[1]), java.nio.charset.StandardCharsets.UTF_8);
+        String payload = new String(Base64.getUrlDecoder()
+                .decode(token.split("\\.")[1]), StandardCharsets.UTF_8);
         int start = payload.indexOf("\"email\":\"") + 9;
         return payload.substring(start, payload.indexOf('"', start));
     }

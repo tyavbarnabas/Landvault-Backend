@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        FV-2: the developer's own finance staff verify a payment before a plot
+        is sold (decided with the user) — the finance officer, whose role this
+        is, and the Executive Director. LandVault still holds the money until
+        payout, which only follows verification.
+    -->
+    <changeSet id="073-seed-portal-payments-verify" author="landvault">
+        <sql>
+            INSERT INTO permissions (id, created_at, created_by, deleted, code, description) VALUES
+                (gen_random_uuid(), now(), 'system', false, 'portal.payments.verify',
+                 'Review payments awaiting finance for your own company, and approve (allocate the plot) or reject them.');
+            INSERT INTO role_permissions (id, created_at, created_by, deleted, role_id, permission_id)
+            SELECT gen_random_uuid(), now(), 'system', false, r.id, p.id
+            FROM roles r, permissions p
+            WHERE r.code IN ('finance_officer', 'executive_director') AND p.code = 'portal.payments.verify';
+        </sql>
+        <rollback>
+            DELETE FROM role_permissions WHERE permission_id IN (SELECT id FROM permissions WHERE code = 'portal.payments.verify');
+            DELETE FROM permissions WHERE code = 'portal.payments.verify';
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

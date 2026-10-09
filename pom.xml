@@ -70,6 +70,14 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-mail</artifactId>
         </dependency>
+        <!-- RestClient for outbound HTTP (the Paystack client). Main scope: Boot 4 ships
+             the auto-configured RestClient.Builder in its own module. It used to be
+             test-scoped, which hid its absence — tests passed while the app could
+             not start. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-restclient</artifactId>
+        </dependency>
         <!--
             RFC 6238 TOTP: secret generation, otpauth:// URI construction,
             verification and drift tolerance. Deliberately a library rather
@@ -159,11 +167,6 @@
         <dependency>
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-test</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-restclient</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

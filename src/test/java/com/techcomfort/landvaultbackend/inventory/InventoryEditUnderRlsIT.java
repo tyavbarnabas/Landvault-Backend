@@ -71,6 +71,11 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
+import org.assertj.core.data.Percentage;
 
 /**
  * Inventory editing, slice 1 — tier price, label and size, and block names —
@@ -370,7 +375,7 @@ class InventoryEditUnderRlsIT {
         assertThat(second.previousActualAreaSqm()).isEqualByComparingTo(first.actualAreaSqm());
         // A 0.002° square is four times a 0.001° one; metres, not degrees.
         assertThat(second.actualAreaSqm().doubleValue())
-                .isCloseTo(first.actualAreaSqm().doubleValue() * 4, org.assertj.core.data.Percentage.withPercentage(1));
+                .isCloseTo(first.actualAreaSqm().doubleValue() * 4, Percentage.withPercentage(1));
         assertThat(first.actualAreaSqm().doubleValue()).isBetween(10_000.0, 14_000.0);
         assertThat(new BigDecimal(queryString("SELECT actual_area_sqm FROM plots WHERE id = '" + plotId + "'")))
                 .as("stored, not just reported")
@@ -828,8 +833,8 @@ class InventoryEditUnderRlsIT {
     @Test
     void withholdingAndReservingTheSamePlotAtOnceNeverOverwriteEachOther() throws Exception {
         Buyer buyer = verifiedBuyer();
-        java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
-        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
             var reservation = pool.submit(() -> {
                 start.await();
@@ -1183,13 +1188,13 @@ class InventoryEditUnderRlsIT {
     private static String multiPolygonFeature(String plotNumber, List<List<List<BigDecimal>>> parts) {
         return "{\"type\":\"Feature\",\"properties\":{\"plot_number\":\"" + plotNumber
                 + "\",\"block\":\"A\",\"tier\":\"Standard 250\"},\"geometry\":{\"type\":\"MultiPolygon\",\"coordinates\":["
-                + parts.stream().map(r -> "[" + ringJson(r) + "]").collect(java.util.stream.Collectors.joining(","))
+                + parts.stream().map(r -> "[" + ringJson(r) + "]").collect(Collectors.joining(","))
                 + "]}}";
     }
 
     private static String ringJson(List<List<BigDecimal>> ring) {
         return "[" + ring.stream().map(p -> "[" + p.get(0).toPlainString() + "," + p.get(1).toPlainString() + "]")
-                .collect(java.util.stream.Collectors.joining(",")) + "]";
+                .collect(Collectors.joining(",")) + "]";
     }
 
     private static List<List<BigDecimal>> swapped(List<List<BigDecimal>> ring) {

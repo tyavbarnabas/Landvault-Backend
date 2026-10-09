@@ -75,6 +75,15 @@
     <include file="changes/067-staff-invitations.xml" relativeToChangelogFile="true"/>
     <include file="changes/068-staff-invitation-approval.xml" relativeToChangelogFile="true"/>
     <include file="changes/069-estate-boundary-changes.xml" relativeToChangelogFile="true"/>
+    <include file="changes/070-create-payments.xml" relativeToChangelogFile="true"/>
+    <include file="changes/071-create-payment-gateway-events.xml" relativeToChangelogFile="true"/>
+    <include file="changes/072-payments-review-reason.xml" relativeToChangelogFile="true"/>
+    <include file="changes/073-seed-portal-payments-verify.xml" relativeToChangelogFile="true"/>
+    <include file="changes/074-create-settlement-accounts.xml" relativeToChangelogFile="true"/>
+    <include file="changes/075-seed-settlement-and-payout-permissions.xml" relativeToChangelogFile="true"/>
+    <include file="changes/076-create-payouts.xml" relativeToChangelogFile="true"/>
+    <include file="changes/077-payout-parts.xml" relativeToChangelogFile="true"/>
+    <include file="changes/078-payouts-review-reason.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

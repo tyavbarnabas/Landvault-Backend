@@ -47,6 +47,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.HashSet;
 
 /**
  * Plot import from a surveyor's GeoJSON file (FU-1..FU-3). See AGENTS.md.
@@ -224,7 +225,7 @@ public class PlotImportService {
         for (Block block : blockRepository.findByEstateIdOrderByNameAsc(estate.getId())) {
             blockNames.put(block.getId(), block.getName());
         }
-        Set<String> takenPlotKeys = new java.util.HashSet<>();
+        Set<String> takenPlotKeys = new HashSet<>();
         List<Plot> existing = plotRepository.findByEstateId(estate.getId());
         for (Plot plot : existing) {
             String blockName = plot.getBlockId() == null ? null : blockNames.get(plot.getBlockId());

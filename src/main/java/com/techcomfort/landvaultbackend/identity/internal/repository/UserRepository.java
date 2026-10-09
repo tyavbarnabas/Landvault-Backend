@@ -24,4 +24,9 @@ public interface UserRepository extends JpaRepository<User, UUID> {
             + "AND u.tenantId = :tenantId AND r.code = :roleCode AND ur.scopedBranchId IS NULL AND u.status = :status")
     List<User> findCompanyWideHolders(@Param("tenantId") UUID tenantId, @Param("roleCode") String roleCode,
                                       @Param("status") UserStatus status);
+
+    /** Every holder of a role, in any scope — e.g. the platform's Super Admins. */
+    @Query("SELECT DISTINCT u FROM UserRole ur JOIN ur.user u, Role r WHERE r.id = ur.roleId "
+            + "AND r.code = :roleCode AND u.status = :status")
+    List<User> findRoleHolders(@Param("roleCode") String roleCode, @Param("status") UserStatus status);
 }

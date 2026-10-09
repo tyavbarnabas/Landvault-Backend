@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        TR-3: a payout whose outcome needs a person — reversed after success, or
+        reported successful by Paystack after we had marked it failed (the money
+        went; a retry may have paid the same part again). Null = nothing to review.
+        Same idea as payments.review_reason (072).
+    -->
+    <changeSet id="078-payouts-review-reason" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE payouts ADD COLUMN review_reason varchar(500);
+            COMMENT ON COLUMN payouts.review_reason IS
+                'Why a person must look at this payout (e.g. Paystack reported success after it was marked failed). Null when nothing to review.';
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE payouts DROP COLUMN review_reason;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

@@ -34,6 +34,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.springframework.dao.DataIntegrityViolationException;
 
 /**
  * Correcting an estate's boundary (FP-2, option C, decided with the user).
@@ -248,7 +249,7 @@ public class EstateBoundaryCorrectionService {
     private EstateBoundaryChange saveFlushingRace(EstateBoundaryChange change) {
         try {
             return changes.saveAndFlush(change);
-        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+        } catch (DataIntegrityViolationException e) {
             throw new InventoryException.StateConflict("BOUNDARY_CHANGE_PENDING",
                     "A boundary correction for this estate is waiting for review.");
         }

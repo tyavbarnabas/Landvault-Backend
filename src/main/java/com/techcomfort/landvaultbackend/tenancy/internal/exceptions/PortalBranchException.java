@@ -1,5 +1,7 @@
 package com.techcomfort.landvaultbackend.tenancy.internal.exceptions;
 
+import java.util.List;
+
 /** {@code PortalBranchService}'s refusals, handled by {@link PortalBranchExceptionHandler}. */
 public abstract class PortalBranchException extends RuntimeException {
 
@@ -20,7 +22,7 @@ public abstract class PortalBranchException extends RuntimeException {
 
         private final String detail;
 
-        public UnknownState(String input, java.util.List<String> names) {
+        public UnknownState(String input, List<String> names) {
             this.detail = "'" + input.trim() + "' isn't a Nigerian state. Use one of: " + names + ".";
         }
 

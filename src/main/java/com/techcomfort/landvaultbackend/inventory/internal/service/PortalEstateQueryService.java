@@ -54,6 +54,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.math.RoundingMode;
 
 /**
  * Reading a tenant's own inventory. Read-only by construction — no method
@@ -333,7 +334,7 @@ public class PortalEstateQueryService {
         for (Object[] row : estateRepository.footprintAreasSqm(estateIds)) {
             if (row[1] != null) {
                 areas.put((UUID) row[0], new BigDecimal(row[1].toString())
-                        .setScale(2, java.math.RoundingMode.HALF_UP));
+                        .setScale(2, RoundingMode.HALF_UP));
             }
         }
         return areas;

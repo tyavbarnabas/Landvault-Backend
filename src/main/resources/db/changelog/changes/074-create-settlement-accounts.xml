@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        TR-1/TR-2: where a company's payouts go. One row per SUBMISSION, never
+        overwritten (decided with the user): an Executive Director submits, a
+        Super Admin approves, and only an approved account with a Paystack
+        recipient code is ever paid. The previous approved account becomes
+        SUPERSEDED and stays, so we can always show which account was on file
+        when a payout was sent.
+
+        account_name is what the BANK returned (Paystack's resolve), never what
+        a person typed. organization_financial (onboarding's declaration) is
+        deliberately not touched and never paid to.
+
+        RLS-policied in the same changeset: a company sees only its own rows,
+        platform staff (the reviewers) see all. History is never deleted: the
+        app role may not DELETE or TRUNCATE.
+    -->
+    <changeSet id="074-create-settlement-accounts" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE settlement_accounts (
+                id              uuid NOT NULL PRIMARY KEY,
+                tenant_id       uuid NOT NULL REFERENCES organizations (id),
+                branch_id       uuid,
+                created_at      timestamp(6) with time zone NOT NULL,
+                updated_at      timestamp(6) with time zone,
+                created_by      varchar(255),
+                updated_by      varchar(255),
+                deleted         boolean NOT NULL,
+
+                bank_code       varchar(16) NOT NULL,
+                bank_name       varchar(255) NOT NULL,
+                account_number  varchar(10) NOT NULL,
+                account_name    varchar(255) NOT NULL,
+                currency        varchar(3) NOT NULL,
+                status          varchar(16) NOT NULL,
+                recipient_code  varchar(64),
+                submitted_by    uuid NOT NULL REFERENCES users (id),
+                decided_by      uuid REFERENCES users (id),
+                decided_at      timestamp(6) with time zone,
+                decision_note   varchar(500),
+
+                CONSTRAINT chk_settlement_accounts_status
+                    CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED', 'WITHDRAWN', 'SUPERSEDED')),
+                CONSTRAINT chk_settlement_accounts_nuban CHECK (account_number ~ '^[0-9]{10}$'),
+                CONSTRAINT chk_settlement_accounts_currency CHECK (currency = 'NGN'),
+                -- Only an approved (or once-approved) account can carry a recipient code.
+                CONSTRAINT chk_settlement_accounts_recipient_only_when_approved
+                    CHECK (recipient_code IS NULL OR status IN ('APPROVED', 'SUPERSEDED')),
+                CONSTRAINT chk_settlement_accounts_approved_has_recipient
+                    CHECK (status <> 'APPROVED' OR recipient_code IS NOT NULL)
+            );
+            CREATE UNIQUE INDEX uq_settlement_accounts_one_pending
+                ON settlement_accounts (tenant_id) WHERE status = 'PENDING' AND deleted = false;
+            CREATE UNIQUE INDEX uq_settlement_accounts_one_approved
+                ON settlement_accounts (tenant_id) WHERE status = 'APPROVED' AND deleted = false;
+            CREATE INDEX idx_settlement_accounts_status ON settlement_accounts (status, created_at);
+
+            ALTER TABLE settlement_accounts ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE settlement_accounts FORCE ROW LEVEL SECURITY;
+            CREATE POLICY settlement_accounts_platform ON settlement_accounts FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY settlement_accounts_tenant ON settlement_accounts FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                );
+            REVOKE DELETE, TRUNCATE ON settlement_accounts FROM ${appDbUsername};
+
+            COMMENT ON TABLE settlement_accounts IS
+                'Payout bank accounts, one row per submission; only APPROVED (with a Paystack recipient) is ever paid. History kept. See AGENTS.md, "Payments".';
+            COMMENT ON COLUMN settlement_accounts.account_name IS
+                'The name the BANK holds for this account (Paystack resolve), never typed by a person. A mismatch with the company name is a reviewer warning, not a block (TR-2).';
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE settlement_accounts;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>
