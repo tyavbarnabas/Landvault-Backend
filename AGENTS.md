@@ -5124,6 +5124,40 @@ user: A, A, A, A.
   `refund.processed` 15 minutes later (with a real `refunded_at`). The
   needs-attention path is covered by tests only; watch for it in live mode.
 
+### A buyer's purchases carry their payment (the sixth inverted interface)
+`GET /api/checkout/transactions/mine` (paged, newest first) and every
+`TransactionDto` now carry `payment` — `{ reference, status, amountPaid, paidAt,
+underReview, reviewKind, refundStatus }`, null before the first attempt — so a
+buyer on any device can reach their payment and refund (the frontend found there
+was no route back from a purchase). Decided with the user: A, A, A, A.
+
+- **Checkout can't read payments** (payments → checkout already), so checkout
+  declares `PaymentSummaryProvider` + `PaymentSummary` in its base package and
+  payments implements it (`CheckoutPaymentSummaries`) — the **sixth** use of the
+  inverted-interface pattern. One place to read a purchase, on the URLs the
+  frontend asked for.
+- The summary is the **successful attempt if any, otherwise the newest**.
+  Batched: two queries per page, never one per row.
+- **`reviewKind` disambiguates `underReview`**: `refund_due` when
+  `refund_requested_at` is set (finance rejected it, or a late payment wasn't
+  allocated), otherwise `late_payment`. `underReview` is unchanged for
+  compatibility. Proven red by swapping them; the buyer-only filter on `mine`
+  proven red too.
+- API_CONTRACT's checkout section had kept routes that never existed
+  (`/payment`, `/confirm`, `/finance-verify`) and "only `pending_payment`";
+  rewritten, along with `TransactionDto`'s descriptions.
+
+### Errors are always in the standard shape (found by the frontend)
+`PaymentExceptionHandler` handled only `PaymentException`, so a request failing
+its own rules (a blank reason, a 9-digit account number) came back as Spring's
+default body with no `code` — against "Response conventions to match". It now
+maps `MethodArgumentNotValidException` → 400 `VALIDATION_ERROR` with
+`fieldErrors`, unreadable bodies → `MALFORMED_REQUEST`, and a mistyped path value
+(an id that isn't a UUID) → `INVALID_PARAMETER`, the same as the other modules;
+`CheckoutExceptionHandler` gained the last two. Proven red. **A new controller
+needs its module's handler to cover these too** — a `@RestControllerAdvice`
+scoped by `assignableTypes` covers only the controllers it lists.
+
 ### Late money: allocate or refund
 `GET /api/portal/finance/late-payments`, `POST …/{transactionId}/allocate`,
 `POST …/{transactionId}/refund` `{ reason }` (`portal.payments.verify`).

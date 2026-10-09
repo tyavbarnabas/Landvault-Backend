@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -41,4 +42,6 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
     /** Late money for one company: confirmed, flagged for review, and not yet sent to refund. */
     List<Payment> findAllBySellerTenantIdAndStatusAndReviewReasonIsNotNullAndRefundRequestedAtIsNull(
             UUID sellerTenantId, PaymentStatus status);
+
+    List<Payment> findAllByTransactionIdIn(Collection<UUID> transactionIds);
 }

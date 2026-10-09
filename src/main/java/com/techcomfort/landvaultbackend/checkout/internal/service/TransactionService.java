@@ -2,6 +2,8 @@ package com.techcomfort.landvaultbackend.checkout.internal.service;
 
 import com.techcomfort.landvaultbackend.audit.AuditApi;
 import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
+import com.techcomfort.landvaultbackend.checkout.PaymentSummary;
+import com.techcomfort.landvaultbackend.checkout.PaymentSummaryProvider;
 import com.techcomfort.landvaultbackend.checkout.dto.CreateTransactionRequest;
 import com.techcomfort.landvaultbackend.checkout.dto.TransactionDto;
 import com.techcomfort.landvaultbackend.checkout.internal.domain.Reservation;
@@ -12,14 +14,20 @@ import com.techcomfort.landvaultbackend.checkout.internal.enums.TransactionStatu
 import com.techcomfort.landvaultbackend.checkout.internal.exceptions.CheckoutException;
 import com.techcomfort.landvaultbackend.checkout.internal.repository.ReservationRepository;
 import com.techcomfort.landvaultbackend.checkout.internal.repository.TransactionRepository;
+import com.techcomfort.landvaultbackend.common.PageResponse;
+import com.techcomfort.landvaultbackend.common.PageResponses;
 import com.techcomfort.landvaultbackend.common.PlotIntent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.security.SecureRandom;
 import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -47,6 +55,8 @@ public class TransactionService {
     private final TransactionRepository transactionRepository;
     private final ReservationRepository reservationRepository;
     private final AuditApi auditApi;
+    /** Implemented by the payments module; see the interface for why checkout doesn't read payments itself. */
+    private final PaymentSummaryProvider paymentSummaries;
 
     @Transactional
     public TransactionDto create(UUID buyerUserId, CreateTransactionRequest request) {
@@ -107,15 +117,29 @@ public class TransactionService {
                 reservation.getSellerTenantId(),
                 "Pending purchase opened (" + plan.getValue() + ")"));
 
-        return toDto(transaction);
+        // Nothing paid yet on a purchase opened this instant.
+        return toDto(transaction, null);
     }
 
     /** A buyer's own transaction. Another buyer's is not found, not forbidden. */
     @Transactional(readOnly = true)
     public TransactionDto get(UUID buyerUserId, UUID transactionId) {
         return transactionRepository.findByIdAndBuyerUserId(transactionId, buyerUserId)
-                .map(TransactionService::toDto)
+                .map(this::withPayment)
                 .orElseThrow(CheckoutException.TransactionNotFound::new);
+    }
+
+    /** The buyer's own purchases, newest first, each with its payment summary (batched: one call per page). */
+    @Transactional(readOnly = true)
+    public PageResponse<TransactionDto> mine(UUID buyerUserId, Pageable pageable) {
+        Page<Transaction> page = transactionRepository.findAllByBuyerUserIdOrderByCreatedAtDesc(buyerUserId, pageable);
+        Map<UUID, PaymentSummary> summaries = paymentSummaries.summariesFor(
+                page.getContent().stream().map(Transaction::getId).toList());
+        return PageResponses.from(page, t -> toDto(t, summaries.get(t.getId())));
+    }
+
+    private TransactionDto withPayment(Transaction transaction) {
+        return toDto(transaction, paymentSummaries.summariesFor(List.of(transaction.getId())).get(transaction.getId()));
     }
 
     /**
@@ -144,7 +168,7 @@ public class TransactionService {
         return reference.toString();
     }
 
-    private static TransactionDto toDto(Transaction transaction) {
+    private static TransactionDto toDto(Transaction transaction, PaymentSummary payment) {
         return new TransactionDto(
                 transaction.getId(),
                 transaction.getReference(),
@@ -159,6 +183,7 @@ public class TransactionService {
                 transaction.getPlan().getValue(),
                 transaction.getInstallmentMonths(),
                 transaction.getStatus().getValue(),
-                transaction.getCreatedAt());
+                transaction.getCreatedAt(),
+                payment);
     }
 }

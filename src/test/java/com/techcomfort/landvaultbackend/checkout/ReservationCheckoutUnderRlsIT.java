@@ -1592,6 +1592,100 @@ class ReservationCheckoutUnderRlsIT {
         return transaction;
     }
 
+    /** Every payments error is in the standard shape — including input that fails the request's own rules. */
+    @Test
+    void badInputGetsTheStandardErrorShapeWithTheFieldThatFailed() {
+        TransactionDto transaction = paidPurchase();
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+
+        ResponseEntity<String> blankReason = financeAction(officer, transaction.id(), "reject", "{\"reason\":\"\"}");
+        assertThat(blankReason.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(blankReason.getBody()).contains("\"code\":\"VALIDATION_ERROR\"").contains("\"reason\":");
+
+        ResponseEntity<String> shortAccount = restTemplate.exchange("/api/portal/settlement/account", HttpMethod.POST,
+                entity(seller.token(), "{\"bankCode\":\"058\",\"accountNumber\":\"012345678\"}"), String.class);
+        assertThat(shortAccount.getBody()).contains("\"code\":\"VALIDATION_ERROR\"").contains("\"accountNumber\":");
+
+        ResponseEntity<String> notJson = financeAction(officer, transaction.id(), "reject", "{not json");
+        assertThat(notJson.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(notJson.getBody()).contains("\"code\":\"MALFORMED_REQUEST\"");
+
+        ResponseEntity<String> badId = restTemplate.exchange("/api/portal/finance/transactions/not-a-uuid/verify",
+                HttpMethod.POST, entity(officer, null), String.class);
+        assertThat(badId.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(badId.getBody()).contains("\"code\":\"INVALID_PARAMETER\"");
+
+        // Checkout, which the buyer's purchase flow also calls, answers the same way.
+        ResponseEntity<String> badReservation = restTemplate.exchange("/api/reservations", HttpMethod.POST,
+                entity(buyer.token(), "{not json"), String.class);
+        assertThat(badReservation.getBody()).contains("\"code\":\"MALFORMED_REQUEST\"");
+        assertThat(restTemplate.exchange("/api/checkout/transactions/not-a-uuid", HttpMethod.GET,
+                entity(buyer.token(), null), String.class).getBody()).contains("\"code\":\"INVALID_PARAMETER\"");
+    }
+
+    // ------------------------------------------------------------------
+    // "My purchases" — a buyer finds their payment and refund from any device
+    // ------------------------------------------------------------------
+
+    @Test
+    void myPurchasesAreMineOnlyNewestFirstPagedAndCarryThePaymentSummary() {
+        TransactionDto unpaid = outrightTransaction();
+        assertThat(unpaid.payment()).as("nothing paid yet").isNull();
+        String reference = startPayment(unpaid);
+        paystackSays(reference, "success", 2_000_000_000L, "NGN", "Approved");
+        confirm(buyer, reference);
+
+        String mine = get("/api/checkout/transactions/mine", buyer.token(), String.class).getBody();
+        assertThat(mine).contains(unpaid.id().toString()).contains("\"reference\":\"" + reference + "\"")
+                .contains("\"status\":\"succeeded\"").contains("\"underReview\":false")
+                .contains("\"items\":").contains("\"hasMore\":");
+        assertThat(get("/api/checkout/transactions/" + unpaid.id(), buyer.token(), String.class).getBody())
+                .as("the single read carries it too").contains("\"reference\":\"" + reference + "\"");
+
+        Buyer stranger = verifiedBuyer();
+        assertThat(get("/api/checkout/transactions/mine", stranger.token(), String.class).getBody())
+                .doesNotContain(unpaid.id().toString()).contains("\"total\":0");
+    }
+
+    @Test
+    void myPurchasesArePagedNewestFirst() {
+        Buyer fresh = verifiedBuyer();
+        TransactionDto first = createTransaction(fresh, reserve(fresh, addPlot("PAGE-1", "available-dev")).id(), "outright", null);
+        TransactionDto second = createTransaction(fresh, reserve(fresh, addPlot("PAGE-2", "available-dev")).id(), "outright", null);
+
+        String page1 = get("/api/checkout/transactions/mine?limit=1", fresh.token(), String.class).getBody();
+        assertThat(page1).contains(second.id().toString()).doesNotContain(first.id().toString())
+                .contains("\"total\":2").contains("\"hasMore\":true").contains("\"cursor\":\"1\"");
+        String page2 = get("/api/checkout/transactions/mine?limit=1&cursor=1", fresh.token(), String.class).getBody();
+        assertThat(page2).contains(first.id().toString()).contains("\"hasMore\":false");
+    }
+
+    /** reviewKind tells the two kinds of review apart, and the refund's status follows. */
+    @Test
+    void aRejectedPurchaseSaysRefundDueAndThenShowsTheRefund() {
+        String reference = rejectedPayment();
+        UUID transactionId = UUID.fromString(queryString("SELECT transaction_id FROM payments WHERE reference = '"
+                + reference + "'"));
+        assertThat(get("/api/checkout/transactions/" + transactionId, buyer.token(), String.class).getBody())
+                .contains("\"reviewKind\":\"refund_due\"").contains("\"refundStatus\":null");
+
+        when(paystack.createRefund(eq(reference), anyLong(), any(), any()))
+                .thenReturn(new PaystackClient.Refund("R9", "pending", null, null, null));
+        startRefund(payoutAdmin(true), reference);
+
+        assertThat(get("/api/checkout/transactions/" + transactionId, buyer.token(), String.class).getBody())
+                .contains("\"refundStatus\":\"pending\"");
+    }
+
+    @Test
+    void lateMoneySaysLatePayment() {
+        TransactionDto transaction = latePayment();
+
+        assertThat(get("/api/checkout/transactions/" + transaction.id(), buyer.token(), String.class).getBody())
+                .contains("\"status\":\"abandoned\"").contains("\"underReview\":true")
+                .contains("\"reviewKind\":\"late_payment\"");
+    }
+
     private TransactionDto verifiedSale() {
         TransactionDto transaction = paidPurchase();
         assertThat(financeAction(seller.token(), transaction.id(), "verify", null).getStatusCode()).isEqualTo(HttpStatus.OK);

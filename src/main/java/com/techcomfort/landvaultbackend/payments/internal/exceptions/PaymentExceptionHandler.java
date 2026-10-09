@@ -11,9 +11,16 @@ import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalLate
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalPayoutController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalSettlementController;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.FieldError;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /** Payment refusals in AGENTS.md's {message, code, fieldErrors} shape. */
 @RestControllerAdvice(assignableTypes = {PaymentController.class, PaystackWebhookController.class,
@@ -68,6 +75,35 @@ public class PaymentExceptionHandler {
             case PaymentException.GatewayUnavailable e -> body(HttpStatus.SERVICE_UNAVAILABLE, e, "PAYMENT_PROVIDER_UNAVAILABLE");
             default -> body(HttpStatus.BAD_REQUEST, ex, "PAYMENT_REFUSED");
         };
+    }
+
+    /**
+     * A request body that fails its own rules (a blank reason, a 9-digit
+     * account number, a code with letters): 400 VALIDATION_ERROR with the
+     * field and why, in the standard shape — never Spring's default body.
+     */
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException ex) {
+        Map<String, String> fieldErrors = ex.getBindingResult().getFieldErrors().stream()
+                .collect(Collectors.toMap(
+                        FieldError::getField,
+                        error -> error.getDefaultMessage() == null ? "Invalid value" : error.getDefaultMessage(),
+                        (first, second) -> first));
+        return ResponseEntity.badRequest().body(ErrorResponse.fieldErrors(fieldErrors));
+    }
+
+    /** Not JSON, or no body where one is required. */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponse> handleUnreadable(HttpMessageNotReadableException ex) {
+        return ResponseEntity.badRequest()
+                .body(ErrorResponse.of("Request body is malformed or contains unexpected fields.", "MALFORMED_REQUEST"));
+    }
+
+    /** A path or query value of the wrong type, e.g. an id that isn't a UUID. */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        return ResponseEntity.badRequest()
+                .body(ErrorResponse.of("'" + ex.getName() + "' isn't a valid value.", "INVALID_PARAMETER"));
     }
 
     private static ResponseEntity<ErrorResponse> body(HttpStatus status, PaymentException ex, String code) {

@@ -1,6 +1,8 @@
 package com.techcomfort.landvaultbackend.checkout.internal.repository;
 
 import com.techcomfort.landvaultbackend.checkout.internal.domain.Transaction;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -19,6 +21,8 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
     boolean existsByReservationId(UUID reservationId);
 
     boolean existsByPlotId(UUID plotId);
+
+    Page<Transaction> findAllByBuyerUserIdOrderByCreatedAtDesc(UUID buyerUserId, Pageable pageable);
 
     Optional<Transaction> findByIdAndBuyerUserId(UUID id, UUID buyerUserId);
 

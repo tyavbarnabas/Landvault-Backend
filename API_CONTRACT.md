@@ -246,17 +246,26 @@ today reads them.
 ## Checkout / transactions — `marketplaceCheckoutService.ts`
 | Method | Path | Request | Response |
 |---|---|---|---|
-| POST | `/api/checkout/transactions` | `{ reservationId, intent, plan, installmentMonths? }` | `Transaction` — **built** |
-| POST | `/api/checkout/transactions/{id}/payment` | `{ method: MarketplacePaymentMethod }` | `{ requiresTransfer: boolean, account?: VirtualAccountDetails }` |
-| POST | `/api/checkout/transactions/{id}/confirm` | — | `Transaction` |
-| POST | `/api/checkout/transactions/{id}/finance-verify` | — (Finance-role action) | `Transaction` |
-| GET | `/api/checkout/transactions/{id}` | — | `Transaction` — **built** |
+| POST | `/api/checkout/transactions` | `{ reservationId, intent, plan, installmentMonths? }` | `Transaction` |
+| GET | `/api/checkout/transactions/mine?cursor&limit` | — | `Page<Transaction>` — the buyer's own, newest first (limit default 20, max 100) |
+| GET | `/api/checkout/transactions/{id}` | — | `Transaction` (another buyer's is 404) |
 
-`TransactionStatus`: `pending_payment → payment_received → awaiting_finance → verified` (or `rejected`). A successful checkout must create the buyer's `OwnedPlot` — don't leave that as a frontend-only side effect.
+Paying, confirming and finance verification are **not** checkout routes — see "Payments" below
+(`POST /api/transactions/{id}/payments`, `POST /api/payments/{reference}/verify`, and the developer
+portal's `/api/portal/finance/...`). The old `/payment`, `/confirm` and `/finance-verify` routes in
+this table never existed and are gone.
 
-**Only `pending_payment` is produced today**; everything after it belongs to
-`finance`, which is not built. A reservation never allocates: the plot stays
-held, never sold, until a finance-role human verifies a payment.
+`TransactionStatus`: `pending_payment → awaiting_finance → verified`, or `rejected`, or `abandoned`
+(the hold ended with nothing paid). The backend never produces `payment_received`: a confirmed
+payment moves straight to `awaiting_finance`. **Only `verified` means the plot is the buyer's.**
+
+Every `Transaction` carries **`payment`** — null until the buyer first presses pay:
+`{ reference, status, amountPaid, paidAt, underReview, reviewKind, refundStatus }`. It is the
+successful attempt if there is one, otherwise the most recent. `reviewKind`: `late_payment`
+(paid after the reservation ended — the developer will allocate the plot or refund it),
+`refund_due` (the money is being returned), or null. `refundStatus`: the refund's status once one
+has started (`sending | pending | processing | needs-attention | processed | failed`), else null.
+Use `payment.reference` for `/api/payments/{reference}/refund` and friends.
 
 **`InitiateTransactionInput` is deliberately not the accepted body.** The
 frontend currently posts `basePrice`, `totalPrice`, `amountDue`,
@@ -684,4 +693,10 @@ paymentReference, agreedPrice, amountPaid, currency, channel, paidAt, plotAvaila
 `POST /api/portal/finance/late-payments/{transactionId}/allocate` → `{ status: "verified" }` (409
 `PLOT_NO_LONGER_AVAILABLE` / `PAYMENT_NOT_CONFIRMED`, nothing changed). `POST …/{transactionId}/refund`
 `{ reason }` → `{ status: "refund_due" }`. Only offer Allocate while `plotAvailable` is true.
+
+**Errors from payments and checkout are always `{ message, code, fieldErrors }`**, including
+bad input: 400 `VALIDATION_ERROR` with `fieldErrors` (e.g. `{ "reason": "must not be blank" }`,
+`{ "accountNumber": "must be a 10-digit account number" }`), 400 `MALFORMED_REQUEST` (body not
+JSON), 400 `INVALID_PARAMETER` (an id in the path that isn't a UUID). Show `fieldErrors` beside
+the matching inputs.
 

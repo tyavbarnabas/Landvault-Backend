@@ -1,5 +1,6 @@
 package com.techcomfort.landvaultbackend.checkout.dto;
 
+import com.techcomfort.landvaultbackend.checkout.PaymentSummary;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.math.BigDecimal;
@@ -15,19 +16,21 @@ import java.util.UUID;
 @Schema(
         name = "Transaction",
         description = """
-                A purchase in progress.
+                A purchase.
 
-                **`pending_payment` is the only status this endpoint produces, and a reservation \
-                never allocates.** The plot is held, not sold. Allocation happens only after a \
-                finance-role human verifies the payment — a gateway signal is never treated as \
-                confirmation. Nothing here should be shown to a buyer as complete.
+                **Only `verified` means the plot is the buyer's.** `pending_payment` → (paid, \
+                confirmed with Paystack) → `awaiting_finance` → (the developer's finance checks it) \
+                → `verified`, or `rejected` (the money is returned). `abandoned`: the hold ended \
+                with nothing paid; if money arrives later, `payment.reviewKind` says what happens. \
+                A gateway signal is never treated as confirmation of anything.
 
                 **The price was captured when the plot was held** and is not recomputed: if the \
                 developer re-prices the tier during checkout, this figure does not move. \
                 `basePrice` is the tier's own price, `cornerPremiumPct` is null unless a premium \
                 actually applied, and `totalPrice` is what was agreed.
 
-                Finance, payment methods, schedules and receipts are not built.""")
+                `payment` summarises how the payment stands (null before the buyer first presses \
+                pay). Installment schedules and receipts are not built.""")
 public record TransactionDto(
 
         UUID id,
@@ -58,9 +61,12 @@ public record TransactionDto(
 
         @Schema(nullable = true) Integer installmentMonths,
 
-        @Schema(description = "Always `pending_payment` from this module.", example = "pending_payment")
+        @Schema(description = "pending_payment, awaiting_finance, verified, rejected or abandoned.",
+                example = "pending_payment")
         String status,
 
-        Instant createdAt
+        Instant createdAt,
+
+        @Schema(nullable = true) PaymentSummary payment
 ) {
 }

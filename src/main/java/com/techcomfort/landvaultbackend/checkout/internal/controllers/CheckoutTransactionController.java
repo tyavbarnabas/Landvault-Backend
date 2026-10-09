@@ -4,6 +4,8 @@ import com.techcomfort.landvaultbackend.checkout.dto.CreateTransactionRequest;
 import com.techcomfort.landvaultbackend.checkout.dto.TransactionDto;
 import com.techcomfort.landvaultbackend.checkout.internal.service.TransactionService;
 import com.techcomfort.landvaultbackend.common.OpenApiConfig;
+import com.techcomfort.landvaultbackend.common.PageResponse;
+import com.techcomfort.landvaultbackend.common.PageResponses;
 import com.techcomfort.landvaultbackend.common.TenantContext;
 import com.techcomfort.landvaultbackend.common.TenantScope;
 import io.swagger.v3.oas.annotations.Operation;
@@ -21,6 +23,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
@@ -35,6 +38,9 @@ import java.util.UUID;
 @Tag(name = OpenApiConfig.TAG_CHECKOUT)
 public class CheckoutTransactionController {
 
+    private static final int DEFAULT_PAGE_SIZE = 20;
+    private static final int MAX_PAGE_SIZE = 100;
+
     private final TransactionService transactionService;
 
     @Operation(
@@ -47,10 +53,9 @@ public class CheckoutTransactionController {
                     during checkout cannot change what the buyer agreed to. Price fields sent by a \
                     client are ignored.
 
-                    **The result is `pending_payment`, and that is as far as this goes.** \
-                    Reservation does not allocate: the plot stays held, never sold, until a \
-                    finance-role human verifies a payment. Never present this to a buyer as \
-                    complete.
+                    **The result is `pending_payment`.** Reservation does not allocate: the plot stays \
+                    held, never sold, until the buyer pays and the developer's finance verifies the \
+                    payment (`verified`). Never present it to a buyer as complete before then.
 
                     One transaction per hold — a repeat POST is refused as a duplicate rather than \
                     opening a second purchase.""")
@@ -69,6 +74,22 @@ public class CheckoutTransactionController {
     public ResponseEntity<TransactionDto> create(@Valid @RequestBody CreateTransactionRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(transactionService.create(currentUserId(), request));
+    }
+
+    @Operation(
+            summary = "My purchases",
+            description = """
+                    Requires `client.checkout.reserve`. The signed-in buyer's purchases, newest first, \
+                    paged (`limit` default 20, max 100; pass `cursor` back for the next page). Each carries \
+                    `payment` — how its payment stands, including `reviewKind` and `refundStatus` — so a \
+                    buyer on any device can find their payment and refund.""")
+    @GetMapping("/mine")
+    @PreAuthorize("hasAuthority('client.checkout.reserve')")
+    public ResponseEntity<PageResponse<TransactionDto>> mine(@RequestParam(required = false) String cursor,
+                                                             @RequestParam(required = false) Integer limit) {
+        return ResponseEntity.ok(transactionService.mine(currentUserId(),
+                PageResponses.pageable(cursor, limit == null || limit <= 0 ? DEFAULT_PAGE_SIZE
+                        : Math.min(limit, MAX_PAGE_SIZE))));
     }
 
     @Operation(
