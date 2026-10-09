@@ -667,3 +667,21 @@ become `reversed` (the part is owed again and reappears on the admin ready list)
 the last 4 digits of whatever paid — a card, or the paying bank account for a transfer;
 read it with `channel` ("card ending 4081" vs "account ending X890").
 
+**Refunds.** Buyer: `GET /api/payments/{reference}/refund` → `{ status, amount, currency,
+needsAccount, accountBankName, accountLast4, expectedAt, refundedAt }` (`status`: pending |
+processing | needs-attention | processed | failed). When `needsAccount` is true, show the
+bank picker (`GET /api/payments/banks`) and `POST /api/payments/{reference}/refund-account`
+`{ bankCode, accountNumber }` — no name field; the bank supplies it. Admin
+(`admin.payouts.manage` + 2FA to send): `GET /api/admin/refunds/due`, `GET /api/admin/refunds`,
+`GET /api/admin/refunds/{id}` (with `account` and `accountNameMatchesBuyer` — a warning only),
+`POST /api/admin/refunds` `{ paymentReference }`, `POST /api/admin/refunds/{id}/send-to-account`.
+Errors: 404 `REFUND_NOT_DUE`, `REFUND_NOT_FOUND`; 409 `REFUND_IN_PROGRESS`,
+`REFUND_NOT_AWAITING_ACCOUNT`, `REFUND_ACCOUNT_MISSING`; 503 `REFUND_OUTCOME_UNKNOWN`.
+
+**Late money (developer finance).** `portal.payments.verify`. `GET /api/portal/finance/late-payments`
+→ `[{ transactionId, transactionReference, estateName, plotLabel, buyerName, buyerEmail,
+paymentReference, agreedPrice, amountPaid, currency, channel, paidAt, plotAvailable, amountsMatch }]`.
+`POST /api/portal/finance/late-payments/{transactionId}/allocate` → `{ status: "verified" }` (409
+`PLOT_NO_LONGER_AVAILABLE` / `PAYMENT_NOT_CONFIRMED`, nothing changed). `POST …/{transactionId}/refund`
+`{ reason }` → `{ status: "refund_due" }`. Only offer Allocate while `plotAvailable` is true.
+

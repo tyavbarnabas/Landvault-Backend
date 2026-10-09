@@ -8,5 +8,9 @@ public enum FinanceDecision {
     /** Already decided, or never reached finance. */
     NOT_AWAITING_FINANCE,
     /** The plot is no longer held for this purchase, so it cannot be sold. */
-    PLOT_NOT_RESERVED
+    PLOT_NOT_RESERVED,
+    /** A late payment: the purchase isn't abandoned (any more), so there is nothing to allocate. */
+    NOT_ABANDONED,
+    /** A late payment: someone else reserved or bought the plot meanwhile — only a refund is left. */
+    PLOT_NOT_AVAILABLE
 }

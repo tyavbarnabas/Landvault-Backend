@@ -63,4 +63,7 @@ public interface IdentityApi {
 
     /** The email of every active Super Admin — who is told when a payout fails or is reversed. */
     List<String> superAdminEmails();
+
+    /** A user's name as registered ("First Last") — what a refund account's bank name is compared with. */
+    Optional<String> fullNameOf(UUID userId);
 }

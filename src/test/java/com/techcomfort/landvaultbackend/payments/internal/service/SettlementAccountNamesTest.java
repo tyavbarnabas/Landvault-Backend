@@ -29,4 +29,12 @@ class SettlementAccountNamesTest {
         assertThat(SettlementAccountNames.matchesCompany(null, "Estintin Group Ltd", null)).isFalse();
         assertThat(SettlementAccountNames.matchesCompany("LIMITED", "Ltd", null)).isFalse();
     }
+
+    @Test
+    void aPersonMatchesInAnyOrderWithExtraNamesButNotWithoutTheirOwn() {
+        assertThat(SettlementAccountNames.matchesPerson("TYAV BARNABAS SUGHTER", "Barnabas Tyav")).isTrue();
+        assertThat(SettlementAccountNames.matchesPerson("BUYER ADA CHIOMA", "Ada Buyer")).isTrue();
+        assertThat(SettlementAccountNames.matchesPerson("JOHN ADEBAYO", "Ada Buyer")).isFalse();
+        assertThat(SettlementAccountNames.matchesPerson("ADA OKAFOR", "Ada Buyer")).as("one name isn't enough").isFalse();
+    }
 }

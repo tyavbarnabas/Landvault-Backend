@@ -2,6 +2,7 @@ package com.techcomfort.landvaultbackend.checkout.internal.service;
 
 import com.techcomfort.landvaultbackend.audit.AuditApi;
 import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
+import com.techcomfort.landvaultbackend.checkout.AbandonedSale;
 import com.techcomfort.landvaultbackend.checkout.CheckoutApi;
 import com.techcomfort.landvaultbackend.checkout.FinanceDecision;
 import com.techcomfort.landvaultbackend.checkout.FinanceQueueRow;
@@ -20,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -145,6 +147,44 @@ public class CheckoutApiImpl implements CheckoutApi {
                 "Hold ended: finance rejected the payment for " + transaction.getReference() + "; the plot is back on sale.");
         auditApi.record(AuditEntryRequest.of(financeUserId, "transaction.rejected", "transaction", transactionId,
                 tenantId, "Payment for " + transaction.getReference() + " rejected by finance: " + reason));
+        return FinanceDecision.DONE;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<AbandonedSale> abandonedSales(UUID tenantId, Collection<UUID> transactionIds) {
+        if (transactionIds.isEmpty()) {
+            return List.of();
+        }
+        return transactions.findAbandonedSales(tenantId, transactionIds).stream().map(r -> new AbandonedSale(
+                (UUID) r[0], (String) r[1], (String) r[2],
+                r[3] == null ? "Plot " + r[4] : "Block " + r[3] + ", Plot " + r[4],
+                (BigDecimal) r[5], Currency.valueOf((String) r[6]),
+                "AVAILABLE_DEV".equals(r[7]) || "AVAILABLE_INV".equals(r[7]))).toList();
+    }
+
+    @Override
+    @Transactional
+    public FinanceDecision allocateAbandoned(UUID transactionId, UUID tenantId, UUID financeUserId) {
+        Optional<Reservation> locked = lockForFinance(transactionId, tenantId);
+        if (locked.isEmpty()) {
+            return FinanceDecision.NOT_FOUND;
+        }
+        Transaction transaction = transactions.findById(transactionId).orElseThrow();
+        if (transaction.getStatus() != TransactionStatus.ABANDONED) {
+            return FinanceDecision.NOT_ABANDONED;
+        }
+        // Checked before anything is written: if the plot is taken, nothing changes.
+        if (!plotLockGateway.sellAvailable(transaction.getPlotId())) {
+            return FinanceDecision.PLOT_NOT_AVAILABLE;
+        }
+        // From here every step must happen: an exception rolls back the plot sale too.
+        if (transactions.moveFromAbandoned(transactionId, TransactionStatus.VERIFIED.name()) != 1) {
+            throw new IllegalStateException("Transaction " + transactionId + " left abandoned while locked");
+        }
+        auditApi.record(AuditEntryRequest.of(financeUserId, "transaction.verified", "transaction", transactionId,
+                tenantId, "Late payment for " + transaction.getReference() + " accepted by finance; plot "
+                        + transaction.getPlotId() + " allocated (sold). The earlier hold stays expired."));
         return FinanceDecision.DONE;
     }
 

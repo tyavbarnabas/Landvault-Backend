@@ -280,4 +280,63 @@ class PaystackClientTest {
 
         paystack.verify();
     }
+
+    @Test
+    void aRefundIsRequestedByOurPaymentReferenceForTheFullAmountInKobo() {
+        paystack.expect(requestTo("https://api.paystack.co/refund"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(jsonPath("$.transaction").value("LV-PAY-123"))
+                .andExpect(jsonPath("$.amount").value(1500000000L))
+                .andExpect(jsonPath("$.currency").value("NGN"))
+                .andRespond(withSuccess("""
+                        {"status":true,"message":"Refund has been queued for processing",
+                         "data":{"id":3018284,"status":"pending","amount":1500000000,"currency":"NGN",
+                                 "expected_at":"2026-10-16T09:21:17.016Z"}}""", MediaType.APPLICATION_JSON));
+
+        PaystackClient.Refund refund = client.createRefund("LV-PAY-123", 1500000000L, "note", "note");
+
+        assertThat(refund.id()).isEqualTo("3018284");
+        assertThat(refund.status()).isEqualTo("pending");
+        assertThat(refund.expectedAt()).isEqualTo(Instant.parse("2026-10-16T09:21:17.016Z"));
+        paystack.verify();
+    }
+
+    @Test
+    void aNeedsAttentionRefundIsRetriedWithTheAccountAndPaystacksBankId() {
+        paystack.expect(requestTo("https://api.paystack.co/refund/retry_with_customer_details/3018284"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(jsonPath("$.refund_account_details.account_number").value("0123456789"))
+                .andExpect(jsonPath("$.refund_account_details.bank_id").value("9"))
+                .andExpect(jsonPath("$.refund_account_details.currency").value("NGN"))
+                .andRespond(withSuccess("""
+                        {"status":true,"message":"Refund retried and has been queued for processing",
+                         "data":{"id":3018284,"status":"processing","refunded_at":null}}""", MediaType.APPLICATION_JSON));
+
+        assertThat(client.retryRefundWithAccount("3018284", "0123456789", "9").status()).isEqualTo("processing");
+        paystack.verify();
+    }
+
+    @Test
+    void aFetchedRefundReportsWhenTheMoneyWentBack() {
+        paystack.expect(requestTo("https://api.paystack.co/refund/3018284"))
+                .andRespond(withSuccess("""
+                        {"status":true,"message":"Refund retrieved",
+                         "data":{"id":3018284,"status":"processed","refunded_at":"2026-10-12T10:54:47.000Z"}}""",
+                        MediaType.APPLICATION_JSON));
+
+        PaystackClient.Refund refund = client.fetchRefund("3018284");
+
+        assertThat(refund.status()).isEqualTo("processed");
+        assertThat(refund.refundedAt()).isEqualTo(Instant.parse("2026-10-12T10:54:47Z"));
+    }
+
+    @Test
+    void theBankListKeepsPaystacksOwnBankId() {
+        paystack.expect(requestTo("https://api.paystack.co/bank?country=nigeria&currency=NGN&use_cursor=true&perPage=100"))
+                .andRespond(withSuccess("""
+                        {"status":true,"data":[{"id":9,"name":"Guaranty Trust Bank","code":"058","active":true,
+                         "is_deleted":false,"type":"nuban"}],"meta":{"next":null}}""", MediaType.APPLICATION_JSON));
+
+        assertThat(client.listBanks()).containsExactly(new PaystackClient.Bank("058", "Guaranty Trust Bank", "9"));
+    }
 }

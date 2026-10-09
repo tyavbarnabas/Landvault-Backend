@@ -19,6 +19,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -88,6 +89,7 @@ public class FinanceVerificationService {
         }
         for (Payment payment : payments.findLockedByTransactionIdAndStatus(transactionId, PaymentStatus.SUCCEEDED)) {
             payment.setReviewReason("Refund due: finance rejected this payment — " + reason.trim());
+            payment.setRefundRequestedAt(Instant.now());
             payments.save(payment);
             auditApi.record(AuditEntryRequest.of(scope.userId(), "payment.refund_due", "payment", payment.getId(),
                     tenantId, "Payment " + payment.getReference() + " flagged for refund after finance rejected it."));
@@ -114,11 +116,13 @@ public class FinanceVerificationService {
         return payment.getAmount().compareTo(row.totalPrice()) == 0 && payment.getCurrency() == row.currency();
     }
 
-    private static RuntimeException failure(FinanceDecision decision) {
+    static RuntimeException failure(FinanceDecision decision) {
         return switch (decision) {
             case NOT_FOUND -> new PaymentException.TransactionNotFound();
             case NOT_AWAITING_FINANCE -> new PaymentException.NotAwaitingFinance();
             case PLOT_NOT_RESERVED -> new PaymentException.PlotNotReserved();
+            case NOT_ABANDONED -> new PaymentException.LatePaymentNotFound();
+            case PLOT_NOT_AVAILABLE -> new PaymentException.PlotNoLongerAvailable();
             case DONE -> new IllegalStateException("DONE is not a failure");
         };
     }

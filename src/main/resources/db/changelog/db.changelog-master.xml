@@ -85,6 +85,7 @@
     <include file="changes/077-payout-parts.xml" relativeToChangelogFile="true"/>
     <include file="changes/078-payouts-review-reason.xml" relativeToChangelogFile="true"/>
     <include file="changes/079-rename-payments-last4.xml" relativeToChangelogFile="true"/>
+    <include file="changes/080-create-refunds.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

@@ -36,6 +36,7 @@ public class PaystackWebhookService {
     private final GatewayEventRecorder recorder;
     private final PaymentConfirmationService confirmation;
     private final PayoutOutcomeService payoutOutcomes;
+    private final RefundOutcomeService refundOutcomes;
     private final JsonMapper json;
 
     public void handle(byte[] rawBody, String signature) {
@@ -50,6 +51,9 @@ public class PaystackWebhookService {
         JsonNode event = parse(body);
         String eventType = text(event, "event");
         String reference = text(event.path("data"), "reference");
+        if (reference == null) {
+            reference = text(event.path("data"), "transaction_reference");
+        }
         recorder.record(PROVIDER, eventType, reference, body);
 
         if ("charge.success".equals(eventType) && reference != null) {
@@ -57,6 +61,11 @@ public class PaystackWebhookService {
         }
         if (eventType != null && eventType.startsWith("transfer.") && reference != null) {
             refreshPayout(reference);
+        }
+        // A refund event names the PAYMENT it refunds; refreshing asks Paystack for the refund itself.
+        String refundedPayment = text(event.path("data"), "transaction_reference");
+        if (eventType != null && eventType.startsWith("refund.") && refundedPayment != null) {
+            refundOutcomes.refreshForPayment(refundedPayment);
         }
         // Everything else is kept and otherwise ignored.
     }

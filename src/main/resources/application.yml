@@ -100,6 +100,10 @@ landvault:
     sweep-interval: 15m
     stuck-sending-after: 5m
     stuck-pending-after: 30m
+  refunds:
+    # How often Paystack is asked about refunds it accepted but hasn't finished.
+    sweep-interval: 15m
+    stuck-after: 30m
   invitations:
     delivery: ${INVITATION_DELIVERY:email}
     from-address: ${MAIL_FROM:noreply@landvault.com}

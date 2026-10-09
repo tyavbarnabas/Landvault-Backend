@@ -84,4 +84,8 @@ public class Payment extends AbstractEntity {
     /** Set when finance must look at this payment by hand; null otherwise. */
     @Column(name = "review_reason")
     private String reviewReason;
+
+    /** When this payment was found to be owed back to the buyer; null when nothing is owed. */
+    @Column(name = "refund_requested_at")
+    private Instant refundRequestedAt;
 }

@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Refunds (decided with the user): a buyer who never got the plot gets
+        back the FULL amount paid, sent by a Super Admin, and only once. The
+        payment stays SUCCEEDED — it really was paid — and this table says what
+        came back. Buyer-owned like payments: not RLS-policied, reached by the
+        buyer's own payment or by platform staff. History never deleted.
+
+        payments.refund_requested_at says a refund is owed (set when finance
+        rejects a paid purchase), explicitly, instead of being inferred from the
+        free-text review_reason. Existing "Refund due" flags are carried over.
+
+        A failed refund may be tried again; anything else holds the payment (one
+        live refund per payment, by unique index). Paystack itself also refuses
+        to refund more than was paid.
+
+        When Paystack can't return a bank-transfer payment on its own
+        ("needs-attention"), the BUYER gives an account; its name is what the
+        bank returned, compared with the buyer's name for the reviewer.
+    -->
+    <changeSet id="080-create-refunds" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE payments ADD COLUMN refund_requested_at timestamp(6) with time zone;
+            UPDATE payments SET refund_requested_at = updated_at
+             WHERE status = 'SUCCEEDED' AND review_reason LIKE 'Refund due%';
+            COMMENT ON COLUMN payments.refund_requested_at IS
+                'When this payment was found to be owed back to the buyer (e.g. finance rejected the purchase). Null when nothing is owed.';
+
+            CREATE TABLE refunds (
+                id                    uuid NOT NULL PRIMARY KEY,
+                tenant_id             uuid,
+                branch_id             uuid,
+                created_at            timestamp(6) with time zone NOT NULL,
+                updated_at            timestamp(6) with time zone,
+                created_by            varchar(255),
+                updated_by            varchar(255),
+                deleted               boolean NOT NULL,
+
+                payment_id            uuid NOT NULL REFERENCES payments (id),
+                transaction_id        uuid NOT NULL REFERENCES transactions (id),
+                buyer_user_id         uuid NOT NULL REFERENCES users (id),
+                seller_tenant_id      uuid NOT NULL REFERENCES organizations (id),
+                amount                numeric(19,2) NOT NULL,
+                currency              varchar(3) NOT NULL,
+                amount_kobo           bigint NOT NULL,
+                paystack_refund_id    varchar(64),
+                status                varchar(16) NOT NULL,
+                gateway_message       varchar(500),
+                reason                varchar(500) NOT NULL,
+                initiated_by          uuid NOT NULL REFERENCES users (id),
+                refunded_at           timestamp(6) with time zone,
+                expected_at           timestamp(6) with time zone,
+                account_bank_code     varchar(16),
+                account_bank_name     varchar(255),
+                account_number        varchar(10),
+                account_name          varchar(255),
+                account_submitted_at  timestamp(6) with time zone,
+                account_sent_by       uuid REFERENCES users (id),
+                account_sent_at       timestamp(6) with time zone,
+
+                CONSTRAINT chk_refunds_status CHECK (status IN
+                    ('SENDING', 'PENDING', 'PROCESSING', 'NEEDS_ATTENTION', 'PROCESSED', 'FAILED')),
+                CONSTRAINT chk_refunds_amount_positive CHECK (amount > 0 AND amount_kobo > 0),
+                CONSTRAINT chk_refunds_currency CHECK (currency = 'NGN'),
+                CONSTRAINT chk_refunds_nuban CHECK (account_number IS NULL OR account_number ~ '^[0-9]{10}$')
+            );
+            CREATE UNIQUE INDEX uq_refunds_one_live_per_payment ON refunds (payment_id)
+                WHERE status <> 'FAILED' AND deleted = false;
+            CREATE INDEX idx_refunds_status ON refunds (status, created_at);
+            REVOKE DELETE, TRUNCATE ON refunds FROM ${appDbUsername};
+            COMMENT ON TABLE refunds IS
+                'Money returned to a buyer for a payment. One live refund per payment (unique index); a failed one may be retried. Never deleted. See AGENTS.md, "Payments".';
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE refunds;
+            ALTER TABLE payments DROP COLUMN refund_requested_at;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

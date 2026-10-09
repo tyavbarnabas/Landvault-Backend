@@ -234,4 +234,58 @@ public abstract class PaymentException extends RuntimeException {
             super("Payouts are shown for the whole company. Switch to the company-wide view to see them.");
         }
     }
+
+    /** Not a payment that is owed back (or not one at all). */
+    public static class RefundNotDue extends PaymentException {
+        public RefundNotDue() {
+            super("That payment isn't owed back to the buyer.");
+        }
+    }
+
+    /** One live refund per payment. */
+    public static class RefundInProgress extends PaymentException {
+        public RefundInProgress(String status) {
+            super("This payment already has a refund that is " + status + ". It can't be refunded again.");
+        }
+    }
+
+    public static class RefundNotFound extends PaymentException {
+        public RefundNotFound() {
+            super("Refund not found.");
+        }
+    }
+
+    public static class RefundNotAwaitingAccount extends PaymentException {
+        public RefundNotAwaitingAccount(String status) {
+            super("This refund doesn't need a bank account (it is " + status + ").");
+        }
+    }
+
+    public static class RefundAccountMissing extends PaymentException {
+        public RefundAccountMissing() {
+            super("The buyer hasn't given a bank account for this refund yet.");
+        }
+    }
+
+    /** We asked Paystack and got no answer, or a refusal that may mean it already has this refund. */
+    public static class RefundOutcomeUnknown extends PaymentException {
+        public RefundOutcomeUnknown(String detail) {
+            super("We don't know yet whether Paystack accepted this refund — it is kept as 'sending'. " + detail
+                    + " Try again later; Paystack never refunds more than was paid.");
+        }
+    }
+
+    /** No late payment waiting on this purchase (not this company's, already resolved, or none). */
+    public static class LatePaymentNotFound extends PaymentException {
+        public LatePaymentNotFound() {
+            super("There's no late payment waiting for a decision on that purchase.");
+        }
+    }
+
+    /** Someone else reserved, bought or withheld the plot meanwhile: refund is the only ending left. */
+    public static class PlotNoLongerAvailable extends PaymentException {
+        public PlotNoLongerAvailable() {
+            super("The plot is no longer available, so it can't be allocated. Refund the buyer instead. Nothing was changed.");
+        }
+    }
 }

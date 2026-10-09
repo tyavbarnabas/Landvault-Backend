@@ -73,6 +73,12 @@ public class IdentityApiImpl implements IdentityApi {
         return userRepository.findRoleHolders(SUPER_ADMIN, UserStatus.ACTIVE).stream().map(User::getEmail).toList();
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<String> fullNameOf(UUID userId) {
+        return userRepository.findById(userId).map(u -> (u.getFirstName() + " " + u.getLastName()).trim());
+    }
+
     private static UserDto toDto(User user) {
         return new UserDto(
                 user.getId(),

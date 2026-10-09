@@ -2,10 +2,12 @@ package com.techcomfort.landvaultbackend.payments.internal.exceptions;
 
 import com.techcomfort.landvaultbackend.common.ErrorResponse;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.AdminPayoutController;
+import com.techcomfort.landvaultbackend.payments.internal.controllers.AdminRefundController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.AdminSettlementAccountController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PaymentController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PaystackWebhookController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalFinanceController;
+import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalLatePaymentController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalPayoutController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalSettlementController;
 import org.springframework.http.HttpStatus;
@@ -16,7 +18,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 /** Payment refusals in AGENTS.md's {message, code, fieldErrors} shape. */
 @RestControllerAdvice(assignableTypes = {PaymentController.class, PaystackWebhookController.class,
         PortalFinanceController.class, PortalSettlementController.class, AdminSettlementAccountController.class,
-        AdminPayoutController.class, PortalPayoutController.class})
+        AdminPayoutController.class, PortalPayoutController.class, AdminRefundController.class,
+        PortalLatePaymentController.class})
 public class PaymentExceptionHandler {
 
     @ExceptionHandler(PaymentException.class)
@@ -41,6 +44,14 @@ public class PaymentExceptionHandler {
             case PaymentException.SettlementAccountNotPending e -> body(HttpStatus.CONFLICT, e, "SETTLEMENT_ACCOUNT_NOT_PENDING");
             case PaymentException.TwoFactorRequired e -> body(HttpStatus.FORBIDDEN, e, "TWO_FACTOR_REQUIRED");
             case PaymentException.SaleNotPayable e -> body(HttpStatus.NOT_FOUND, e, "SALE_NOT_PAYABLE");
+            case PaymentException.LatePaymentNotFound e -> body(HttpStatus.NOT_FOUND, e, "LATE_PAYMENT_NOT_FOUND");
+            case PaymentException.PlotNoLongerAvailable e -> body(HttpStatus.CONFLICT, e, "PLOT_NO_LONGER_AVAILABLE");
+            case PaymentException.RefundNotDue e -> body(HttpStatus.NOT_FOUND, e, "REFUND_NOT_DUE");
+            case PaymentException.RefundInProgress e -> body(HttpStatus.CONFLICT, e, "REFUND_IN_PROGRESS");
+            case PaymentException.RefundNotFound e -> body(HttpStatus.NOT_FOUND, e, "REFUND_NOT_FOUND");
+            case PaymentException.RefundNotAwaitingAccount e -> body(HttpStatus.CONFLICT, e, "REFUND_NOT_AWAITING_ACCOUNT");
+            case PaymentException.RefundAccountMissing e -> body(HttpStatus.CONFLICT, e, "REFUND_ACCOUNT_MISSING");
+            case PaymentException.RefundOutcomeUnknown e -> body(HttpStatus.SERVICE_UNAVAILABLE, e, "REFUND_OUTCOME_UNKNOWN");
             case PaymentException.CompanyWideScopeRequired e -> body(HttpStatus.FORBIDDEN, e, "COMPANY_WIDE_SCOPE_REQUIRED");
             case PaymentException.SaleAlreadyPaid e -> body(HttpStatus.CONFLICT, e, "SALE_ALREADY_PAID");
             case PaymentException.PayoutInProgress e -> body(HttpStatus.CONFLICT, e, "PAYOUT_IN_PROGRESS");

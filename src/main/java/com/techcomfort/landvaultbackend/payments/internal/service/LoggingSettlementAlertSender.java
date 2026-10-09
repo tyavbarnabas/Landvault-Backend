@@ -21,4 +21,20 @@ public class LoggingSettlementAlertSender implements SettlementAlertSender {
         log.info("[TEST-ONLY payout problem alert] to={} payout={} status={}", alert.to(), alert.payoutReference(),
                 alert.status());
     }
+
+    @Override
+    public void refundNeedsAccount(RefundNeedsAccountAlert alert) {
+        log.info("[TEST-ONLY refund needs account] to={} payment={}", alert.to(), alert.paymentReference());
+    }
+
+    @Override
+    public void refundProblem(RefundProblemAlert alert) {
+        log.info("[TEST-ONLY refund problem alert] to={} payment={} status={}", alert.to(), alert.paymentReference(),
+                alert.status());
+    }
+
+    @Override
+    public void latePaymentResolved(LatePaymentAlert alert) {
+        log.info("[TEST-ONLY late payment outcome] to={} allocated={}", alert.to(), alert.allocated());
+    }
 }

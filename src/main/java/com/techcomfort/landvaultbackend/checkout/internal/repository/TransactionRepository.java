@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -75,4 +76,22 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
             + "WHERE t.status = 'VERIFIED' AND (CAST(:id AS uuid) IS NULL OR t.id = :id) "
             + "ORDER BY t.updated_at", nativeQuery = true)
     List<Object[]> findVerifiedSales(@Param("id") UUID id);
+
+    /**
+     * Late money. Rows: transaction id, reference, estate name, block name,
+     * plot number, total price, currency, plot status — joined under the
+     * caller's row-level security.
+     */
+    @Query(value = "SELECT t.id, t.reference, e.name, b.name AS block_name, p.plot_number, t.total_price, t.currency, "
+            + "p.status FROM transactions t JOIN plots p ON p.id = t.plot_id JOIN estates e ON e.id = t.estate_id "
+            + "LEFT JOIN blocks b ON b.id = p.block_id "
+            + "WHERE t.status = 'ABANDONED' AND t.seller_tenant_id = :tenantId AND t.id IN (:ids) "
+            + "ORDER BY t.updated_at", nativeQuery = true)
+    List<Object[]> findAbandonedSales(@Param("tenantId") UUID tenantId, @Param("ids") Collection<UUID> ids);
+
+    /** Once only, like the other moves: 1 the first time, 0 after. */
+    @Modifying
+    @Query(value = "UPDATE transactions SET status = :to, updated_at = now() "
+            + "WHERE id = :id AND status = 'ABANDONED'", nativeQuery = true)
+    int moveFromAbandoned(@Param("id") UUID id, @Param("to") String to);
 }

@@ -35,6 +35,7 @@ import org.springframework.beans.factory.annotation.Value;
 import com.techcomfort.landvaultbackend.payments.internal.service.PaymentSweeper;
 import com.techcomfort.landvaultbackend.payments.internal.service.PayoutRecorder;
 import com.techcomfort.landvaultbackend.payments.internal.service.PayoutSweeper;
+import com.techcomfort.landvaultbackend.payments.internal.service.RefundSweeper;
 import com.techcomfort.landvaultbackend.payments.internal.service.SettlementAlertSender;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.junit.jupiter.api.BeforeEach;
@@ -66,6 +67,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
@@ -165,6 +167,10 @@ class ReservationCheckoutUnderRlsIT {
     /** Called directly: a lost transfer webhook must be testable without waiting on a clock. */
     @Autowired
     private PayoutSweeper payoutSweeper;
+
+    /** Called directly: a lost refund webhook must be testable without waiting on a clock. */
+    @Autowired
+    private RefundSweeper refundSweeper;
 
     /** Payout alerts, checked rather than sent. */
     @MockitoBean
@@ -1328,6 +1334,262 @@ class ReservationCheckoutUnderRlsIT {
     private ResponseEntity<String> transferWebhook(String event, String reference) {
         String body = "{\"event\":\"" + event + "\",\"data\":{\"reference\":\"" + reference + "\"}}";
         return webhook(body, PaystackSignature.sign(body.getBytes(StandardCharsets.UTF_8), paystackSecretKey));
+    }
+
+    // ------------------------------------------------------------------
+    // Refunds — money owed back to a buyer who never got the plot
+    // ------------------------------------------------------------------
+
+    /** Finance rejected a paid purchase: it is owed back, in full, once. */
+    @Test
+    void aRejectedPaymentIsRefundedInFullAndOnlyOnce() {
+        String reference = rejectedPayment();
+        String admin = payoutAdmin(true);
+        assertThat(get("/api/admin/refunds/due", admin, String.class).getBody())
+                .contains(reference).contains("\"amount\":20000000");
+        when(paystack.createRefund(eq(reference), anyLong(), any(), any()))
+                .thenReturn(new PaystackClient.Refund("R1", "pending", "Refund has been queued for processing", null, null));
+
+        ResponseEntity<String> started = startRefund(admin, reference);
+        ResponseEntity<String> again = startRefund(admin, reference);
+
+        assertThat(started.getBody()).contains("\"status\":\"pending\"");
+        verify(paystack, times(1)).createRefund(eq(reference), eq(2_000_000_000L), any(), any());
+        assertThat(again.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(again.getBody()).contains("REFUND_IN_PROGRESS");
+        assertThat(get("/api/admin/refunds/due", admin, String.class).getBody()).doesNotContain(reference);
+    }
+
+    @Test
+    void withoutTwoFactorNoRefundIsSent() {
+        String reference = rejectedPayment();
+
+        ResponseEntity<String> refused = startRefund(payoutAdmin(false), reference);
+
+        assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        verify(paystack, never()).createRefund(anyString(), anyLong(), any(), any());
+        assertThat(queryString("SELECT count(*) FROM refunds r JOIN payments p ON p.id = r.payment_id "
+                + "WHERE p.reference = '" + reference + "'")).isEqualTo("0");
+    }
+
+    @Test
+    void aPaymentNobodyOwesBackCannotBeRefunded() {
+        TransactionDto paid = paidPurchase();
+        String reference = queryString("SELECT reference FROM payments WHERE transaction_id = '" + paid.id() + "'");
+
+        ResponseEntity<String> refused = startRefund(payoutAdmin(true), reference);
+
+        assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(refused.getBody()).contains("REFUND_NOT_DUE");
+    }
+
+    /**
+     * Decision 3: Paystack can't return a bank-transfer payment on its own.
+     * The buyer gives an account in their own name; the bank supplies the
+     * name and the reviewer sees whether it matches; a Super Admin sends it.
+     */
+    @Test
+    void aBankTransferRefundGoesToTheAccountTheBuyerGives() {
+        String reference = rejectedPayment();
+        String admin = payoutAdmin(true);
+        when(paystack.createRefund(eq(reference), anyLong(), any(), any()))
+                .thenReturn(new PaystackClient.Refund("R2", "needs-attention", "Refund queued", null, null));
+        when(paystack.listBanks()).thenReturn(List.of(new PaystackClient.Bank("058", "Guaranty Trust Bank", "9")));
+        when(paystack.resolveAccountName("0123456789", "058")).thenReturn(Optional.of("BUYER ADA CHIOMA"));
+        when(paystack.retryRefundWithAccount("R2", "0123456789", "9"))
+                .thenReturn(new PaystackClient.Refund("R2", "processing", "Refund retried", null, null));
+        String refundId = idOf(startRefund(admin, reference).getBody());
+        verify(alerts).refundNeedsAccount(any());
+
+        assertThat(get("/api/payments/" + reference + "/refund", buyer.token(), String.class).getBody())
+                .contains("\"needsAccount\":true");
+        Buyer stranger = verifiedBuyer();
+        assertThat(restTemplate.exchange("/api/payments/" + reference + "/refund-account", HttpMethod.POST,
+                entity(stranger.token(), "{\"bankCode\":\"058\",\"accountNumber\":\"0123456789\"}"),
+                String.class).getStatusCode()).as("someone else's payment").isEqualTo(HttpStatus.NOT_FOUND);
+        ResponseEntity<String> given = restTemplate.exchange("/api/payments/" + reference + "/refund-account",
+                HttpMethod.POST, entity(buyer.token(), "{\"bankCode\":\"058\",\"accountNumber\":\"0123456789\"}"),
+                String.class);
+        assertThat(given.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        String review = get("/api/admin/refunds/" + refundId, admin, String.class).getBody();
+        assertThat(review).contains("\"accountName\":\"BUYER ADA CHIOMA\"").contains("\"accountNameMatchesBuyer\":true");
+        ResponseEntity<String> sent = restTemplate.exchange("/api/admin/refunds/" + refundId + "/send-to-account",
+                HttpMethod.POST, entity(admin, null), String.class);
+
+        assertThat(sent.getBody()).contains("\"status\":\"processing\"");
+        verify(paystack).retryRefundWithAccount("R2", "0123456789", "9");
+    }
+
+    /** A refund webhook prompts a check; once processed the payment is no longer owed and the buyer sees it. */
+    @Test
+    void aProcessedRefundClearsWhatIsOwedAndTheBuyerSeesIt() {
+        String reference = rejectedPayment();
+        String admin = payoutAdmin(true);
+        when(paystack.createRefund(eq(reference), anyLong(), any(), any()))
+                .thenReturn(new PaystackClient.Refund("R3", "pending", null, null, null));
+        startRefund(admin, reference);
+        when(paystack.fetchRefund("R3")).thenReturn(new PaystackClient.Refund("R3", "processed", null,
+                Instant.parse("2026-10-09T15:00:00Z"), null));
+
+        String body = "{\"event\":\"refund.processed\",\"data\":{\"status\":\"processed\","
+                + "\"transaction_reference\":\"" + reference + "\",\"amount\":2000000000}}";
+        assertThat(webhook(body, PaystackSignature.sign(body.getBytes(StandardCharsets.UTF_8), paystackSecretKey))
+                .getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        assertThat(queryString("SELECT status FROM refunds WHERE paystack_refund_id = 'R3'")).isEqualTo("PROCESSED");
+        assertThat(queryString("SELECT review_reason IS NULL FROM payments WHERE reference = '" + reference + "'"))
+                .isEqualTo("t");
+        assertThat(get("/api/payments/" + reference + "/refund", buyer.token(), String.class).getBody())
+                .contains("\"status\":\"processed\"");
+    }
+
+    /** The webhook's own word is never taken: Paystack's fetched refund decides. */
+    @Test
+    void aRefundWebhookPaystackDoesntBackUpChangesNothing() {
+        String reference = rejectedPayment();
+        when(paystack.createRefund(eq(reference), anyLong(), any(), any()))
+                .thenReturn(new PaystackClient.Refund("R4", "pending", null, null, null));
+        startRefund(payoutAdmin(true), reference);
+        when(paystack.fetchRefund("R4")).thenReturn(new PaystackClient.Refund("R4", "pending", null, null, null));
+
+        String body = "{\"event\":\"refund.processed\",\"data\":{\"transaction_reference\":\"" + reference + "\"}}";
+        webhook(body, PaystackSignature.sign(body.getBytes(StandardCharsets.UTF_8), paystackSecretKey));
+
+        assertThat(queryString("SELECT status FROM refunds WHERE paystack_refund_id = 'R4'")).isEqualTo("PENDING");
+    }
+
+    /** Paystack refused: nothing moved, the refund fails, and the payment is owed again — a new attempt is allowed. */
+    @Test
+    void aRefusedRefundCanBeTriedAgain() {
+        String reference = rejectedPayment();
+        String admin = payoutAdmin(true);
+        when(paystack.createRefund(eq(reference), anyLong(), any(), any()))
+                .thenThrow(new PaymentException.GatewayRefused("Transaction cannot be refunded at this time"))
+                .thenReturn(new PaystackClient.Refund("R5", "pending", null, null, null));
+
+        assertThat(startRefund(admin, reference).getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+        assertThat(get("/api/admin/refunds/due", admin, String.class).getBody()).contains(reference)
+                .contains("\"status\":\"failed\"");
+        assertThat(startRefund(admin, reference).getBody()).contains("\"status\":\"pending\"");
+        assertThat(queryString("SELECT string_agg(r.status, ',' ORDER BY r.created_at) FROM refunds r "
+                + "JOIN payments p ON p.id = r.payment_id WHERE p.reference = '" + reference + "'")).isEqualTo("FAILED,PENDING");
+    }
+
+    /** A lost refund webhook: the sweep asks Paystack about a refund pending too long. */
+    @Test
+    void theRefundSweepCatchesALostWebhook() {
+        String reference = rejectedPayment();
+        when(paystack.createRefund(eq(reference), anyLong(), any(), any()))
+                .thenReturn(new PaystackClient.Refund("R6", "pending", null, null, null));
+        startRefund(payoutAdmin(true), reference);
+        execute("UPDATE refunds SET updated_at = now() - interval '2 hours' WHERE paystack_refund_id = 'R6'");
+        when(paystack.fetchRefund("R6")).thenReturn(new PaystackClient.Refund("R6", "processed", null, null, null));
+
+        refundSweeper.sweep();
+
+        assertThat(queryString("SELECT status FROM refunds WHERE paystack_refund_id = 'R6'")).isEqualTo("PROCESSED");
+    }
+
+    private String rejectedPayment() {
+        TransactionDto transaction = paidPurchase();
+        assertThat(financeAction(seller.token(), transaction.id(), "reject", "{\"reason\":\"Buyer asked to cancel\"}")
+                .getStatusCode()).isEqualTo(HttpStatus.OK);
+        return queryString("SELECT reference FROM payments WHERE transaction_id = '" + transaction.id() + "'");
+    }
+
+    private ResponseEntity<String> startRefund(String token, String paymentReference) {
+        return restTemplate.exchange("/api/admin/refunds", HttpMethod.POST,
+                entity(token, "{\"paymentReference\":\"" + paymentReference + "\"}"), String.class);
+    }
+
+    private String idOf(String json) {
+        return objectMapper.readTree(json).path("id").asString();
+    }
+
+    // ------------------------------------------------------------------
+    // Late money — paid after the purchase was abandoned
+    // ------------------------------------------------------------------
+
+    /** The plot is still for sale: finance allocates it — sold and verified together — and it becomes payable. */
+    @Test
+    void lateMoneyForAPlotStillForSaleIsAllocatedAndBecomesPayable() {
+        TransactionDto transaction = latePayment();
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        String list = get("/api/portal/finance/late-payments", officer, String.class).getBody();
+        assertThat(list).contains(transaction.id().toString()).contains("\"plotAvailable\":true")
+                .contains("\"amountsMatch\":true");
+
+        ResponseEntity<String> allocated = restTemplate.exchange("/api/portal/finance/late-payments/"
+                + transaction.id() + "/allocate", HttpMethod.POST, entity(officer, null), String.class);
+
+        assertThat(allocated.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(queryString("SELECT status FROM plots WHERE id = '" + plotId + "'")).isEqualTo("SOLD");
+        assertThat(queryString("SELECT status FROM transactions WHERE id = '" + transaction.id() + "'")).isEqualTo("VERIFIED");
+        assertThat(queryString("SELECT review_reason IS NULL FROM payments WHERE transaction_id = '" + transaction.id()
+                + "' AND status = 'SUCCEEDED'")).isEqualTo("t");
+        assertThat(get("/api/portal/finance/late-payments", officer, String.class).getBody())
+                .doesNotContain(transaction.id().toString());
+        assertThat(get("/api/admin/payouts/ready", payoutAdmin(true), String.class).getBody())
+                .as("now owed to the developer like any verified sale").contains(transaction.id().toString());
+        verify(alerts).latePaymentResolved(any());
+    }
+
+    /** Someone else reserved the plot meanwhile: allocating changes nothing; refund is the only ending. */
+    @Test
+    void lateMoneyForATakenPlotCannotBeAllocatedOnlyRefunded() {
+        TransactionDto transaction = latePayment();
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        reserve(verifiedBuyer(), plotId);
+
+        assertThat(get("/api/portal/finance/late-payments", officer, String.class).getBody())
+                .contains("\"plotAvailable\":false");
+        ResponseEntity<String> refused = restTemplate.exchange("/api/portal/finance/late-payments/"
+                + transaction.id() + "/allocate", HttpMethod.POST, entity(officer, null), String.class);
+        assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(refused.getBody()).contains("PLOT_NO_LONGER_AVAILABLE");
+        assertThat(queryString("SELECT status FROM transactions WHERE id = '" + transaction.id() + "'"))
+                .as("nothing changed").isEqualTo("ABANDONED");
+        assertThat(queryString("SELECT status FROM plots WHERE id = '" + plotId + "'")).isEqualTo("RESERVED");
+
+        ResponseEntity<String> refund = restTemplate.exchange("/api/portal/finance/late-payments/" + transaction.id()
+                + "/refund", HttpMethod.POST, entity(officer, "{\"reason\":\"The plot was sold to someone else\"}"),
+                String.class);
+
+        assertThat(refund.getStatusCode()).isEqualTo(HttpStatus.OK);
+        String reference = queryString("SELECT reference FROM payments WHERE transaction_id = '" + transaction.id()
+                + "' AND status = 'SUCCEEDED'");
+        assertThat(get("/api/admin/refunds/due", payoutAdmin(true), String.class).getBody()).contains(reference);
+        assertThat(get("/api/portal/finance/late-payments", officer, String.class).getBody())
+                .doesNotContain(transaction.id().toString());
+    }
+
+    /** Another company's finance can neither see nor act on it. */
+    @Test
+    void anotherCompanysFinanceCannotSeeOrResolveLateMoney() {
+        TransactionDto transaction = latePayment();
+        Tenant other = verifiedTenant();
+        String elsewhere = staffWithRole(other.id(), "finance_officer", null);
+
+        assertThat(get("/api/portal/finance/late-payments", elsewhere, String.class).getBody()).isEqualTo("[]");
+        assertThat(restTemplate.exchange("/api/portal/finance/late-payments/" + transaction.id() + "/allocate",
+                HttpMethod.POST, entity(elsewhere, null), String.class).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(queryString("SELECT status FROM transactions WHERE id = '" + transaction.id() + "'")).isEqualTo("ABANDONED");
+    }
+
+    /** A purchase abandoned, then paid in full after the plot had gone back on sale. */
+    private TransactionDto latePayment() {
+        TransactionDto transaction = outrightTransaction();
+        String reference = startPayment(transaction);
+        paystackSays(reference, "abandoned", 2_000_000_000L, "NGN", "The customer left");
+        holdEndedMinutesAgo(transaction, 20);
+        paymentSweeper.sweep();
+        paystackSays(reference, "success", 2_000_000_000L, "NGN", "Approved");
+        String body = "{\"event\":\"charge.success\",\"data\":{\"reference\":\"" + reference + "\"}}";
+        webhook(body, PaystackSignature.sign(body.getBytes(StandardCharsets.UTF_8), paystackSecretKey));
+        assertThat(queryString("SELECT status FROM transactions WHERE id = '" + transaction.id() + "'")).isEqualTo("ABANDONED");
+        assertThat(queryString("SELECT status FROM plots WHERE id = '" + plotId + "'")).startsWith("AVAILABLE");
+        return transaction;
     }
 
     private TransactionDto verifiedSale() {

@@ -1,6 +1,7 @@
 package com.techcomfort.landvaultbackend.payments.internal.service;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -26,6 +27,17 @@ final class SettlementAccountNames {
             return false;
         }
         return bank.equals(normalise(registeredName)) || bank.equals(normalise(tradingName));
+    }
+
+    /**
+     * For a person (a refund to a buyer): every word of their registered name
+     * appears in the bank's name, in any order — banks list names in varying
+     * orders and add middle names. A warning only, like the company check.
+     */
+    static boolean matchesPerson(String bankAccountName, String fullName) {
+        Set<String> bank = Set.of(normalise(bankAccountName).split(" "));
+        List<String> person = Arrays.stream(normalise(fullName).split(" ")).filter(w -> w.length() > 1).toList();
+        return !person.isEmpty() && bank.containsAll(person);
     }
 
     static String normalise(String name) {

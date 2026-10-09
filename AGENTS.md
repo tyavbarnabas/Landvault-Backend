@@ -5072,6 +5072,83 @@ A, A, A, A.
   which records when Paystack changed the row, not when money landed. Recheck in
   live mode; the transfer fee is only knowable there.
 
+### `payments.last4` (changeset 079)
+Was `card_last4` / `cardLast4`. For a bank-transfer payment Paystack reports
+the paying account's last digits (seen live: "X890"), so "card" was false
+whenever the buyer didn't use a card. Read it with `channel`. `card_bin` was
+left as is (internal only; same caveat).
+
+### Refunds (changeset 080)
+`GET /api/admin/refunds/due`, `GET /api/admin/refunds?status=`,
+`GET …/{id}`, `POST /api/admin/refunds` `{ paymentReference }`,
+`POST …/{id}/send-to-account` (`admin.payouts.manage` + the sender's 2FA);
+buyer: `GET /api/payments/{reference}/refund`, `GET /api/payments/banks`,
+`POST /api/payments/{reference}/refund-account` `{ bankCode, accountNumber }`
+(`client.checkout.reserve`, own payment only). `RefundService`,
+`RefundRecorder`, `RefundOutcomeService`, `RefundSweeper`. Decided with the
+user: A, A, A, A.
+
+- **What is owed is explicit**: `payments.refund_requested_at`, set when
+  finance rejects a paid purchase (late money will set it too). Existing
+  "Refund due" flags were carried over in the changeset.
+- **A Super Admin sends it** (decision 1) — LandVault holds the money; the
+  developer's rejection only asks.
+- **The full amount paid** (decision 2): these buyers never got the plot;
+  LandVault absorbs Paystack's collection fee. Estate refund terms (e.g. a 20%
+  withdrawal deduction) belong to a buyer who OWNED the plot — portfolio's job.
+  Proven red by refunding half.
+- **Once**: one live refund per payment (unique index, `status <> FAILED`); a
+  failed refund frees the payment for another try. Paystack itself also never
+  refunds more than was paid — which is what makes resending a `sending` refund
+  safe (a duplicate is refused, not paid).
+- **Bank-transfer payments come back `needs-attention`** (decision 3): Paystack
+  can't return them on its own. The buyer is emailed and gives an account in
+  their app; the bank supplies the name, and the reviewer sees
+  `accountNameMatchesBuyer` (every word of the buyer's registered name in the
+  bank's name, any order — a warning, never a block). The Super Admin then sends
+  it (`retry_with_customer_details`, which takes Paystack's numeric **bank
+  `id`**, not the code — the bank list now keeps both). Only the buyer can
+  submit it for their own payment (proven red).
+- **The payment stays `succeeded`** (decision 4); the refund row says what came
+  back. When Paystack reports `processed`, `review_reason` is cleared
+  (`refund_requested_at` stays as history) and the buyer sees it.
+- **Outcome**: `refund.*` webhooks name the PAYMENT (`transaction_reference`),
+  not our refund, so the refund is found through its payment; then Paystack's
+  refund is fetched and its answer recorded — the webhook's word is never taken
+  (proven red). `RefundSweeper` (15m) fetches refunds pending/processing past
+  `landvault.refunds.stuck-after` (30m). A failed refund emails the Super Admins.
+- `refunds` is buyer-owned like `payments`: not RLS-policied; the app role can't
+  DELETE or TRUNCATE it.
+- **Seen live (test mode)**: a bank-transfer refund came back `pending`, not
+  `needs-attention`, with `expected_at` 11 days out — and Paystack sent
+  `refund.processed` 15 minutes later (with a real `refunded_at`). The
+  needs-attention path is covered by tests only; watch for it in live mode.
+
+### Late money: allocate or refund
+`GET /api/portal/finance/late-payments`, `POST …/{transactionId}/allocate`,
+`POST …/{transactionId}/refund` `{ reason }` (`portal.payments.verify`).
+`LatePaymentService`; `CheckoutApi.abandonedSales` / `allocateAbandoned`.
+Decided with the user: A, A, A, A.
+
+- A late payment is a `succeeded` payment still flagged (`review_reason`), not
+  yet sent to refund, whose purchase is `abandoned` (step 6 put it there).
+- **The selling company's finance decides** (decision 1); the refund itself is
+  still sent by LandVault's Super Admin.
+- **Allocate is one all-or-nothing step** (decision 2): Paystack's confirmed
+  amount must equal the agreed price, then the plot goes `AVAILABLE_* → SOLD`
+  (`PlotLockGateway.sellAvailable`, a once-only update under the officer's own
+  RLS) and the purchase `abandoned → verified`. If anyone reserved, bought or
+  withheld the plot meanwhile, nothing changes (`PLOT_NO_LONGER_AVAILABLE`) —
+  proven red by letting a reserved plot be sold. The old hold stays `expired`
+  as history. The sale then joins "ready to pay out" like any verified sale.
+- **The price the buyer agreed and paid is honoured** (decision 3), even if the
+  tier was repriced since; a developer who won't accept it refunds instead.
+- **Refund** sets `refund_requested_at` and the reason; the payment joins the
+  Super Admins' refunds-due list (proven red without it). The plot is untouched.
+- **The buyer is emailed either way** (decision 4).
+- Another company's finance can neither see nor act on it (the seller filter,
+  and the RLS-joined read behind it).
+
 ## One password rule, wherever a password is set (`PasswordPolicy`)
 
 `identity.internal.service.PasswordPolicy` is the only place the rule lives,

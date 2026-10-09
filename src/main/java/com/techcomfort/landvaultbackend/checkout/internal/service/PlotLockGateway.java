@@ -116,6 +116,20 @@ public class PlotLockGateway {
     }
 
     /**
+     * Late money: a plot still for sale becomes sold, under the selling
+     * company's own row-level security — the same reasoning as {@link #sell}.
+     * Only from an available status: if anyone reserved, bought or withheld
+     * it meanwhile, nothing happens and the answer is false.
+     */
+    public boolean sellAvailable(UUID plotId) {
+        int updated = entityManager.createNativeQuery("UPDATE plots SET status = 'SOLD', updated_at = now() "
+                        + "WHERE id = :plotId AND status IN ('AVAILABLE_DEV', 'AVAILABLE_INV') AND deleted = false")
+                .setParameter("plotId", plotId)
+                .executeUpdate();
+        return updated == 1;
+    }
+
+    /**
      * What the acquire returns: enough to price the hold, taken from the
      * same locked snapshot that granted it, so the price cannot be read
      * from a tier that changed in between.

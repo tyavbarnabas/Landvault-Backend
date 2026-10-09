@@ -32,4 +32,13 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
     List<Payment> findLockedByTransactionIdAndStatus(UUID transactionId, PaymentStatus status);
 
     boolean existsByTransactionIdAndStatus(UUID transactionId, PaymentStatus status);
+
+    /** Refunds owed: confirmed payments marked as owed back, oldest first. Whether one is already under way is the caller's check. */
+    List<Payment> findAllByStatusAndRefundRequestedAtIsNotNullOrderByRefundRequestedAtAsc(PaymentStatus status);
+
+    Optional<Payment> findByReference(String reference);
+
+    /** Late money for one company: confirmed, flagged for review, and not yet sent to refund. */
+    List<Payment> findAllBySellerTenantIdAndStatusAndReviewReasonIsNotNullAndRefundRequestedAtIsNull(
+            UUID sellerTenantId, PaymentStatus status);
 }

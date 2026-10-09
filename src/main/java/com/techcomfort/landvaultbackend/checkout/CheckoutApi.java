@@ -1,6 +1,7 @@
 package com.techcomfort.landvaultbackend.checkout;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -63,4 +64,18 @@ public interface CheckoutApi {
 
     /** One verified sale, or empty when it isn't verified (or isn't visible). */
     Optional<VerifiedSale> verifiedSale(UUID transactionId);
+
+    /**
+     * Late money: this company's abandoned purchases among {@code transactionIds}
+     * that the caller can see (row-level security walls a branch-scoped officer).
+     */
+    List<AbandonedSale> abandonedSales(UUID tenantId, Collection<UUID> transactionIds);
+
+    /**
+     * Late money, allocated (decided with the user): an abandoned purchase that
+     * was paid after all gets its plot — sold — and becomes verified, together
+     * or not at all, but only while the plot is still for sale. The old hold
+     * stays expired, as history.
+     */
+    FinanceDecision allocateAbandoned(UUID transactionId, UUID tenantId, UUID financeUserId);
 }

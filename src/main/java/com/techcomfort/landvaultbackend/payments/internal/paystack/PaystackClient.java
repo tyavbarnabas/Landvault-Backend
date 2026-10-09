@@ -107,8 +107,16 @@ public class PaystackClient {
                 text(card, "last4"), text(card, "bin"), raw);
     }
 
-    /** One Nigerian bank Paystack can pay to. {@code code} is what every other call needs. */
-    public record Bank(String code, String name) {
+    /**
+     * One Nigerian bank Paystack can pay to. {@code code} is what most calls
+     * need; {@code id} is Paystack's own number for it, which the refund retry
+     * asks for instead.
+     */
+    public record Bank(String code, String name, String id) {
+
+        public Bank(String code, String name) {
+            this(code, name, null);
+        }
     }
 
     /** Most banks per page Paystack allows; the list is followed page by page. */
@@ -138,7 +146,7 @@ public class PaystackClient {
                         && !bank.path("is_deleted").asBoolean(false)
                         && "nuban".equals(text(bank, "type"));
                 if (usable && text(bank, "code") != null) {
-                    banks.add(new Bank(text(bank, "code"), text(bank, "name")));
+                    banks.add(new Bank(text(bank, "code"), text(bank, "name"), text(bank, "id")));
                 }
             }
             next = text(reply.path("meta"), "next");
@@ -284,9 +292,78 @@ public class PaystackClient {
 
     private static Transfer transfer(JsonNode reply) {
         JsonNode data = reply.path("data");
-        String transferredAt = text(data, "transferred_at");
         return new Transfer(true, text(data, "status"), text(data, "transfer_code"), text(data, "reference"),
-                text(reply, "message"), transferredAt == null ? null : Instant.parse(transferredAt));
+                text(reply, "message"), instant(text(data, "transferred_at")));
+    }
+
+    /**
+     * Paystack's word on one refund. {@code status}: pending, processing,
+     * needs-attention, processed, failed. {@code id} is Paystack's refund id.
+     */
+    public record Refund(String id, String status, String message, Instant refundedAt, Instant expectedAt) {
+    }
+
+    /**
+     * Asks Paystack to return a payment's money (by OUR payment reference).
+     * Paystack itself refuses to refund more than was paid.
+     */
+    public Refund createRefund(String paymentReference, long amountKobo, String customerNote, String merchantNote) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("transaction", paymentReference);
+        body.put("amount", amountKobo);
+        body.put("currency", "NGN");
+        if (customerNote != null) {
+            body.put("customer_note", customerNote);
+        }
+        if (merchantNote != null) {
+            body.put("merchant_note", merchantNote);
+        }
+        JsonNode reply = call(() -> http.post().uri("/refund")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body)
+                .retrieve()
+                .body(String.class));
+        return refund(reply);
+    }
+
+    public Refund fetchRefund(String refundId) {
+        JsonNode reply = call(() -> http.get().uri("/refund/{id}", refundId).retrieve().body(String.class));
+        return refund(reply);
+    }
+
+    /**
+     * A refund Paystack couldn't return on its own ({@code needs-attention}):
+     * sends it to the account the buyer gave. {@code bankId} is Paystack's bank
+     * id, not the bank code.
+     */
+    public Refund retryRefundWithAccount(String refundId, String accountNumber, String bankId) {
+        Map<String, Object> account = new LinkedHashMap<>();
+        account.put("currency", "NGN");
+        account.put("account_number", accountNumber);
+        account.put("bank_id", bankId);
+        JsonNode reply = call(() -> http.post().uri("/refund/retry_with_customer_details/{id}", refundId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("refund_account_details", account))
+                .retrieve()
+                .body(String.class));
+        return refund(reply);
+    }
+
+    private static Refund refund(JsonNode reply) {
+        JsonNode data = reply.path("data");
+        return new Refund(text(data, "id"), text(data, "status"), text(reply, "message"),
+                instant(text(data, "refunded_at")), instant(text(data, "expected_at")));
+    }
+
+    private static Instant instant(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return Instant.parse(value);
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     // --- plumbing ---

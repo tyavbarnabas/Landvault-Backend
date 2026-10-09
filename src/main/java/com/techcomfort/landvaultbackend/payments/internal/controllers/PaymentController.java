@@ -1,26 +1,38 @@
 package com.techcomfort.landvaultbackend.payments.internal.controllers;
 
 import com.techcomfort.landvaultbackend.common.OpenApiConfig;
+import com.techcomfort.landvaultbackend.payments.dto.BankDto;
+import com.techcomfort.landvaultbackend.payments.dto.BuyerRefundDto;
 import com.techcomfort.landvaultbackend.payments.dto.PaymentDto;
+import com.techcomfort.landvaultbackend.payments.dto.RefundAccountRequest;
 import com.techcomfort.landvaultbackend.payments.internal.service.PaymentConfirmationService;
 import com.techcomfort.landvaultbackend.payments.internal.service.PaymentService;
+import com.techcomfort.landvaultbackend.payments.internal.service.RefundService;
+import com.techcomfort.landvaultbackend.payments.internal.service.SettlementAccountService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
 import java.util.UUID;
 
-/** PY-1 and PY-3: a buyer starts paying for their own transaction, and asks for it to be confirmed. */
+/**
+ * PY-1 and PY-3: a buyer starts paying for their own transaction, and asks
+ * for it to be confirmed. Also the buyer's side of a refund.
+ */
 @RestController
 @RequestMapping("/api")
 @RequiredArgsConstructor
@@ -29,6 +41,8 @@ public class PaymentController {
 
     private final PaymentService service;
     private final PaymentConfirmationService confirmation;
+    private final RefundService refunds;
+    private final SettlementAccountService banks;
 
     @Operation(summary = "Start paying for a transaction",
             description = """
@@ -78,5 +92,42 @@ public class PaymentController {
     @PreAuthorize("hasAuthority('client.checkout.reserve')")
     public ResponseEntity<PaymentDto> verify(@PathVariable String reference) {
         return ResponseEntity.ok(confirmation.confirmForBuyer(reference));
+    }
+
+    @Operation(summary = "Your refund for a payment",
+            description = """
+                    Requires `client.checkout.reserve`; your own payment only (404 otherwise). `status`: pending, \
+                    processing, needs-attention, processed, failed. **`needsAccount: true` means the money can't be \
+                    returned until you give a bank account in your own name** — Paystack can't send a bank-transfer \
+                    payment back on its own.""")
+    @GetMapping("/payments/{reference}/refund")
+    @PreAuthorize("hasAuthority('client.checkout.reserve')")
+    public ResponseEntity<BuyerRefundDto> refund(@PathVariable String reference) {
+        return ResponseEntity.ok(refunds.forBuyer(reference));
+    }
+
+    @Operation(summary = "Banks you can receive a refund in")
+    @GetMapping("/payments/banks")
+    @PreAuthorize("hasAuthority('client.checkout.reserve')")
+    public ResponseEntity<List<BankDto>> refundBanks() {
+        return ResponseEntity.ok(banks.banks());
+    }
+
+    @Operation(summary = "Give the account your refund should go to",
+            description = """
+                    Requires `client.checkout.reserve`; your own payment, only while its refund is \
+                    `needs-attention`. Send the bank `code` and 10-digit number — **the bank supplies the name**, \
+                    and LandVault checks it against your own. You can replace it until LandVault sends the refund.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Saved; LandVault will send the refund to it"),
+            @ApiResponse(responseCode = "400", description = "`UNKNOWN_BANK`, `ACCOUNT_NOT_RESOLVED`", content = @Content()),
+            @ApiResponse(responseCode = "404", description = "`PAYMENT_NOT_FOUND`, `REFUND_NOT_FOUND`", content = @Content()),
+            @ApiResponse(responseCode = "409", description = "`REFUND_NOT_AWAITING_ACCOUNT`", content = @Content())
+    })
+    @PostMapping("/payments/{reference}/refund-account")
+    @PreAuthorize("hasAuthority('client.checkout.reserve')")
+    public ResponseEntity<BuyerRefundDto> refundAccount(@PathVariable String reference,
+                                                        @Valid @RequestBody RefundAccountRequest request) {
+        return ResponseEntity.ok(refunds.submitAccount(reference, request.bankCode(), request.accountNumber()));
     }
 }

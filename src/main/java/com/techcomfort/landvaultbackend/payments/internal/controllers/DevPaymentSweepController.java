@@ -5,6 +5,8 @@ import com.techcomfort.landvaultbackend.payments.internal.service.PaymentSweepSe
 import com.techcomfort.landvaultbackend.payments.internal.service.PaymentSweeper;
 import com.techcomfort.landvaultbackend.payments.internal.service.PayoutOutcomeService;
 import com.techcomfort.landvaultbackend.payments.internal.service.PayoutSweeper;
+import com.techcomfort.landvaultbackend.payments.internal.service.RefundOutcomeService;
+import com.techcomfort.landvaultbackend.payments.internal.service.RefundSweeper;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -18,7 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.Map;
 
 /**
- * Development only: runs the payment and payout sweeps now instead of waiting
+ * Development only: runs the payment, payout and refund sweeps now instead of waiting
  * for their schedules, so they can be tried by hand. Not present outside the dev
  * profile at all.
  */
@@ -31,6 +33,7 @@ public class DevPaymentSweepController {
 
     private final PaymentSweeper sweeper;
     private final PayoutSweeper payoutSweeper;
+    private final RefundSweeper refundSweeper;
 
     @Operation(summary = "DEV ONLY: run the payment sweep now",
             description = "Super Admin (`admin.tenants.manage`). Settles purchases past their hold plus the grace period "
@@ -48,5 +51,14 @@ public class DevPaymentSweepController {
     @PreAuthorize("hasAuthority('admin.tenants.manage')")
     public ResponseEntity<Map<PayoutOutcomeService.Outcome, Integer>> payoutSweep() {
         return ResponseEntity.ok(payoutSweeper.sweep());
+    }
+
+    @Operation(summary = "DEV ONLY: run the refund sweep now",
+            description = "Super Admin (`admin.tenants.manage`). Asks Paystack about refunds it accepted but hasn't "
+                    + "finished, past the threshold. Exists only under the dev profile.")
+    @PostMapping("/refund-sweep")
+    @PreAuthorize("hasAuthority('admin.tenants.manage')")
+    public ResponseEntity<Map<RefundOutcomeService.Outcome, Integer>> refundSweep() {
+        return ResponseEntity.ok(refundSweeper.sweep());
     }
 }
