@@ -88,7 +88,7 @@ public class PortalStaffService {
         User target = manageable(userId, tenantId, scope);
         List<UserRole> current = userRoleRepository.findByUserId(userId);
 
-        Role role = rules.assignableRole(request.roleCode());
+        Role role = rules.assignableRole(request.roleCode(), tenantId);
         String branchName = rules.branchFor(role, request.branchId(), tenantId);
         rules.requireCallerHolds(role);
 

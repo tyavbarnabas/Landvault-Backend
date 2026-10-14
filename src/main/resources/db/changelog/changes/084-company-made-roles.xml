@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Company-made roles (decided with the user, 2026-10-14). A role is a
+        bundle of seeded permissions; a company may now bundle its own, from
+        portal.* permissions it holds. Permissions themselves stay seeded-only:
+        a slug means something only because code checks it.
+
+        roles.tenant_id, null on every platform role, is now the owning company
+        of a custom role. roles is still not RLS-policied (login reads it before
+        any scope exists), so "a company sees only its own roles" is the
+        service's filter, by tenant_id. See AGENTS.md, "Company-made roles".
+    -->
+    <changeSet id="084-company-made-roles" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE roles
+                ADD CONSTRAINT fk_roles_tenant FOREIGN KEY (tenant_id) REFERENCES organizations (id),
+                ADD CONSTRAINT chk_roles_custom_shape
+                    CHECK (tenant_id IS NULL OR (system_role = false AND scope IS NOT NULL));
+            CREATE INDEX idx_roles_tenant ON roles (tenant_id) WHERE tenant_id IS NOT NULL;
+            CREATE UNIQUE INDEX uq_roles_tenant_name ON roles (tenant_id, lower(name))
+                WHERE tenant_id IS NOT NULL AND deleted = false;
+            COMMENT ON COLUMN roles.tenant_id IS
+                'Null for HomeTrue''s standard roles; the owning company for a company-made role (system_role false). A company sees and assigns only standard roles and its own.';
+
+            ALTER TABLE permissions
+                ADD COLUMN label varchar(80),
+                ADD COLUMN requires_company_wide boolean NOT NULL DEFAULT false;
+            COMMENT ON COLUMN permissions.requires_company_wide IS
+                'The routes behind this permission refuse a branch-scoped caller, so a branch-only role may not carry it.';
+
+            INSERT INTO permissions (id, created_at, created_by, deleted, code, description) VALUES
+                (gen_random_uuid(), now(), 'system', false, 'portal.roles.manage',
+                 'Create, edit and delete your company''s own roles, from permissions you hold. Company-wide roles only.');
+            INSERT INTO role_permissions (id, created_at, created_by, deleted, role_id, permission_id)
+            SELECT gen_random_uuid(), now(), 'system', false, r.id, p.id
+            FROM roles r, permissions p
+            WHERE r.code = 'executive_director' AND p.code = 'portal.roles.manage';
+
+            UPDATE permissions SET label = 'See estates, plots and prices' WHERE code = 'portal.estates.view';
+            UPDATE permissions SET label = 'Create and edit estates, plots and prices' WHERE code = 'portal.estates.manage';
+            UPDATE permissions SET label = 'Create and rename branches', requires_company_wide = true
+                WHERE code = 'portal.branches.manage';
+            UPDATE permissions SET label = 'Invite and manage staff', requires_company_wide = true
+                WHERE code = 'portal.staff.invite';
+            UPDATE permissions SET label = 'Ask head office to invite staff to a branch' WHERE code = 'portal.staff.request';
+            UPDATE permissions SET label = 'Verify buyers'' payments' WHERE code = 'portal.payments.verify';
+            UPDATE permissions SET label = 'Set the payout bank account', requires_company_wide = true
+                WHERE code = 'portal.settlement.manage';
+            UPDATE permissions SET label = 'Create and edit company roles', requires_company_wide = true
+                WHERE code = 'portal.roles.manage';
+        ]]></sql>
+        <rollback><![CDATA[
+            DELETE FROM role_permissions WHERE permission_id = (SELECT id FROM permissions WHERE code = 'portal.roles.manage');
+            DELETE FROM permissions WHERE code = 'portal.roles.manage';
+            ALTER TABLE permissions DROP COLUMN requires_company_wide, DROP COLUMN label;
+            DROP INDEX uq_roles_tenant_name;
+            DROP INDEX idx_roles_tenant;
+            ALTER TABLE roles DROP CONSTRAINT chk_roles_custom_shape, DROP CONSTRAINT fk_roles_tenant;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

@@ -21,4 +21,6 @@ public interface PermissionRepository extends JpaRepository<Permission, UUID> {
     @Query("SELECT p.code FROM Permission p WHERE p.id IN "
             + "(SELECT rp.permissionId FROM RolePermission rp WHERE rp.roleId IN :roleIds)")
     List<String> findCodesByRoleIdIn(@Param("roleIds") Collection<UUID> roleIds);
+
+    List<Permission> findByCodeStartingWithOrderByCodeAsc(String prefix);
 }
