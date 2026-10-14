@@ -1,17 +1,15 @@
 package com.techcomfort.landvaultbackend.marketplace.internal.ratelimit;
 
+import com.techcomfort.landvaultbackend.common.FixedWindowRateLimiter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Throttles the public marketplace. An unauthenticated surface with no
@@ -34,10 +32,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * each keeps its own counts and a client gets the limit once per instance.
  * That needs a shared store (Redis, or the database), recorded in AGENTS.md.
  * <p>
- * Fixed windows: simple, and the edge case (a burst straddling a window
- * boundary gets up to twice the limit) doesn't matter at this scale.
+ * The counting itself is {@link FixedWindowRateLimiter}, shared with the
+ * onboarding form's limiter.
  */
-@Slf4j
 @Component
 @RequiredArgsConstructor
 public class MarketplaceRateLimitFilter extends OncePerRequestFilter {
@@ -45,7 +42,7 @@ public class MarketplaceRateLimitFilter extends OncePerRequestFilter {
     private static final String PREFIX = "/api/marketplace/";
 
     private final MarketplaceRateLimitProperties properties;
-    private final Map<String, Window> windows = new ConcurrentHashMap<>();
+    private final FixedWindowRateLimiter limiter = new FixedWindowRateLimiter("Marketplace");
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
@@ -55,27 +52,9 @@ public class MarketplaceRateLimitFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
-        long now = System.currentTimeMillis();
-        long windowMillis = properties.getWindow().toMillis();
-        String client = request.getRemoteAddr();
-
-        if (windows.size() >= properties.getMaxTrackedClients()) {
-            windows.values().removeIf(w -> now - w.start >= windowMillis);
-            if (windows.size() >= properties.getMaxTrackedClients()) {
-                log.warn("Marketplace rate limiter tracked {} clients; clearing", windows.size());
-                windows.clear();
-            }
-        }
-
-        Window window = windows.compute(client, (key, existing) ->
-                existing == null || now - existing.start >= windowMillis ? new Window(now) : existing);
-        int count;
-        synchronized (window) {
-            count = ++window.count;
-        }
-
-        if (count > properties.getRequestsPerWindow()) {
-            long retryAfterSeconds = Math.max(1, (window.start + windowMillis - now + 999) / 1000);
+        long retryAfterSeconds = limiter.tryAcquire(request.getRemoteAddr(), properties.getRequestsPerWindow(),
+                properties.getWindow(), properties.getMaxTrackedClients());
+        if (retryAfterSeconds > 0) {
             response.setStatus(429);
             response.setHeader("Retry-After", String.valueOf(retryAfterSeconds));
             response.setContentType("application/json");
@@ -84,14 +63,5 @@ public class MarketplaceRateLimitFilter extends OncePerRequestFilter {
             return;
         }
         chain.doFilter(request, response);
-    }
-
-    private static final class Window {
-        private final long start;
-        private int count;
-
-        private Window(long start) {
-            this.start = start;
-        }
     }
 }

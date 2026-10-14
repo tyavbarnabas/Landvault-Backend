@@ -101,7 +101,10 @@ public class SecurityConfig {
     // PaystackWebhookService is its only proof of origin. POST only, one exact
     // path — never a wildcard under /api/payments.
     private static final String[] PUBLIC_POST_PATHS = {
-            "/api/payments/webhook/paystack"
+            "/api/payments/webhook/paystack",
+            // A developer company asking to be onboarded has no account. It
+            // grants nothing, and is rate-limited by OnboardingRateLimitFilter.
+            "/api/onboarding-requests"
     };
 
     private static final String[] PUBLIC_GET_PATHS = {

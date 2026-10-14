@@ -2,7 +2,9 @@ package com.techcomfort.landvaultbackend.tenancy.internal.exceptions;
 
 import com.techcomfort.landvaultbackend.common.DuplicateEmailException;
 import com.techcomfort.landvaultbackend.common.ErrorResponse;
+import com.techcomfort.landvaultbackend.tenancy.internal.controllers.AdminOnboardingRequestController;
 import com.techcomfort.landvaultbackend.tenancy.internal.controllers.AdminTenantController;
+import com.techcomfort.landvaultbackend.tenancy.internal.controllers.OnboardingRequestController;
 import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -12,12 +14,18 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.util.Map;
 import java.util.stream.Collectors;
 
-/** Turns AdminTenantController's write-endpoint exceptions into AGENTS.md's {message, code, fieldErrors} error body. */
-@RestControllerAdvice(assignableTypes = AdminTenantController.class)
+/**
+ * Turns the tenant and onboarding-request endpoints' exceptions into AGENTS.md's
+ * {message, code, fieldErrors} error body. Converting an onboarding request runs
+ * tenant creation, so both share every mapping here.
+ */
+@RestControllerAdvice(assignableTypes = {AdminTenantController.class, AdminOnboardingRequestController.class,
+        OnboardingRequestController.class})
 public class TenancyExceptionHandler {
 
     @ExceptionHandler(TenancyException.TenantNotFound.class)
@@ -111,6 +119,30 @@ public class TenancyExceptionHandler {
     public ResponseEntity<ErrorResponse> handleInvalidStatusTransition(TenancyException.InvalidStatusTransition ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ErrorResponse.of(ex.getMessage(), "INVALID_STATUS_TRANSITION"));
+    }
+
+    @ExceptionHandler(TenancyException.OnboardingRequestNotFound.class)
+    public ResponseEntity<ErrorResponse> handleOnboardingRequestNotFound() {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ErrorResponse.of("Onboarding request not found.", "ONBOARDING_REQUEST_NOT_FOUND"));
+    }
+
+    @ExceptionHandler(TenancyException.OnboardingRequestClosed.class)
+    public ResponseEntity<ErrorResponse> handleOnboardingRequestClosed(TenancyException.OnboardingRequestClosed ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of(ex.getMessage(), "ONBOARDING_REQUEST_CLOSED"));
+    }
+
+    @ExceptionHandler(TenancyException.UnknownState.class)
+    public ResponseEntity<ErrorResponse> handleUnknownState(TenancyException.UnknownState ex) {
+        return ResponseEntity.badRequest()
+                .body(ErrorResponse.fieldErrors(Map.of("statesOfOperation", ex.getMessage())));
+    }
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        return ResponseEntity.badRequest()
+                .body(ErrorResponse.of("'" + ex.getName() + "' has an invalid value.", "INVALID_PARAMETER"));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

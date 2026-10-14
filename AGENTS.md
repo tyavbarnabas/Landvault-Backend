@@ -5519,3 +5519,54 @@ Tiers are soft-deleted via `@SQLRestriction`, so a "deleted" tier vanishes
 from every lookup and its plots lose their price entirely. Retirement needs
 its own column (e.g. `retired_at`), with the existing plots keeping their
 reference.
+
+## Onboarding requests: the public front door for developers (changeset 083)
+
+Before this, a developer company seeing HomeTrue had no way in: tenants are
+created only by a Super Admin (`POST /api/admin/tenants`), deliberately — a
+company that could sign itself up and list land is what a fraudster wants.
+This keeps that rule and adds the missing first step. Decided with the user
+(2026-10-14): alerts go to **`admin@hometrue.com.ng`**
+(`landvault.onboarding.alert-to`), the **RC number is optional**, and there is
+**no booking link** (no Calendly; the form asks for a preferred contact method
+and time instead — add a link to the confirmation email if one ever exists).
+
+- **`POST /api/onboarding-requests`** is public (`PUBLIC_POST_PATHS`, POST
+  only). It stores a request, emails HomeTrue (reply-to the contact) and sends
+  the company a confirmation, **after commit and failure-safe**. It creates
+  no account and no company.
+- **The same 202 and body for every accepted submission.** One open
+  (`NEW`/`CONTACTED`) request per email, by a partial unique index; a repeat is
+  dropped — not stored, no email — and answered exactly like a success. So the
+  form can't flood an inbox with confirmations, and never reveals whether an
+  email or company is already known. Proven red: without the catch, a repeat
+  was a 500.
+- **The confirmation echoes nothing the submitter typed.** Anyone can type
+  anyone's email; repeating their company name or message would let a stranger
+  send arbitrary text from HomeTrue to that inbox.
+- **Rate-limited: 5 an hour per remote address**
+  (`landvault.onboarding.submissions-per-window`/`window`), counting invalid
+  bodies too. Same remote-address rule as the marketplace (never
+  `X-Forwarded-For`). The counting moved into `common.FixedWindowRateLimiter`,
+  now shared by both filters, so there is one implementation.
+- **RLS-policied, unusually for a public write.** The table holds prospects'
+  names, phones and emails. Platform scope reads and changes everything; any
+  caller may INSERT, but only a fresh, undecided request (the policy pins every
+  decision column to null). An anonymous submitter can never read a row back,
+  which is why the duplicate is found by the unique index and not a query.
+  DELETE/TRUNCATE revoked; never deleted.
+- **Admin queue** under `/api/admin/onboarding-requests` (`admin.tenants.view`
+  / `admin.tenants.manage`): list by status, mark contacted (repeatable, with a
+  note), decline (final, reason required, **not** emailed to the company).
+- **"Convert", not "approve".** A first-contact form can't carry what tenant
+  creation needs (company type, incorporation date, the director's government
+  ID, the plan), so convert takes `POST /api/admin/tenants`'s own body — the
+  frontend prefills it from the request — and runs `AdminTenantService.createTenant`
+  in the **same transaction** as marking the request `CONVERTED` with its
+  `organization_id`. A creation failure (RC number or email taken) leaves the
+  request open. Same checks, same first-director invitation as creating a
+  tenant directly.
+- Audit: `onboarding_request.received` (a system entry — the submitter has no
+  account), `.contacted`, `.declined`, `.converted`.
+- **Not built**: a CAPTCHA (the rate limit is the only bot defence; add one if
+  spam appears), a decline email, and the frontend form and queue.
