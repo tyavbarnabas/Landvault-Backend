@@ -59,7 +59,7 @@ public abstract class InvitationException extends RuntimeException {
 
     public static class EmailHasAccount extends InvitationException {
         public EmailHasAccount() {
-            super("That email already has a LandVault account. Staff need a separate work email — an existing "
+            super("That email already has a HomeTrue account. Staff need a separate work email — an existing "
                     + "account can't also be given a company role.");
         }
     }

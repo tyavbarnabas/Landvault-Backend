@@ -67,7 +67,7 @@ public class EmailOtpDeliveryService implements OtpDeliveryService {
         SimpleMailMessage message = new SimpleMailMessage();
         message.setFrom(otpProperties.fromAddress());
         message.setTo(destination);
-        message.setSubject("Your LandVault password reset code");
+        message.setSubject("Your HomeTrue password reset code");
         message.setText(body(code));
 
         mailSender.send(message);
@@ -80,7 +80,7 @@ public class EmailOtpDeliveryService implements OtpDeliveryService {
     private String body(String code) {
         long minutes = Duration.ofSeconds(otpProperties.codeTtl().toSeconds()).toMinutes();
         return """
-                Your LandVault password reset code is %s.
+                Your HomeTrue password reset code is %s.
 
                 It expires in %d minutes and can be used once.
 

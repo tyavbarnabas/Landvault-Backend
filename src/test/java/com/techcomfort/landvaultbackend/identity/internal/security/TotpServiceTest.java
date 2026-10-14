@@ -86,7 +86,7 @@ class TotpServiceTest {
 
         assertThat(uri).startsWith("otpauth://totp/");
         assertThat(uri).contains("secret=" + secret);
-        assertThat(uri).contains("issuer=LandVault");
+        assertThat(uri).contains("issuer=HomeTrue");
         assertThat(uri).contains("digits=6");
         assertThat(uri).contains("period=30");
     }

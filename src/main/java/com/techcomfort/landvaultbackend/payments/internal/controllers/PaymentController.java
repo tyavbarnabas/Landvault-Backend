@@ -54,7 +54,7 @@ public class PaymentController {
                     - Pressing pay again within 30 minutes returns **the same open link** (200) instead \
                     of opening a second payment (201).
                     - **Landing back on the frontend proves nothing.** A payment counts only once \
-                    LandVault has verified it with Paystack.""")
+                    HomeTrue has verified it with Paystack.""")
     @ApiResponses({
             @ApiResponse(responseCode = "201", description = "A new payment link"),
             @ApiResponse(responseCode = "200", description = "The open link from a moment ago, handed back"),
@@ -71,10 +71,10 @@ public class PaymentController {
         return ResponseEntity.status(started.created() ? HttpStatus.CREATED : HttpStatus.OK).body(started.payment());
     }
 
-    @Operation(summary = "Ask LandVault to confirm a payment with Paystack",
+    @Operation(summary = "Ask HomeTrue to confirm a payment with Paystack",
             description = """
                     Requires `client.checkout.reserve`; only your own payment (404 otherwise). Call it from \
-                    the page Paystack returns the buyer to. **It claims nothing**: LandVault asks Paystack \
+                    the page Paystack returns the buyer to. **It claims nothing**: HomeTrue asks Paystack \
                     itself, and calling it repeatedly is safe.
 
                     - `succeeded`: Paystack confirmed exactly the agreed amount. The transaction moves to \
@@ -117,9 +117,9 @@ public class PaymentController {
             description = """
                     Requires `client.checkout.reserve`; your own payment, only while its refund is \
                     `needs-attention`. Send the bank `code` and 10-digit number — **the bank supplies the name**, \
-                    and LandVault checks it against your own. You can replace it until LandVault sends the refund.""")
+                    and HomeTrue checks it against your own. You can replace it until HomeTrue sends the refund.""")
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Saved; LandVault will send the refund to it"),
+            @ApiResponse(responseCode = "200", description = "Saved; HomeTrue will send the refund to it"),
             @ApiResponse(responseCode = "400", description = "`UNKNOWN_BANK`, `ACCOUNT_NOT_RESOLVED`", content = @Content()),
             @ApiResponse(responseCode = "404", description = "`PAYMENT_NOT_FOUND`, `REFUND_NOT_FOUND`", content = @Content()),
             @ApiResponse(responseCode = "409", description = "`REFUND_NOT_AWAITING_ACCOUNT`", content = @Content())

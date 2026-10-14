@@ -160,7 +160,7 @@ public class SettlementAccountService {
         requirePending(account);
         String companyName = companyName(account.getTenantId());
         String recipientCode = paystack.createRecipient(account.getAccountName(), account.getAccountNumber(),
-                account.getBankCode(), "LandVault payouts: " + companyName);
+                account.getBankCode(), "HomeTrue payouts: " + companyName);
 
         Optional<SettlementAccount> previous = accounts.findLockedByTenantIdAndStatus(account.getTenantId(),
                 SettlementAccountStatus.APPROVED);

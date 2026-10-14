@@ -50,6 +50,7 @@ public class RefundService {
     private final IdentityApi identityApi;
     private final AuditApi auditApi;
     private final SettlementAlertSender alerts;
+    private final BuyerNotifier buyerNotifier;
 
     // --- LandVault's side ---
 
@@ -101,8 +102,8 @@ public class RefundService {
         PaystackClient.Refund answer;
         try {
             answer = paystack.createRefund(prepared.paymentReference(), prepared.amountKobo(),
-                    "Refund for your LandVault payment " + prepared.paymentReference(),
-                    "LandVault refund " + prepared.refundId());
+                    "Refund for your HomeTrue payment " + prepared.paymentReference(),
+                    "HomeTrue refund " + prepared.refundId());
         } catch (PaymentException.GatewayUnavailable e) {
             log.warn("Refund {} sent to Paystack with no answer; kept as sending", prepared.refundId());
             throw new PaymentException.RefundOutcomeUnknown("Paystack didn't answer.");
@@ -192,9 +193,10 @@ public class RefundService {
     // --- helpers ---
 
     private void askBuyerForAccount(Refund refund, String paymentReference) {
-        identityApi.emailOf(refund.getBuyerUserId()).ifPresent(to -> alerts.refundNeedsAccount(
-                new SettlementAlertSender.RefundNeedsAccountAlert(to, refund.getAmount().toPlainString(),
-                        paymentReference)));
+        identityApi.emailOf(refund.getBuyerUserId()).ifPresent(to -> buyerNotifier.afterCommit(
+                "refund needs account", () -> alerts.refundNeedsAccount(new SettlementAlertSender.RefundNeedsAccountAlert(
+                        to, refund.getAmount().toPlainString(), paymentReference,
+                        buyerNotifier.purchaseUrl(refund.getTransactionId())))));
     }
 
     private Payment ownPayment(String paymentReference) {

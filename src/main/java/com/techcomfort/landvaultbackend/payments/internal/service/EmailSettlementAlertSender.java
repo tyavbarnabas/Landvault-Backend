@@ -44,12 +44,12 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
         message.setText("""
                 Hello,
 
-                A new bank account for %s's LandVault payouts was submitted by %s:
+                A new bank account for %s's HomeTrue payouts was submitted by %s:
 
                     %s, account ending %s
 
-                It won't receive any money until LandVault approves it. If you didn't expect this change, \
-                contact LandVault support straight away — before it is approved.
+                It won't receive any money until HomeTrue approves it. If you didn't expect this change, \
+                contact HomeTrue support straight away — before it is approved.
                 """.formatted(alert.companyName(), alert.submittedByEmail(), alert.bankName(), alert.accountLast4()));
         mailSender.send(message);
         log.info("Payout-account alert delivered to an Executive Director of {}", alert.companyName());
@@ -62,7 +62,7 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
         message.setTo(alert.to());
         message.setSubject("Payout " + alert.status() + " for " + alert.companyName());
         message.setText("""
-                A LandVault payout needs attention.
+                A HomeTrue payout needs attention.
 
                     Company:   %s
                     Payout:    %s (%s)
@@ -83,15 +83,17 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
         SimpleMailMessage message = new SimpleMailMessage();
         message.setFrom(fromAddress);
         message.setTo(alert.to());
-        message.setSubject("Your LandVault refund needs your bank account");
+        message.setSubject("Your HomeTrue refund needs your bank account");
         message.setText("""
                 Hello,
 
                 We're refunding NGN %s for your payment %s. Because it was paid by bank transfer, the payment \
                 provider needs to know which account to send it to.
 
-                Sign in to LandVault and add a bank account in your own name to receive it.
-                """.formatted(alert.amount(), alert.paymentReference()));
+                Add a bank account in your own name to receive it:
+
+                    %s
+                """.formatted(alert.amount(), alert.paymentReference(), alert.purchaseUrl()));
         mailSender.send(message);
         log.info("Refund account request delivered to a buyer");
     }
@@ -103,7 +105,7 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
         message.setTo(alert.to());
         message.setSubject("Refund " + alert.status() + " for payment " + alert.paymentReference());
         message.setText("""
-                A LandVault refund needs attention.
+                A HomeTrue refund needs attention.
 
                     Payment:   %s
                     Amount:    NGN %s
@@ -128,8 +130,10 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
                     Your payment of NGN %s arrived after your reservation had ended. The plot was still \
                     available, so it has been allocated to you: %s, %s.
 
-                    You'll find it in your LandVault account.
-                    """.formatted(alert.amount(), alert.plotLabel(), alert.estateName()));
+                    See your purchase:
+
+                        %s
+                    """.formatted(alert.amount(), alert.plotLabel(), alert.estateName(), alert.purchaseUrl()));
         } else {
             message.setSubject("Your payment for " + alert.plotLabel() + " is being returned");
             message.setText("""
@@ -138,10 +142,47 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
                     Your payment of NGN %s arrived after your reservation for %s, %s had ended, and it \
                     couldn't be allocated: %s
 
-                    The full amount is being returned to you. You'll see the refund in your LandVault account.
-                    """.formatted(alert.amount(), alert.plotLabel(), alert.estateName(), alert.reason()));
+                    The full amount is being returned to you. Follow the refund on your purchase:
+
+                        %s
+                    """.formatted(alert.amount(), alert.plotLabel(), alert.estateName(), alert.reason(),
+                    alert.purchaseUrl()));
         }
         mailSender.send(message);
         log.info("Late-payment outcome delivered to a buyer");
+    }
+
+    @Override
+    public void purchaseDecided(PurchaseDecisionAlert alert) {
+        SimpleMailMessage message = new SimpleMailMessage();
+        message.setFrom(fromAddress);
+        message.setTo(alert.to());
+        if (alert.verified()) {
+            message.setSubject("Good news: " + alert.plotLabel() + " at " + alert.estateName() + " is yours");
+            message.setText("""
+                    Hello,
+
+                    The developer has verified your payment of NGN %s, and the plot is allocated to you: \
+                    %s, %s.
+
+                    See your purchase:
+
+                        %s
+                    """.formatted(alert.amount(), alert.plotLabel(), alert.estateName(), alert.purchaseUrl()));
+        } else {
+            message.setSubject("Your payment for " + alert.plotLabel() + " is being returned");
+            message.setText("""
+                    Hello,
+
+                    The developer didn't accept your payment for %s, %s. Their reason: %s
+
+                    The full NGN %s is being returned to you. Follow the refund on your purchase:
+
+                        %s
+                    """.formatted(alert.plotLabel(), alert.estateName(), alert.reason(), alert.amount(),
+                    alert.purchaseUrl()));
+        }
+        mailSender.send(message);
+        log.info("Purchase decision delivered to a buyer");
     }
 }

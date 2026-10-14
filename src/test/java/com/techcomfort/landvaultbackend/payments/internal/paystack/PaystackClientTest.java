@@ -206,7 +206,7 @@ class PaystackClientTest {
                          "data":{"active":true,"currency":"NGN","name":"ESTINTIN GROUP LIMITED",
                                  "recipient_code":"RCP_t0ya41mp35flk40","type":"nuban"}}""", MediaType.APPLICATION_JSON));
 
-        assertThat(client.createRecipient("ESTINTIN GROUP LIMITED", "0123456789", "058", "LandVault payouts"))
+        assertThat(client.createRecipient("ESTINTIN GROUP LIMITED", "0123456789", "058", "HomeTrue payouts"))
                 .isEqualTo("RCP_t0ya41mp35flk40");
         paystack.verify();
     }
@@ -236,7 +236,7 @@ class PaystackClientTest {
                                  "status":"otp","transfer_code":"TRF_1ptvuv321ahaa7q"}}""", MediaType.APPLICATION_JSON));
 
         PaystackClient.Transfer transfer = client.initiateTransfer(1500000000L, "RCP_t0ya41mp35flk40",
-                "lv-payout-abc123def4567890", "LandVault payout");
+                "lv-payout-abc123def4567890", "HomeTrue payout");
 
         assertThat(transfer.status()).isEqualTo("otp");
         assertThat(transfer.transferCode()).isEqualTo("TRF_1ptvuv321ahaa7q");

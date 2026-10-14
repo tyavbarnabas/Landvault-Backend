@@ -112,6 +112,32 @@
             <version>0.12.6</version>
             <scope>runtime</scope>
         </dependency>
+        <!-- Object storage (estate photos, documents) through the S3 API: RustFS
+             locally, Cloudflare R2 or AWS S3 when deployed — a configuration
+             change, not a code change. See AGENTS.md, "File storage". -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>software.amazon.awssdk</groupId>
+                    <artifactId>netty-nio-client</artifactId>
+                </exclusion>
+                <!-- Excluded on purpose: Apache HttpClient 5 on the classpath makes
+                     Spring Boot's ClientHttpRequestFactoryBuilder.detect() switch
+                     Paystack's connection to it, which changed timeout behaviour
+                     (found by the Paystack lost-reply tests going red). Storage
+                     uses the SDK's apache-client below instead. -->
+                <exclusion>
+                    <groupId>software.amazon.awssdk</groupId>
+                    <artifactId>apache5-client</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>apache-client</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.modulith</groupId>
             <artifactId>spring-modulith-starter-core</artifactId>
@@ -191,6 +217,13 @@
                 <groupId>org.springframework.modulith</groupId>
                 <artifactId>spring-modulith-bom</artifactId>
                 <version>${spring-modulith.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>software.amazon.awssdk</groupId>
+                <artifactId>bom</artifactId>
+                <version>2.46.7</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>

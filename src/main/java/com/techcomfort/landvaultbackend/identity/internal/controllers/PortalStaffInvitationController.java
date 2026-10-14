@@ -47,7 +47,7 @@ public class PortalStaffInvitationController {
                     You can't invite into a role carrying permissions you don't hold.
                     - `branchId` is **required** for `branch_manager`, **refused** for \
                     `executive_director`, optional for the rest. It must be one of your branches.
-                    - The email must have **no LandVault account** — staff use a work email; an \
+                    - The email must have **no HomeTrue account** — staff use a work email; an \
                     existing account can't also be given a company role.
 
                     An email with a single-use link goes to the person; it expires in 72 hours. \

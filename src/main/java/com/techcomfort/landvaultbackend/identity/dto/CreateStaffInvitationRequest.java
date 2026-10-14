@@ -12,7 +12,7 @@ import java.util.UUID;
  * never a field.
  */
 public record CreateStaffInvitationRequest(
-        @Schema(description = "A work email with no LandVault account yet.") @NotBlank @Email @Size(max = 255) String email,
+        @Schema(description = "A work email with no HomeTrue account yet.") @NotBlank @Email @Size(max = 255) String email,
         @NotBlank @Size(max = 255) String firstName,
         @NotBlank @Size(max = 255) String lastName,
         @Schema(description = "A tenant role code, e.g. branch_manager, sales_manager, surveyor_project_manager.",

@@ -8,6 +8,25 @@ Spring Boot backend for **LandVault**, a multi-tenant PropTech land-investment p
 
 Read `~/landvault/AGENTS.md` and `~/landvault/INTEGRATION.md` before designing any endpoint — the frontend already defines the contract this backend must satisfy (see `API_CONTRACT.md` in this repo, derived from it). Read `~/landvault/CLAUDE.md`'s project memory equivalents too if working from a Claude Code session — a fresh session here starts with no memory of the frontend's design decisions, so re-derive from those files rather than guessing.
 
+## The product is called HomeTrue; the code is still "landvault"
+
+Renamed 2026-10-12 (the landvault domain was taken; the user owns
+`hometrue.com.ng`). **User-visible names only**: email subjects and bodies,
+error messages, the authenticator-app issuer, the OpenAPI title and
+descriptions, Paystack recipient/transfer/refund descriptions, the default
+sender (`noreply@hometrue.com.ng`), and one seeded permission description
+(changeset 082). **Deliberately unchanged**: Java packages, the `landvault`
+database and role, `landvault.*` config keys, `landvault_*` SQL functions,
+the `LV-PAY-` reference prefix, code comments and this file's history —
+renaming those buys nothing a user sees and risks breaking a deployed
+database. New user-facing text says HomeTrue.
+
+- **2FA**: accounts that already paired an authenticator keep the
+  "LandVault" label in their app; codes still work (the issuer isn't part of
+  verification). New pairings show "HomeTrue".
+- **Paystack**: recipients created before the rename keep their old
+  description at Paystack; nothing re-creates them.
+
 ## What LandVault is
 
 An enterprise multi-tenant platform: **Super Admin** (platform operator) → **Tenant** (a land-developer company, with branches) → **Client** (buyer). Buyers browse/reserve/purchase plots within estates; developers manage their estate inventory and buyer transactions; Super Admin verifies tenants, governs the public marketplace, and watches platform health. The frontend repo currently implements only the client-facing surface plus a slice of the Super Admin console (tenant verification lifecycle, marketplace listing-conflict detection). The developer portal and the rest of Super Admin are speced (see the frontend's project memory / backlog docs) but not built anywhere yet — this backend is greenfield for all of it.
@@ -5147,6 +5166,18 @@ was no route back from a purchase). Decided with the user: A, A, A, A.
   (`/payment`, `/confirm`, `/finance-verify`) and "only `pending_payment`";
   rewritten, along with `TransactionDto`'s descriptions.
 
+### Nobody decides on their own purchase
+Finance verify and reject, and late-money allocate and refund, refuse with 403
+`OWN_PURCHASE` when the caller is the purchase's buyer
+(`FinanceVerificationService.refuseOwnPurchase`). Raised by the frontend: the
+dev account `portal-ed@example.com` holds `buyer` **and** `executive_director`
+(made by hand before invitations existed), so it could buy in Estintin's own
+estate and verify its own purchase. Real staff accounts can't get here —
+invitations refuse an email that has an account and grant only the invited
+role, and a role change replaces every assignment — so this is the safety net,
+not the main control. It can't catch an employee buying under a second email;
+the audit trail naming who decided is the answer to that. Proven red.
+
 ### Errors are always in the standard shape (found by the frontend)
 `PaymentExceptionHandler` handled only `PaymentException`, so a request failing
 its own rules (a blank reason, a 9-digit account number) came back as Spring's
@@ -5182,6 +5213,118 @@ Decided with the user: A, A, A, A.
 - **The buyer is emailed either way** (decision 4).
 - Another company's finance can neither see nor act on it (the seller filter,
   and the RLS-joined read behind it).
+
+### Buyers are emailed about every decision (`BuyerNotifier`)
+Found in frontend testing: only late money emailed the buyer, so a buyer who
+paid by transfer and closed the tab never learned that a finance verify or
+reject had happened. Now, through the existing `SettlementAlertSender`:
+`purchaseDecided` on verify ("Good news: … is yours") and reject ("Your payment
+for … is being returned", the reason, the full amount, **no date**: the refund's
+`expectedAt` only comes later from Paystack). Every buyer email (these two,
+both late-money ones, and "needs your bank account") links to
+`{origin of PAYSTACK_CALLBACK_URL}/purchases/{transactionId}`, never hard-coded.
+
+- **Sent only after commit** (`BuyerNotifier.afterCommit`, a
+  `TransactionSynchronization`); a decision that rolls back emails nobody.
+- **A failed email never fails or undoes the decision**: caught and logged with
+  the exception's class only. A mail error's message can carry the recipient,
+  and no buyer address goes in a log.
+- **Fixed on the way**: the late-money and refund-account emails used to be sent
+  inside the transaction, so an SMTP failure rolled the decision back (500).
+  They go through `BuyerNotifier` now. The admin-facing alerts (account
+  submitted, payout/refund problems) still send in-transaction. Not changed here.
+- Reject emails only when money actually arrived (a succeeded payment is
+  flagged), so a refund is never promised for money that never came.
+
+Proven red: the verify email removed, and the catch removed (the rejection's
+request failed though the email was all that broke).
+
+## File storage (`storage` module), step 1
+
+Uploaded files — estate photos first, then KYC, tenant and title documents —
+live in **S3-compatible object storage**, never in the database or on the
+server's disk. Built in steps, decided with the user (2026-10-11): (1) this
+module, (2) estate photos (`estate_media`, replacing the never-written
+`estates.image_url`), (3) KYC and tenant documents onto the private bucket,
+(4) estate title documents incl. site/survey plans, (5) resized photo
+versions. **Flyers were dropped** on purpose: Nigerian flyers carry "pay into
+this account" details, the exact off-platform fraud the platform exists to
+stop, and what they say (fees, terms) is already captured as structured cost
+disclosure. **A site plan is title evidence**, not a marketing photo — it goes
+with step 4, private, and must never be presented as a substitute for the
+mapped boundary conflict detection checks.
+
+**How an upload works.** The browser never sends the bytes through Spring:
+1. The calling module asks `StorageApi.requestUpload` (its own rules: which
+   `FileType`s, how large; the owner from the session). A `stored_files` row
+   is written `PENDING` and a **pre-signed PUT** returned (10 minutes). The
+   content type **and exact size are part of the signature** — storage refuses
+   anything else (proven red by unsigning the size).
+2. The browser PUTs the file to that link with the returned headers.
+3. `confirmUpload` checks it really arrived, is the promised size and type,
+   and **really is that type by its first bytes** (`FileType.matches`) —
+   never what the browser claimed. A mismatch deletes the object and marks the
+   row `REJECTED` (`UPLOAD_SIZE_MISMATCH` / `UPLOAD_CONTENT_MISMATCH`).
+   `noRollbackFor` again (fourth place): without it the refusal rolled the
+   `REJECTED` status back, leaving a `pending` row whose object was gone —
+   proven red. Only the uploader can confirm (another person: `FILE_NOT_FOUND`,
+   proven red).
+4. Callers keep their own records pointing at the file id. Storage knows
+   nothing about estates or buyers.
+
+**Two buckets that never mix**: `PUBLIC` (anyone may read, served via the CDN
+from a domain separate from the app's) and `PRIVATE` (no read policy; reached
+only through `downloadLink`, which expires in 5 minutes and is issued by the
+module that decided the person may have it). Startup refuses the same bucket
+for both. Downloads force the checked type; PDFs download, images open inline.
+**Accepted types: JPEG, PNG, WebP, PDF. No SVG or HTML** — both carry script.
+Keys are random and never reused (`{purpose}/{uuid}.{ext}`), so a CDN may cache
+forever and a replaced file is a new key. The person's file name is kept only
+as a label (path and header-breaking characters stripped).
+
+- **`stored_files` is not RLS-policied**, like `kyc_records`: buyers upload
+  and have no tenant. Never deleted (DELETE/TRUNCATE revoked); a removed file
+  keeps its row with `removed_at`.
+- **Abandoned uploads** (never confirmed within `pending-ttl`, 24h) are deleted
+  by `AbandonedUploadSweeper` (hourly), not a bucket lifecycle rule, so it
+  behaves the same on every provider and the row records it.
+- **Errors**: `StorageException` is public and `StorageExceptionHandler` is
+  deliberately **global** (not `assignableTypes`-scoped), handling only that
+  exception, so every module that stores files returns the same codes without
+  listing them.
+- **Config** `landvault.storage.*`: endpoint, keys, buckets and the public base
+  URL have **no defaults in the base config** — a deployment that forgets them
+  fails at startup, the same rule as `JWT_SECRET` and the mail host. Local
+  values are in `application-dev.yml`. Ceiling `max-upload-size` 100MB; each
+  feature sets its own lower limit.
+- **Locally: RustFS, not MinIO.** MinIO no longer publishes images (found
+  building this: `minio/minio` is gone from Docker Hub and Quay). RustFS
+  (`rustfs/rustfs:1.0.1`, Apache-2.0) speaks the same S3 API; `docker compose
+  up -d` starts it (console http://localhost:9001) and `storage-init` creates
+  the buckets, the public-read policy and CORS for the frontend origin
+  (`scripts/storage/init-buckets.sh`). `StorageIT` runs against the same image.
+- **SDK**: AWS SDK v2 `s3` with its `apache-client`, checksums only
+  `WHEN_REQUIRED` (the SDK's default extra checksums aren't understood by every
+  S3-compatible store). **`netty-nio-client` and `apache5-client` are excluded,
+  and the second matters**: it brings Apache HttpClient 5, and Spring Boot's
+  `ClientHttpRequestFactoryBuilder.detect()` — what `PaystackConfig` uses —
+  prefers it over the JDK client. Paystack's connection silently changed library
+  and the lost-reply and Paystack-down tests went red (500 instead of 503, a
+  call made twice). Same lesson as the test-scoped RestClient: **adding a
+  library can change what auto-configuration picks for unrelated code.** Check
+  `dependency:tree` for new HTTP clients after adding an SDK.
+- **Dev-only routes** to try it by hand: `/api/dev/storage/uploads`,
+  `.../{fileId}/confirm`, `/files/{fileId}/download-link`, `DELETE
+  /files/{fileId}`, `/sweep` (`@Profile("dev")`, Super Admin). Real routes
+  arrive with step 2.
+
+**Deploying (Cloudflare R2 recommended — free egress, 10 GB free)**: create
+the two buckets, an API token limited to them, CORS for the frontend origin, a
+custom domain on the public bucket; set `STORAGE_ENDPOINT`
+(`https://<account>.r2.cloudflarestorage.com`), `STORAGE_REGION=auto`,
+`STORAGE_ACCESS_KEY`/`STORAGE_SECRET_KEY`, the bucket names and
+`STORAGE_PUBLIC_BASE_URL`. No code change. Still to do in later steps: EXIF
+stripping and takedown (step 2), resized versions (step 5).
 
 ## One password rule, wherever a password is set (`PasswordPolicy`)
 

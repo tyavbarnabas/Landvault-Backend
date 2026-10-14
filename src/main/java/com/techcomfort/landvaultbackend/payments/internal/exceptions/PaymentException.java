@@ -288,4 +288,11 @@ public abstract class PaymentException extends RuntimeException {
             super("The plot is no longer available, so it can't be allocated. Refund the buyer instead. Nothing was changed.");
         }
     }
+
+    /** Separation of duties: nobody decides on a purchase they made themselves. */
+    public static class OwnPurchase extends PaymentException {
+        public OwnPurchase() {
+            super("You can't decide on your own purchase. Another finance officer or director must.");
+        }
+    }
 }

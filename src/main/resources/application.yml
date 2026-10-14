@@ -68,6 +68,30 @@ landvault:
   # Staff invitations (SI-1..SI-7). `delivery` works exactly like otp.delivery:
   # email (default) or log — and `log` is for tests only, because it writes a
   # live credential into a company to the application log.
+  # File storage (estate photos, documents) over the S3 API. The endpoint and
+  # keys differ per deployment and have NO defaults here: a deployment that
+  # forgets them fails at startup. The local RustFS values are in application-dev.yml.
+  # The two buckets must differ (checked at startup). See AGENTS.md, "File storage".
+  storage:
+    endpoint: ${STORAGE_ENDPOINT:}
+    # R2 uses "auto"; RustFS and S3 a real region name.
+    region: ${STORAGE_REGION:auto}
+    access-key: ${STORAGE_ACCESS_KEY:}
+    secret-key: ${STORAGE_SECRET_KEY:}
+    path-style-access: ${STORAGE_PATH_STYLE:true}
+    public-bucket: ${STORAGE_PUBLIC_BUCKET:}
+    private-bucket: ${STORAGE_PRIVATE_BUCKET:}
+    # Where public files are served from (the CDN domain), never the app's own domain.
+    public-base-url: ${STORAGE_PUBLIC_BASE_URL:}
+    upload-link-ttl: 10m
+    download-link-ttl: 5m
+    # An upload not confirmed within this is abandoned and cleaned up.
+    pending-ttl: 24h
+    sweep-interval: 1h
+    # The platform's ceiling; each feature sets its own, lower, limit.
+    max-upload-size: 100MB
+    connect-timeout: 5s
+    read-timeout: 30s
   # Paystack (payments). The secret key comes from the environment only and is
   # never logged; a missing key fails startup. TEST keys start sk_test_.
   paystack:
@@ -82,7 +106,7 @@ landvault:
     alerts:
       # Who is told when a payout account changes. "log" is for tests only.
       delivery: ${PAYMENT_ALERT_DELIVERY:email}
-      from-address: ${MAIL_FROM:noreply@landvault.com}
+      from-address: ${MAIL_FROM:noreply@hometrue.com.ng}
     # Pressing pay again inside this window hands back the open link instead
     # of opening a second payment for the same plot.
     link-reuse-window: 30m
@@ -106,7 +130,7 @@ landvault:
     stuck-after: 30m
   invitations:
     delivery: ${INVITATION_DELIVERY:email}
-    from-address: ${MAIL_FROM:noreply@landvault.com}
+    from-address: ${MAIL_FROM:noreply@hometrue.com.ng}
     # The frontend page the link opens; the token follows after #token=.
     accept-url: ${INVITATION_ACCEPT_URL:http://localhost:8443/accept-invitation}
     ttl: 72h
@@ -130,7 +154,7 @@ landvault:
     # which is exactly what every other path here refuses to do.
     delivery: ${OTP_DELIVERY:email}
     # Never hardcoded in the sending code — a deployment sets its own.
-    from-address: ${MAIL_FROM:noreply@landvault.com}
+    from-address: ${MAIL_FROM:noreply@hometrue.com.ng}
     code-ttl: 10m
     # A 6-digit code is a million combinations — without an attempt limit it
     # is trivially brute-forceable. Exhausting this invalidates the code.

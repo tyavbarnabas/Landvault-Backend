@@ -43,6 +43,7 @@ public class LatePaymentService {
     private final IdentityApi identityApi;
     private final SettlementAlertSender alerts;
     private final AuditApi auditApi;
+    private final BuyerNotifier buyerNotifier;
 
     @Transactional(readOnly = true)
     public List<LatePaymentDto> list() {
@@ -67,6 +68,7 @@ public class LatePaymentService {
         TenantScope scope = currentScope();
         UUID tenantId = company(scope);
         Payment payment = latePayment(transactionId, tenantId);
+        FinanceVerificationService.refuseOwnPurchase(payment.getBuyerUserId(), scope.userId());
         AbandonedSale sale = sale(transactionId, tenantId);
         if (!matches(payment, sale)) {
             throw new PaymentException.PaymentNotConfirmed();
@@ -90,6 +92,7 @@ public class LatePaymentService {
         TenantScope scope = currentScope();
         UUID tenantId = company(scope);
         Payment payment = latePayment(transactionId, tenantId);
+        FinanceVerificationService.refuseOwnPurchase(payment.getBuyerUserId(), scope.userId());
         AbandonedSale sale = sale(transactionId, tenantId);
         payment.setRefundRequestedAt(Instant.now());
         payment.setReviewReason("Refund due: late payment not allocated — " + reason.trim());
@@ -117,9 +120,11 @@ public class LatePaymentService {
     }
 
     private void tell(Payment payment, AbandonedSale sale, boolean allocated, String reason) {
-        identityApi.emailOf(payment.getBuyerUserId()).ifPresent(to -> alerts.latePaymentResolved(
-                new SettlementAlertSender.LatePaymentAlert(to, sale.plotLabel(), sale.estateName(),
-                        payment.getAmount().toPlainString(), allocated, reason)));
+        identityApi.emailOf(payment.getBuyerUserId()).ifPresent(to -> buyerNotifier.afterCommit(
+                allocated ? "late payment allocated" : "late payment refunded",
+                () -> alerts.latePaymentResolved(new SettlementAlertSender.LatePaymentAlert(to, sale.plotLabel(),
+                        sale.estateName(), payment.getAmount().toPlainString(), allocated, reason,
+                        buyerNotifier.purchaseUrl(sale.transactionId())))));
     }
 
     private LatePaymentDto toDto(AbandonedSale sale, Payment p) {

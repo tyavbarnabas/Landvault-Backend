@@ -48,11 +48,11 @@ public class EmailInvitationDeliveryService implements InvitationDeliveryService
         SimpleMailMessage message = new SimpleMailMessage();
         message.setFrom(properties.fromAddress());
         message.setTo(email.to());
-        message.setSubject("You've been invited to join " + email.companyName() + " on LandVault");
+        message.setSubject("You've been invited to join " + email.companyName() + " on HomeTrue");
         message.setText("""
                 Hello %s,
 
-                %s has invited you to LandVault as %s%s.
+                %s has invited you to HomeTrue as %s%s.
 
                 Set your password and sign in here:
                 %s

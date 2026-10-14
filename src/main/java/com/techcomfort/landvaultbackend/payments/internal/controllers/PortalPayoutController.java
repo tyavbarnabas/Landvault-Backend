@@ -26,9 +26,9 @@ public class PortalPayoutController {
     @Operation(summary = "Your company's payouts",
             description = """
                     Requires `portal.payments.verify` (finance officer, Executive Director), company-wide. Every \\
-                    payout LandVault has sent or tried to send you, newest first: each part, its amount, status \\
+                    payout HomeTrue has sent or tried to send you, newest first: each part, its amount, status \\
                     (`pending`, `success`, `failed`, `reversed`, …), Paystack's reason, and the account it went to \\
-                    (last 4 digits). Read-only — LandVault sends and retries payouts.""")
+                    (last 4 digits). Read-only — HomeTrue sends and retries payouts.""")
     @GetMapping
     @PreAuthorize("hasAuthority('portal.payments.verify')")
     public ResponseEntity<List<PayoutDto>> list() {

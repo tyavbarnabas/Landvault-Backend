@@ -34,7 +34,7 @@ public class PaystackWebhookController {
                     Public — Paystack has no login. **The `x-paystack-signature` header is the only proof \\
                     of origin**: an HMAC-SHA512 of the raw body with the secret key. Anything unsigned or \\
                     mismatched is refused (401) and not stored. A signed call is stored exactly as received, \\
-                    then a `charge.success` makes LandVault verify the payment with Paystack itself. Safe to \\
+                    then a `charge.success` makes HomeTrue verify the payment with Paystack itself. Safe to \\
                     receive more than once.""")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Received (and acted on, where it applies)"),

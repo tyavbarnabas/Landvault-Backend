@@ -319,7 +319,7 @@ a scheduled sweep, not a client timer. **Holds cannot be extended.**
 | POST | `/api/documents/{id}/void` | 204 |
 | POST | `/api/documents` (batch issue) | `Document[]` |
 
-File storage: frontend notes it needs real S3/MinIO-backed URLs behind "download" — `Document` itself carries only metadata; add a signed-URL or streaming endpoint when wiring real files.
+File storage: **the storage module is built (step 1)**, not yet wired to any feature. Files upload straight from the browser to object storage: the backend returns `{ fileId, uploadUrl, method: "PUT", headers, expiresAt }`; the browser sends the file to `uploadUrl` with exactly `headers` (the size and type are part of the signature); then the feature's own confirm route is called with `fileId`. Errors: `FILE_TYPE_NOT_ALLOWED`, `FILE_TOO_LARGE`, `FILE_EMPTY` (400), `UPLOAD_SIZE_MISMATCH` / `UPLOAD_CONTENT_MISMATCH` (400: what arrived wasn't what was promised; deleted, start again), `UPLOAD_NOT_RECEIVED` / `UPLOAD_EXPIRED` / `FILE_NOT_READY` (409), `FILE_NOT_FOUND` (404), `STORAGE_UNAVAILABLE` (503, retry). Public files come back with a `publicUrl`; private ones only through short-lived links. Accepted: JPG, PNG, WebP, PDF (never SVG). Estate photos (step 2) are the first feature to use it; `Document` downloads come with step 3/4.
 
 ## KYC — `kycService.ts` — **built**
 | Method | Path | Request | Response |
@@ -669,7 +669,7 @@ out sends the next part (one OTP per part); 409 `SALE_ALREADY_PAID` once all are
 **Payments, step 8c — payout outcomes.** `GET /api/portal/payouts` (`portal.payments.verify`,
 company-wide; 403 `COMPANY_WIDE_SCOPE_REQUIRED` when narrowed to a branch) → the company's
 own `PayoutDto[]`, newest first, read-only. `PayoutDto` gains `reviewReason` (non-null =
-LandVault is looking into it). A payout's status can change after the fact: `success` can
+HomeTrue is looking into it). A payout's status can change after the fact: `success` can
 become `reversed` (the part is owed again and reappears on the admin ready list).
 
 **Renamed (changeset 079): `payment.cardLast4` → `payment.last4`** in the finance queue. It is
@@ -699,4 +699,16 @@ bad input: 400 `VALIDATION_ERROR` with `fieldErrors` (e.g. `{ "reason": "must no
 `{ "accountNumber": "must be a 10-digit account number" }`), 400 `MALFORMED_REQUEST` (body not
 JSON), 400 `INVALID_PARAMETER` (an id in the path that isn't a UUID). Show `fieldErrors` beside
 the matching inputs.
+
+**Own purchase.** Finance verify/reject and late-payment allocate/refund return 403
+`OWN_PURCHASE` when the signed-in staff member is the purchase's buyer. Show the message; another
+finance officer or director must act.
+
+**Buyer emails.** The buyer is emailed when finance verifies ("Good news: {plot} at {estate} is
+yours") or rejects ("Your payment for {plot} is being returned", with the developer's reason and no
+refund date), when late money is allocated or refunded, and when a refund needs their bank account.
+Every one links to **`{frontend origin}/purchases/{transactionId}`**, the origin taken from
+`PAYSTACK_CALLBACK_URL` — so the frontend needs a `/purchases/:transactionId` route that opens the
+purchase (with its payment and refund) after sign-in. Sent only after the decision commits; a mail
+failure never fails the request.
 

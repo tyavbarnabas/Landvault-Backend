@@ -34,5 +34,44 @@ services:
       - "${MAILDEV_WEB_PORT:-1080}:1080"   # web UI
       - "${MAILDEV_SMTP_PORT:-1025}:1025"  # SMTP
 
+  # Local S3-compatible object storage for uploads (estate photos, documents):
+  # the same role MailDev plays for email. The app talks to it exactly as it
+  # will to Cloudflare R2 or AWS S3 — only configuration differs. Console at
+  # http://localhost:9001. RustFS rather than MinIO: MinIO no longer publishes
+  # images. Pinned, like MailDev. See AGENTS.md, "File storage".
+  rustfs:
+    image: rustfs/rustfs:1.0.1
+    container_name: landvault-rustfs
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-landvault-dev}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-landvault-dev-secret}
+      RUSTFS_CONSOLE_ENABLE: "true"
+    ports:
+      - "${STORAGE_API_PORT:-9000}:9000"      # S3 API
+      - "${STORAGE_CONSOLE_PORT:-9001}:9001"  # web console
+    volumes:
+      - landvault_rustfs_data:/data
+
+  # Creates the two buckets once (public-read and private), then exits.
+  storage-init:
+    image: amazon/aws-cli:2.31.13
+    container_name: landvault-storage-init
+    depends_on:
+      - rustfs
+    restart: "no"
+    environment:
+      AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-landvault-dev}
+      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-landvault-dev-secret}
+      AWS_DEFAULT_REGION: us-east-1
+      STORAGE_ENDPOINT: http://rustfs:9000
+      STORAGE_PUBLIC_BUCKET: ${STORAGE_PUBLIC_BUCKET:-landvault-public}
+      STORAGE_PRIVATE_BUCKET: ${STORAGE_PRIVATE_BUCKET:-landvault-private}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:8443}
+    volumes:
+      - ./scripts/storage:/scripts:ro
+    entrypoint: ["/bin/sh", "-c", "for i in 1 2 3 4 5 6 7 8 9 10; do sh /scripts/init-buckets.sh && exit 0; sleep 2; done; exit 1"]
+
 volumes:
   landvault_postgres_data:
+  landvault_rustfs_data:

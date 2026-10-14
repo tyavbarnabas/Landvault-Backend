@@ -21,6 +21,6 @@ public record TwoFaSetupResponse(
                 + "endpoint. Treat it like a password: never log it, never persist it client-side.")
         String secret,
         @Schema(description = "The `otpauth://` URI to render as a QR code. Contains the same "
-                + "secret.", example = "otpauth://totp/LandVault:ada@example.com?secret=...&issuer=LandVault")
+                + "secret.", example = "otpauth://totp/HomeTrue:ada@example.com?secret=...&issuer=HomeTrue")
         String otpAuthUri) {
 }

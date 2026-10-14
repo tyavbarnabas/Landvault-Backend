@@ -81,6 +81,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -910,6 +911,85 @@ class ReservationCheckoutUnderRlsIT {
     }
 
     // ------------------------------------------------------------------
+    // The buyer is emailed about the decision
+    // ------------------------------------------------------------------
+
+    @Test
+    void verifyingEmailsTheBuyerOnceThatThePlotIsTheirsWithALinkToThePurchase() {
+        TransactionDto transaction = paidPurchase();
+
+        assertThat(financeAction(staffWithRole(seller.id(), "finance_officer", null), transaction.id(), "verify", null)
+                .getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        ArgumentCaptor<SettlementAlertSender.PurchaseDecisionAlert> sent =
+                ArgumentCaptor.forClass(SettlementAlertSender.PurchaseDecisionAlert.class);
+        verify(alerts, times(1)).purchaseDecided(sent.capture());
+        assertThat(sent.getValue().to()).isEqualTo(buyer.email());
+        assertThat(sent.getValue().verified()).isTrue();
+        assertThat(new BigDecimal(sent.getValue().amount())).isEqualByComparingTo(TIER_PRICE);
+        assertThat(sent.getValue().purchaseUrl()).as("the frontend origin from PAYSTACK_CALLBACK_URL, not its path")
+                .matches("https?://[^/]+/purchases/" + transaction.id());
+    }
+
+    @Test
+    void rejectingEmailsTheBuyerOnceWithTheReasonAndALinkToThePurchase() {
+        TransactionDto transaction = paidPurchase();
+
+        assertThat(financeAction(staffWithRole(seller.id(), "finance_officer", null), transaction.id(), "reject",
+                "{\"reason\":\"Charged back by the bank.\"}").getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        ArgumentCaptor<SettlementAlertSender.PurchaseDecisionAlert> sent =
+                ArgumentCaptor.forClass(SettlementAlertSender.PurchaseDecisionAlert.class);
+        verify(alerts, times(1)).purchaseDecided(sent.capture());
+        assertThat(sent.getValue().to()).isEqualTo(buyer.email());
+        assertThat(sent.getValue().verified()).isFalse();
+        assertThat(sent.getValue().reason()).isEqualTo("Charged back by the bank.");
+        assertThat(new BigDecimal(sent.getValue().amount())).isEqualByComparingTo(TIER_PRICE);
+        assertThat(sent.getValue().purchaseUrl()).as("the frontend origin from PAYSTACK_CALLBACK_URL, not its path")
+                .matches("https?://[^/]+/purchases/" + transaction.id());
+    }
+
+    @Test
+    void aRefusedDecisionEmailsNobody() {
+        TransactionDto transaction = paidPurchase();
+        String insider = alsoFinanceAtSeller(buyer);
+
+        assertThat(financeAction(insider, transaction.id(), "verify", null).getBody()).contains("OWN_PURCHASE");
+        assertThat(financeAction(insider, transaction.id(), "reject", "{\"reason\":\"Mine\"}").getBody())
+                .contains("OWN_PURCHASE");
+        verify(alerts, never()).purchaseDecided(any());
+
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        assertThat(financeAction(officer, transaction.id(), "verify", null).getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(financeAction(officer, transaction.id(), "verify", null).getBody())
+                .contains("TRANSACTION_NOT_AWAITING_FINANCE");
+        verify(alerts, times(1)).purchaseDecided(any());
+    }
+
+    @Test
+    void aFailedEmailLeavesTheDecisionApplied() {
+        TransactionDto verified = paidPurchase();
+        doThrow(new IllegalStateException("SMTP down")).when(alerts).purchaseDecided(any());
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+
+        assertThat(financeAction(officer, verified.id(), "verify", null).getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(queryString("SELECT status FROM transactions WHERE id = '" + verified.id() + "'")).isEqualTo("VERIFIED");
+        assertThat(queryString("SELECT status FROM plots WHERE id = '" + plotId + "'")).isEqualTo("SOLD");
+    }
+
+    @Test
+    void aFailedEmailLeavesTheRejectionApplied() {
+        TransactionDto transaction = paidPurchase();
+        doThrow(new IllegalStateException("SMTP down")).when(alerts).purchaseDecided(any());
+
+        assertThat(financeAction(staffWithRole(seller.id(), "finance_officer", null), transaction.id(), "reject",
+                "{\"reason\":\"Charged back by the bank.\"}").getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(queryString("SELECT status FROM transactions WHERE id = '" + transaction.id() + "'")).isEqualTo("REJECTED");
+        assertThat(queryString("SELECT refund_requested_at IS NOT NULL FROM payments WHERE transaction_id = '"
+                + transaction.id() + "' AND status = 'SUCCEEDED'")).isEqualTo("t");
+    }
+
+    // ------------------------------------------------------------------
     // Step 8b — paying the company out
     // ------------------------------------------------------------------
 
@@ -1684,6 +1764,49 @@ class ReservationCheckoutUnderRlsIT {
         assertThat(get("/api/checkout/transactions/" + transaction.id(), buyer.token(), String.class).getBody())
                 .contains("\"status\":\"abandoned\"").contains("\"underReview\":true")
                 .contains("\"reviewKind\":\"late_payment\"");
+    }
+
+    /**
+     * Separation of duties: a buyer who also holds a finance role at the
+     * selling company (a leftover buyer role on a staff account) can't decide
+     * on their own purchase — someone else must.
+     */
+    @Test
+    void nobodyDecidesOnTheirOwnPurchase() {
+        TransactionDto transaction = paidPurchase();
+        String insider = alsoFinanceAtSeller(buyer);
+
+        ResponseEntity<String> verify = financeAction(insider, transaction.id(), "verify", null);
+        assertThat(verify.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(verify.getBody()).contains("OWN_PURCHASE");
+        assertThat(financeAction(insider, transaction.id(), "reject", "{\"reason\":\"Mine\"}").getBody())
+                .contains("OWN_PURCHASE");
+        assertThat(queryString("SELECT status FROM transactions WHERE id = '" + transaction.id() + "'"))
+                .isEqualTo("AWAITING_FINANCE");
+
+        assertThat(financeAction(staffWithRole(seller.id(), "finance_officer", null), transaction.id(), "verify", null)
+                .getStatusCode()).as("a colleague can").isEqualTo(HttpStatus.OK);
+    }
+
+    @Test
+    void nobodyResolvesTheirOwnLatePayment() {
+        TransactionDto transaction = latePayment();
+        String insider = alsoFinanceAtSeller(buyer);
+
+        assertThat(restTemplate.exchange("/api/portal/finance/late-payments/" + transaction.id() + "/allocate",
+                HttpMethod.POST, entity(insider, null), String.class).getBody()).contains("OWN_PURCHASE");
+        assertThat(restTemplate.exchange("/api/portal/finance/late-payments/" + transaction.id() + "/refund",
+                HttpMethod.POST, entity(insider, "{\"reason\":\"Mine\"}"), String.class).getBody()).contains("OWN_PURCHASE");
+        assertThat(queryString("SELECT status FROM transactions WHERE id = '" + transaction.id() + "'")).isEqualTo("ABANDONED");
+    }
+
+    /** Gives a buyer a company-wide finance role at the seller too — the shape a hand-made test account can have. */
+    private String alsoFinanceAtSeller(Buyer who) {
+        execute("UPDATE users SET tenant_id = '" + seller.id() + "' WHERE id = '" + who.id() + "'");
+        execute("INSERT INTO user_roles (id, created_at, deleted, user_id, role_id, scoped_branch_id) "
+                + "SELECT gen_random_uuid(), now(), false, '" + who.id() + "', r.id, NULL FROM roles r "
+                + "WHERE r.code = 'finance_officer'");
+        return login(who.email());
     }
 
     private TransactionDto verifiedSale() {

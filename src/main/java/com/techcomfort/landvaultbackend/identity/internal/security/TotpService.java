@@ -31,7 +31,7 @@ public class TotpService {
     private static final int PERIOD_SECONDS = 30;
     private static final int DIGITS = 6;
     private static final HashingAlgorithm ALGORITHM = HashingAlgorithm.SHA1;
-    private static final String ISSUER = "LandVault";
+    private static final String ISSUER = "HomeTrue";
 
     private final TwoFaProperties properties;
 

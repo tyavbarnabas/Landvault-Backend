@@ -46,7 +46,7 @@ public class PortalSettlementController {
     @Operation(summary = "Your company's payout accounts",
             description = """
                     Requires `portal.settlement.manage` (Executive Director), company-wide. `approved` is the \\
-                    only account ever paid to; `pending` waits for LandVault; `history` keeps every submission.""")
+                    only account ever paid to; `pending` waits for HomeTrue; `history` keeps every submission.""")
     @GetMapping("/account")
     @PreAuthorize("hasAuthority('portal.settlement.manage')")
     public ResponseEntity<CompanySettlementDto> account() {
@@ -56,8 +56,8 @@ public class PortalSettlementController {
     @Operation(summary = "Submit a payout account",
             description = """
                     Requires `portal.settlement.manage`, company-wide. Send only the bank `code` and the 10-digit \\
-                    account number — **LandVault asks the bank for the account name**. Saved as `pending`; every \\
-                    Executive Director is emailed; nothing is paid to it until a LandVault Super Admin approves. \\
+                    account number — **HomeTrue asks the bank for the account name**. Saved as `pending`; every \\
+                    Executive Director is emailed; nothing is paid to it until a HomeTrue Super Admin approves. \\
                     The current approved account keeps receiving payouts meanwhile.""")
     @ApiResponses({
             @ApiResponse(responseCode = "201", description = "Submitted, pending approval"),

@@ -46,3 +46,18 @@ app:
   # CORS_ALLOWED_ORIGINS says still applies.
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:8443},http://localhost:${SERVER_PORT:8080}
+
+# RustFS, from docker-compose.yml: a local stand-in for S3/R2 with a web
+# console at http://localhost:9001. (MinIO, the usual choice, no longer
+# publishes images.) The keys are the local container's login, not a real
+# secret; a deployment sets its own through the environment. Only these values
+# differ between here and R2 — the storage code is the same.
+landvault:
+  storage:
+    endpoint: ${STORAGE_ENDPOINT:http://localhost:${STORAGE_API_PORT:9000}}
+    region: ${STORAGE_REGION:us-east-1}
+    access-key: ${STORAGE_ACCESS_KEY:${RUSTFS_ACCESS_KEY:landvault-dev}}
+    secret-key: ${STORAGE_SECRET_KEY:${RUSTFS_SECRET_KEY:landvault-dev-secret}}
+    public-bucket: ${STORAGE_PUBLIC_BUCKET:landvault-public}
+    private-bucket: ${STORAGE_PRIVATE_BUCKET:landvault-private}
+    public-base-url: ${STORAGE_PUBLIC_BASE_URL:http://localhost:${STORAGE_API_PORT:9000}/landvault-public}

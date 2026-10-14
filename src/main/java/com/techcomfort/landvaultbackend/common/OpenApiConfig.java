@@ -53,9 +53,10 @@ public class OpenApiConfig {
     public static final String TAG_ADMIN_CONFLICTS = "Admin — Conflicts";
     public static final String TAG_ADMIN_AUDIT = "Admin — Audit";
     public static final String TAG_ADMIN_PAYOUTS = "Admin — Payouts";
+    public static final String TAG_DEV_STORAGE = "Development — Storage";
 
     private static final String DESCRIPTION = """
-            The backend for LandVault, a multi-tenant land-investment platform for Nigeria \
+            The backend for HomeTrue, a multi-tenant land-investment platform for Nigeria \
             and diaspora buyers.
 
             ## Three audiences, three prefixes
@@ -98,10 +99,10 @@ public class OpenApiConfig {
     public OpenAPI landvaultOpenApi() {
         return new OpenAPI()
                 .info(new Info()
-                        .title("LandVault API")
+                        .title("HomeTrue API")
                         .version("0.0.1-SNAPSHOT")
                         .description(DESCRIPTION)
-                        .contact(new Contact().name("LandVault engineering")))
+                        .contact(new Contact().name("HomeTrue engineering")))
                 .components(new Components().addSecuritySchemes(BEARER_SCHEME, new SecurityScheme()
                         .type(SecurityScheme.Type.HTTP)
                         .scheme("bearer")
@@ -146,7 +147,7 @@ public class OpenApiConfig {
                                         + "Approving allocates the plot; rejecting puts it back on sale."),
                         new Tag().name(TAG_PORTAL_SETTLEMENT)
                                 .description("The bank account a company is paid to. The Executive Director "
-                                        + "submits it; LandVault checks the name with the bank and approves it "
+                                        + "submits it; HomeTrue checks the name with the bank and approves it "
                                         + "before any payout uses it."),
                         new Tag().name(TAG_PAYMENTS)
                                 .description("Paying for a transaction through Paystack. A payment counts only "

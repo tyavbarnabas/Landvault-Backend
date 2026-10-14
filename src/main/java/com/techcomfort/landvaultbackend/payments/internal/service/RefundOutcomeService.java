@@ -43,6 +43,7 @@ public class RefundOutcomeService {
     private final PaystackClient paystack;
     private final IdentityApi identityApi;
     private final SettlementAlertSender alerts;
+    private final BuyerNotifier buyerNotifier;
     private final AuditApi auditApi;
 
     @Value("${landvault.refunds.stuck-after}")
@@ -105,9 +106,11 @@ public class RefundOutcomeService {
                 payments.save(payment);
             });
             case NEEDS_ATTENTION -> identityApi.emailOf(refund.getBuyerUserId()).ifPresent(to -> payments
-                    .findById(refund.getPaymentId()).ifPresent(payment -> alerts.refundNeedsAccount(
-                            new SettlementAlertSender.RefundNeedsAccountAlert(to, refund.getAmount().toPlainString(),
-                                    payment.getReference()))));
+                    .findById(refund.getPaymentId()).ifPresent(payment -> buyerNotifier.afterCommit(
+                            "refund needs account", () -> alerts.refundNeedsAccount(
+                                    new SettlementAlertSender.RefundNeedsAccountAlert(to,
+                                            refund.getAmount().toPlainString(), payment.getReference(),
+                                            buyerNotifier.purchaseUrl(refund.getTransactionId()))))));
             case FAILED -> alertAdmins(refund, "failed", "The refund failed; the payment is owed again and "
                     + "can be refunded once more.");
             default -> { }

@@ -51,6 +51,7 @@ public class PaymentExceptionHandler {
             case PaymentException.SettlementAccountNotPending e -> body(HttpStatus.CONFLICT, e, "SETTLEMENT_ACCOUNT_NOT_PENDING");
             case PaymentException.TwoFactorRequired e -> body(HttpStatus.FORBIDDEN, e, "TWO_FACTOR_REQUIRED");
             case PaymentException.SaleNotPayable e -> body(HttpStatus.NOT_FOUND, e, "SALE_NOT_PAYABLE");
+            case PaymentException.OwnPurchase e -> body(HttpStatus.FORBIDDEN, e, "OWN_PURCHASE");
             case PaymentException.LatePaymentNotFound e -> body(HttpStatus.NOT_FOUND, e, "LATE_PAYMENT_NOT_FOUND");
             case PaymentException.PlotNoLongerAvailable e -> body(HttpStatus.CONFLICT, e, "PLOT_NO_LONGER_AVAILABLE");
             case PaymentException.RefundNotDue e -> body(HttpStatus.NOT_FOUND, e, "REFUND_NOT_DUE");

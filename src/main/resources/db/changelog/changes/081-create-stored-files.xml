@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        File storage, step 1. Each row is one file people uploaded to object
+        storage (RustFS locally, R2/S3 when deployed); the bytes live there, never
+        here. Other modules' records (estate photos, KYC documents) will point at
+        a row. Two buckets that never mix: PUBLIC (served to anyone through the
+        CDN) and PRIVATE (only through a link that expires in minutes).
+
+        Not RLS-policied, like kyc_records: buyers upload too and have no tenant.
+        A file is reached by id, and acted on for a person only if they uploaded
+        it; the owning module decides who else may see it.
+
+        The record outlives the object: a rejected, expired or deleted file keeps
+        its row (removed_at says when the object went). Never deleted.
+    -->
+    <changeSet id="081-create-stored-files" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE stored_files (
+                id                      uuid NOT NULL PRIMARY KEY,
+                tenant_id               uuid REFERENCES organizations (id),
+                branch_id               uuid,
+                created_at              timestamp(6) with time zone NOT NULL,
+                updated_at              timestamp(6) with time zone,
+                created_by              varchar(255),
+                updated_by              varchar(255),
+                deleted                 boolean NOT NULL,
+
+                visibility              varchar(8) NOT NULL,
+                bucket                  varchar(63) NOT NULL,
+                object_key              varchar(255) NOT NULL,
+                purpose                 varchar(40) NOT NULL,
+                file_name               varchar(255) NOT NULL,
+                file_type               varchar(8) NOT NULL,
+                size_bytes              bigint NOT NULL,
+                status                  varchar(10) NOT NULL,
+                uploaded_by             uuid NOT NULL REFERENCES users (id),
+                upload_link_expires_at  timestamp(6) with time zone NOT NULL,
+                confirmed_at            timestamp(6) with time zone,
+                removed_at              timestamp(6) with time zone,
+
+                CONSTRAINT chk_stored_files_visibility CHECK (visibility IN ('PUBLIC', 'PRIVATE')),
+                CONSTRAINT chk_stored_files_file_type CHECK (file_type IN ('JPEG', 'PNG', 'WEBP', 'PDF')),
+                CONSTRAINT chk_stored_files_status CHECK (status IN ('PENDING', 'READY', 'REJECTED', 'EXPIRED', 'DELETED')),
+                CONSTRAINT chk_stored_files_size_positive CHECK (size_bytes > 0),
+                CONSTRAINT chk_stored_files_confirmed_when_ready CHECK (status <> 'READY' OR confirmed_at IS NOT NULL),
+                CONSTRAINT uq_stored_files_bucket_key UNIQUE (bucket, object_key)
+            );
+            CREATE INDEX idx_stored_files_status_created ON stored_files (status, created_at);
+            REVOKE DELETE, TRUNCATE ON stored_files FROM ${appDbUsername};
+            COMMENT ON TABLE stored_files IS
+                'Files uploaded to object storage (the bytes live there). One row per upload, never deleted. Not RLS-policied: reached by id, acted on only by the uploader unless the owning module decides otherwise. See AGENTS.md, "File storage".';
+            COMMENT ON COLUMN stored_files.file_type IS
+                'Checked from the file''s first bytes at confirmation, never trusted from the uploader.';
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE stored_files;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

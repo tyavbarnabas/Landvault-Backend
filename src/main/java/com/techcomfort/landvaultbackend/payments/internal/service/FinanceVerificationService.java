@@ -19,6 +19,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -39,6 +40,8 @@ public class FinanceVerificationService {
     private final IdentityApi identityApi;
     private final PaymentRepository payments;
     private final AuditApi auditApi;
+    private final SettlementAlertSender alerts;
+    private final BuyerNotifier buyerNotifier;
 
     @Transactional(readOnly = true)
     public List<FinanceQueueItemDto> queue() {
@@ -66,6 +69,7 @@ public class FinanceVerificationService {
             throw "awaiting_finance".equals(status) ? new PaymentException.TransactionNotFound()
                     : new PaymentException.NotAwaitingFinance();
         }
+        refuseOwnPurchase(row.buyerUserId(), scope.userId());
         Optional<Payment> payment = confirmedPaymentFor(transactionId);
         if (payment.isEmpty() || !matches(payment.get(), row)) {
             throw new PaymentException.PaymentNotConfirmed();
@@ -75,6 +79,7 @@ public class FinanceVerificationService {
             throw failure(decision);
         }
         log.info("Transaction {} verified by finance user {}; plot allocated", transactionId, scope.userId());
+        tellBuyer(row, payment.get().getAmount(), true, null);
         return new FinanceDecisionDto(transactionId, "verified");
     }
 
@@ -83,18 +88,39 @@ public class FinanceVerificationService {
     public FinanceDecisionDto reject(UUID transactionId, String reason) {
         TenantScope scope = currentScope();
         UUID tenantId = companyOf(scope);
+        payments.findAllByTransactionIdIn(List.of(transactionId)).stream().findFirst()
+                .ifPresent(p -> refuseOwnPurchase(p.getBuyerUserId(), scope.userId()));
+        // Read before deciding, for the buyer's email; absent means the decision below refuses anyway.
+        Optional<FinanceQueueRow> row = checkoutApi.awaitingFinance(tenantId).stream()
+                .filter(r -> r.transactionId().equals(transactionId))
+                .findFirst();
         FinanceDecision decision = checkoutApi.rejectPayment(transactionId, tenantId, scope.userId(), reason.trim());
         if (decision != FinanceDecision.DONE) {
             throw failure(decision);
         }
+        BigDecimal returned = BigDecimal.ZERO;
         for (Payment payment : payments.findLockedByTransactionIdAndStatus(transactionId, PaymentStatus.SUCCEEDED)) {
+            returned = returned.add(payment.getAmount());
             payment.setReviewReason("Refund due: finance rejected this payment — " + reason.trim());
             payment.setRefundRequestedAt(Instant.now());
             payments.save(payment);
             auditApi.record(AuditEntryRequest.of(scope.userId(), "payment.refund_due", "payment", payment.getId(),
                     tenantId, "Payment " + payment.getReference() + " flagged for refund after finance rejected it."));
         }
+        // Only money that actually arrived is promised back.
+        if (row.isPresent() && returned.signum() > 0) {
+            tellBuyer(row.get(), returned, false, reason.trim());
+        }
         return new FinanceDecisionDto(transactionId, "rejected");
+    }
+
+    /** Sent after this decision commits; a failed email leaves the decision standing. */
+    private void tellBuyer(FinanceQueueRow row, BigDecimal amount, boolean verified, String reason) {
+        identityApi.emailOf(row.buyerUserId()).ifPresent(to -> buyerNotifier.afterCommit(
+                verified ? "purchase verified" : "purchase rejected",
+                () -> alerts.purchaseDecided(new SettlementAlertSender.PurchaseDecisionAlert(to, row.plotLabel(),
+                        row.estateName(), amount.toPlainString(), verified, reason,
+                        buyerNotifier.purchaseUrl(row.transactionId())))));
     }
 
     private FinanceQueueItemDto toItem(FinanceQueueRow row) {
@@ -114,6 +140,18 @@ public class FinanceVerificationService {
 
     private static boolean matches(Payment payment, FinanceQueueRow row) {
         return payment.getAmount().compareTo(row.totalPrice()) == 0 && payment.getCurrency() == row.currency();
+    }
+
+    /**
+     * Separation of duties: a staff member who also bought (a buyer role left
+     * on a staff account) may never verify, reject, allocate or refund their
+     * own purchase. Real staff accounts come from invitations and hold no
+     * buyer role; this is the safety net for those that slipped through.
+     */
+    static void refuseOwnPurchase(UUID buyerUserId, UUID actor) {
+        if (buyerUserId != null && buyerUserId.equals(actor)) {
+            throw new PaymentException.OwnPurchase();
+        }
     }
 
     static RuntimeException failure(FinanceDecision decision) {

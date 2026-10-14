@@ -18,7 +18,7 @@ public interface SettlementAlertSender {
     }
 
     /** A buyer's refund can't be returned until they give a bank account in their own name. */
-    record RefundNeedsAccountAlert(String to, String amount, String paymentReference) {
+    record RefundNeedsAccountAlert(String to, String amount, String paymentReference, String purchaseUrl) {
     }
 
     /** A refund failed or needs a person — sent to LandVault's Super Admins. */
@@ -27,12 +27,19 @@ public interface SettlementAlertSender {
 
     /** Late money resolved: the buyer is told either way (decided with the user). */
     record LatePaymentAlert(String to, String plotLabel, String estateName, String amount, boolean allocated,
-                            String reason) {
+                            String reason, String purchaseUrl) {
+    }
+
+    /** The developer's finance verified (plot allocated) or rejected (money returned) a purchase — sent to the buyer. */
+    record PurchaseDecisionAlert(String to, String plotLabel, String estateName, String amount, boolean verified,
+                                 String reason, String purchaseUrl) {
     }
 
     void accountSubmitted(AccountSubmittedAlert alert);
 
     void latePaymentResolved(LatePaymentAlert alert);
+
+    void purchaseDecided(PurchaseDecisionAlert alert);
 
     void refundNeedsAccount(RefundNeedsAccountAlert alert);
 

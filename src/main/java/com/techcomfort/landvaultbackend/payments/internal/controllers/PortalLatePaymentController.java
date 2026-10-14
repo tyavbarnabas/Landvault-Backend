@@ -62,7 +62,7 @@ public class PortalLatePaymentController {
     @Operation(summary = "Refund the late payer",
             description = """
                     Requires `portal.payments.verify`; `reason` is required and the buyer sees it. The payment \\
-                    joins LandVault's refunds-due list; LandVault returns the full amount. The plot is untouched.""")
+                    joins HomeTrue's refunds-due list; HomeTrue returns the full amount. The plot is untouched.""")
     @PostMapping("/{transactionId}/refund")
     @PreAuthorize("hasAuthority('portal.payments.verify')")
     public ResponseEntity<FinanceDecisionDto> refund(@PathVariable UUID transactionId,

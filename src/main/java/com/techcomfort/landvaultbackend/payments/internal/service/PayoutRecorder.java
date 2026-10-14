@@ -193,7 +193,7 @@ public class PayoutRecorder {
 
     private static Prepared prepared(Payout payout, boolean resend) {
         return new Prepared(payout.getId(), payout.getReference(), payout.getAmountKobo(), payout.getRecipientCode(),
-                "LandVault payout " + payout.getReference()
+                "HomeTrue payout " + payout.getReference()
                         + (payout.getPartCount() > 1 ? " (part " + payout.getPartNumber() + " of " + payout.getPartCount() + ")" : ""),
                 resend);
     }
