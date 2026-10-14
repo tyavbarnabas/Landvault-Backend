@@ -38,6 +38,7 @@ public class OpenApiConfig {
     public static final String TAG_TWO_FACTOR = "Two-Factor";
     public static final String TAG_SESSION = "Session";
     public static final String TAG_MARKETPLACE = "Marketplace (public)";
+    public static final String TAG_ONBOARDING = "Onboarding (public)";
     public static final String TAG_KYC = "Verification";
     public static final String TAG_RESERVATIONS = "Reservations";
     public static final String TAG_CHECKOUT = "Checkout";
@@ -133,6 +134,9 @@ public class OpenApiConfig {
                         new Tag().name(TAG_MARKETPLACE)
                                 .description("The public buyer surface. No authentication; rate-limited. "
                                         + "Only estates meeting every publication condition appear."),
+                        new Tag().name(TAG_ONBOARDING)
+                                .description("A developer company asking to join HomeTrue. No authentication; "
+                                        + "rate-limited. Creates nothing until a HomeTrue admin converts it."),
                         new Tag().name(TAG_KYC)
                                 .description("A buyer's own identity verification. Gates buying, "
                                         + "never browsing or signup; held once, platform-wide."),
@@ -165,8 +169,8 @@ public class OpenApiConfig {
                                 .description("Inviting a company's own staff. Invitation only — staff never "
                                         + "self-register."),
                         new Tag().name(TAG_ADMIN_TENANTS)
-                                .description("Tenant onboarding, the verification state machine, plan, "
-                                        + "status and support access."),
+                                .description("Onboarding requests and tenant onboarding, the verification "
+                                        + "state machine, plan, status and support access."),
                         new Tag().name(TAG_ADMIN_KYC)
                                 .description("Manual review of buyers' identity documents. No "
                                         + "registry is called; every decision is recorded as such."),

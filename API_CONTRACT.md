@@ -712,3 +712,27 @@ Every one links to **`{frontend origin}/purchases/{transactionId}`**, the origin
 purchase (with its payment and refund) after sign-in. Sent only after the decision commits; a mail
 failure never fails the request.
 
+
+## Onboarding requests — **built** (no frontend service yet)
+
+A developer company asking to join. **Public**: `POST /api/onboarding-requests`
+`{ companyName, rcNumber?, companyAddress?, statesOfOperation?: string[],
+estimatedEstateCount?, contactName, contactRole?, contactEmail, contactPhone,
+preferredContactMethod: "email"|"phone"|"whatsapp"|"meeting",
+preferredContactTime?, message? }` → **202** `{ message }`, always the same body
+(a repeat from an email with a request still open is accepted and silently
+dropped). 400 with `fieldErrors` for a bad field (`statesOfOperation` names an
+unknown state); 429 `RATE_LIMITED` with `Retry-After` past 5 an hour per address.
+Creates no account and no company.
+
+**Super Admin** (`admin.tenants.view` to read, `admin.tenants.manage` to act):
+`GET /api/admin/onboarding-requests?status=new|contacted|converted|declined`
+(paged, newest first), `GET .../{id}`, `POST .../{id}/contacted` `{ note? }`,
+`POST .../{id}/decline` `{ reason }` (not emailed to the company),
+`POST .../{id}/convert` with **exactly `POST /api/admin/tenants`'s body** —
+prefill it from the request; it creates the tenant and invites its director,
+and sets the request `converted` with `organizationId`, all or nothing.
+Codes: `ONBOARDING_REQUEST_NOT_FOUND`, `ONBOARDING_REQUEST_CLOSED`, plus tenant
+creation's own (`RC_NUMBER_ALREADY_REGISTERED`, `EMAIL_ALREADY_REGISTERED`).
+**The frontend needs**: a public "List your estates on HomeTrue" form and an
+admin queue with a "convert" action that opens the tenant wizard prefilled.

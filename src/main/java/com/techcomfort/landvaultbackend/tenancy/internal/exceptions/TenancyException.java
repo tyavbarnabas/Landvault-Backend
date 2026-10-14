@@ -81,4 +81,45 @@ public abstract class TenancyException extends RuntimeException {
             return detail;
         }
     }
+
+    /** No onboarding request with that id. */
+    public static class OnboardingRequestNotFound extends TenancyException {
+    }
+
+    /** The request was already converted or declined; both are final. */
+    public static class OnboardingRequestClosed extends TenancyException {
+
+        private final String status;
+
+        public OnboardingRequestClosed(String status) {
+            this.status = status;
+        }
+
+        @Override
+        public String getMessage() {
+            return "This request is already " + status + "; nothing more can be done with it.";
+        }
+    }
+
+    /**
+     * An open request already exists for this email. Never reported to the
+     * submitter: the public form answers the same either way (see AGENTS.md).
+     */
+    public static class OnboardingRequestAlreadyOpen extends TenancyException {
+    }
+
+    /** A state name on an onboarding request that isn't a Nigerian state. */
+    public static class UnknownState extends TenancyException {
+
+        private final String input;
+
+        public UnknownState(String input) {
+            this.input = input;
+        }
+
+        @Override
+        public String getMessage() {
+            return "'" + input + "' isn't a Nigerian state.";
+        }
+    }
 }

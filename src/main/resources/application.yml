@@ -128,6 +128,18 @@ landvault:
     # How often Paystack is asked about refunds it accepted but hasn't finished.
     sweep-interval: 15m
     stuck-after: 30m
+  # The public "request onboarding" form (POST /api/onboarding-requests).
+  # `delivery` works like invitations.delivery; "log" is for tests only.
+  onboarding:
+    delivery: ${ONBOARDING_DELIVERY:email}
+    from-address: ${MAIL_FROM:noreply@hometrue.com.ng}
+    # Where new requests are announced.
+    alert-to: ${ONBOARDING_ALERT_TO:admin@hometrue.com.ng}
+    # Promised in the confirmation email ("our team will contact you ...").
+    response-time: within 2 working days
+    # Security parameters: each accepted submission sends two emails.
+    submissions-per-window: 5
+    window: 1h
   invitations:
     delivery: ${INVITATION_DELIVERY:email}
     from-address: ${MAIL_FROM:noreply@hometrue.com.ng}

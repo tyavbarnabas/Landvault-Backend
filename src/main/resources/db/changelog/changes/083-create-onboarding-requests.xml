@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        A developer company asking to be onboarded: the public front door.
+        Submitting one grants nothing; a Super Admin contacts the company and
+        either converts the request into a tenant (POST /api/admin/tenants's
+        normal path, in the same transaction) or declines it.
+
+        RLS-policied, because it holds prospects' names, phones and emails:
+        platform staff read and change everything; anyone may INSERT, but only
+        a fresh, undecided request. An anonymous submitter can never read a
+        row back, so "is this email already waiting?" is answered by the
+        unique index below, never by a query, and the response is the same
+        either way.
+
+        One open request per email (NEW or CONTACTED): a repeat submission is
+        dropped rather than stored, so the form can't be used to flood
+        someone's inbox with confirmations. Never deleted.
+    -->
+    <changeSet id="083-create-onboarding-requests" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE onboarding_requests (
+                id                        uuid NOT NULL PRIMARY KEY,
+                tenant_id                 uuid,
+                branch_id                 uuid,
+                created_at                timestamp(6) with time zone NOT NULL,
+                updated_at                timestamp(6) with time zone,
+                created_by                varchar(255),
+                updated_by                varchar(255),
+                deleted                   boolean NOT NULL,
+
+                company_name              varchar(200) NOT NULL,
+                rc_number                 varchar(20),
+                company_address           varchar(500),
+                states_of_operation       varchar(60)[] NOT NULL DEFAULT '{}',
+                estimated_estate_count    integer,
+                contact_name              varchar(150) NOT NULL,
+                contact_role              varchar(100),
+                contact_email             varchar(254) NOT NULL,
+                contact_phone             varchar(30) NOT NULL,
+                preferred_contact_method  varchar(10) NOT NULL,
+                preferred_contact_time    varchar(200),
+                message                   varchar(2000),
+
+                status                    varchar(10) NOT NULL,
+                contacted_at              timestamp(6) with time zone,
+                contacted_by              uuid REFERENCES users (id),
+                contact_note              varchar(2000),
+                decided_at                timestamp(6) with time zone,
+                decided_by                uuid REFERENCES users (id),
+                decline_reason            varchar(1000),
+                organization_id           uuid REFERENCES organizations (id),
+
+                CONSTRAINT chk_onboarding_requests_status
+                    CHECK (status IN ('NEW', 'CONTACTED', 'CONVERTED', 'DECLINED')),
+                CONSTRAINT chk_onboarding_requests_contact_method
+                    CHECK (preferred_contact_method IN ('EMAIL', 'PHONE', 'WHATSAPP', 'MEETING')),
+                CONSTRAINT chk_onboarding_requests_estate_count
+                    CHECK (estimated_estate_count IS NULL OR estimated_estate_count >= 0),
+                CONSTRAINT chk_onboarding_requests_converted_has_org
+                    CHECK (status <> 'CONVERTED' OR organization_id IS NOT NULL),
+                CONSTRAINT chk_onboarding_requests_declined_has_reason
+                    CHECK (status <> 'DECLINED' OR decline_reason IS NOT NULL)
+            );
+            CREATE UNIQUE INDEX uq_onboarding_requests_open_email ON onboarding_requests (lower(contact_email))
+                WHERE status IN ('NEW', 'CONTACTED') AND deleted = false;
+            CREATE INDEX idx_onboarding_requests_status_created ON onboarding_requests (status, created_at);
+
+            ALTER TABLE onboarding_requests ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE onboarding_requests FORCE ROW LEVEL SECURITY;
+            CREATE POLICY onboarding_requests_platform ON onboarding_requests FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY onboarding_requests_public_submit ON onboarding_requests FOR INSERT
+                WITH CHECK (
+                    status = 'NEW'
+                    AND contacted_at IS NULL AND contacted_by IS NULL AND contact_note IS NULL
+                    AND decided_at IS NULL AND decided_by IS NULL AND decline_reason IS NULL
+                    AND organization_id IS NULL
+                );
+            REVOKE DELETE, TRUNCATE ON onboarding_requests FROM ${appDbUsername};
+
+            COMMENT ON TABLE onboarding_requests IS
+                'Developer companies asking to be onboarded. Public INSERT of a fresh request only; read and handled by platform staff. Never deleted. See AGENTS.md, "Onboarding requests".';
+            COMMENT ON COLUMN onboarding_requests.organization_id IS
+                'The tenant this request became, set only when a Super Admin converts it.';
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE onboarding_requests;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>
