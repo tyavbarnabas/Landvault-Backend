@@ -12,10 +12,12 @@ import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.SQLRestriction;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
+import com.techcomfort.landvaultbackend.identity.internal.enums.RoleScope;
 
 /**
  * A named set of permissions. {@code systemRole} rows are seeded and must
- * not be deletable through a UI.
+ * not be deletable through a UI. A company-made role has the inherited
+ * {@code tenantId} set to its company (changeset 084); see AGENTS.md.
  */
 @Getter
 @Setter
@@ -42,5 +44,5 @@ public class Role extends AbstractEntity {
     /** How a tenant may assign this role; null means not assignable by a tenant. Changeset 067. */
     @Enumerated(EnumType.STRING)
     @Column(name = "scope", length = 16)
-    private com.techcomfort.landvaultbackend.identity.internal.enums.RoleScope scope;
+    private RoleScope scope;
 }

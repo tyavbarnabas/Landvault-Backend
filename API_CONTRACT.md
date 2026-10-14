@@ -736,3 +736,20 @@ Codes: `ONBOARDING_REQUEST_NOT_FOUND`, `ONBOARDING_REQUEST_CLOSED`, plus tenant
 creation's own (`RC_NUMBER_ALREADY_REGISTERED`, `EMAIL_ALREADY_REGISTERED`).
 **The frontend needs**: a public "List your estates on HomeTrue" form and an
 admin queue with a "convert" action that opens the tenant wizard prefilled.
+
+## Company-made roles — **built**
+
+`GET /api/portal/permissions` → `[{ code, label, description, requiresCompanyWide, held }]`
+(the role editor's checkboxes). `POST /api/portal/roles` `{ name, description?,
+scope: "company"|"branch"|"either", permissions: string[] }` → 201 the role
+(`AssignableRoleDto`, `custom: true`, a generated `code` like `custom_9f…`).
+`PUT /api/portal/roles/{code}` `{ name?, description?, permissions? }` (scope can't
+change), `DELETE /api/portal/roles/{code}` → 204. All `portal.roles.manage`
+(Executive Director) from a company-wide view. `GET /api/portal/roles` now
+includes the company's own roles, and invitations / role changes take their
+`code` like any other. Codes: `UNKNOWN_PERMISSION`, `CANNOT_GRANT_PERMISSION`,
+`CANNOT_MANAGE_ROLE`, `PERMISSION_REQUIRES_COMPANY_SCOPE`, `INVALID_ROLE_SCOPE`,
+`ROLE_SCOPE_IMMUTABLE`, `ROLE_NAME_TAKEN`, `ROLE_LIMIT_REACHED`, `ROLE_IN_USE`,
+`STANDARD_ROLE_LOCKED`, `ROLE_NOT_FOUND`, `ROLES_REQUIRE_COMPANY_WIDE_SCOPE`.
+**The frontend needs** `portal.roles.manage` in its permission list and a role
+editor; edits reach holders at their next sign-in (within 15 minutes).

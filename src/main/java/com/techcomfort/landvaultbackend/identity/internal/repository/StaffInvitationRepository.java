@@ -35,4 +35,8 @@ public interface StaffInvitationRepository extends JpaRepository<StaffInvitation
     @Query("SELECT COUNT(i) > 0 FROM StaffInvitation i WHERE i.tenantId = :tenantId AND lower(i.email) = lower(:email) "
             + "AND i.acceptedAt IS NULL AND i.revokedAt IS NULL AND i.rejectedAt IS NULL")
     boolean existsOpenFor(@Param("tenantId") UUID tenantId, @Param("email") String email);
+
+    @Query("SELECT COUNT(i) > 0 FROM StaffInvitation i WHERE i.roleId = :roleId "
+            + "AND i.acceptedAt IS NULL AND i.revokedAt IS NULL AND i.rejectedAt IS NULL")
+    boolean existsOpenForRole(@Param("roleId") UUID roleId);
 }

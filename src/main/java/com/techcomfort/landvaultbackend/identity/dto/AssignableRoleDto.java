@@ -17,8 +17,8 @@ public record AssignableRoleDto(
                 + "true only if you hold every permission it carries. A branch request is checked against "
                 + "the approver instead, so a branch manager may request a role they can't grant.")
         boolean canGrant,
-        @Schema(description = "False for the platform's standard roles. Reserved for company-made roles, "
-                + "which don't exist yet.")
+        @Schema(description = "True for a role your company made; false for HomeTrue's standard roles. "
+                + "Only custom roles can be edited or deleted.")
         boolean custom
 ) {
 }

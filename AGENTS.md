@@ -1724,7 +1724,9 @@ permissions, canGrant, custom }` — so the portal never hard-codes them.
 a branch manager may still *request* a role they can't grant.
 
 **Decided with the user (2026-10-06): companies should eventually create
-their own roles, but not yet.** Two layers, deliberately different:
+their own roles, but not yet.** *Built 2026-10-14 — see "Company-made roles"
+below; the intended shape described here is what was built, except that
+`roles` stays un-policied and the tenant filter is the service's.* Two layers, deliberately different:
 
 - **Permissions are always seeded.** A slug means something only because code
   checks it; a user-created `portal.payments.approve` that nothing checks
@@ -5570,3 +5572,51 @@ and time instead — add a link to the confirmation email if one ever exists).
   account), `.contacted`, `.declined`, `.converted`.
 - **Not built**: a CAPTCHA (the rate limit is the only bot defence; add one if
   spam appears), a decline email, and the frontend form and queue.
+
+## Company-made roles (changeset 084)
+
+Built 2026-10-14 with the user's decisions. `POST/PUT/DELETE /api/portal/roles[/{code}]`
+and `GET /api/portal/permissions`, all `portal.roles.manage` (new, Executive
+Director only) **and** a company-wide view (`ROLES_REQUIRE_COMPANY_WIDE_SCOPE`);
+`GET /api/portal/roles` now also lists the company's own roles (`custom: true`).
+`PortalRoleService`; the role rules in `StaffRoleRules` are shared, as before.
+
+- **The wall is the service's, not RLS.** `roles` is still un-policied (login
+  reads it before any scope exists). A custom role carries its company in the
+  inherited `tenant_id`, and every lookup that offers or accepts a role —
+  `RoleRepository.findAssignable`/`findAssignableByCode`, used by the list,
+  invitations, branch requests and role changes — is "standard **or** this
+  company's". Another company's role is `ROLE_NOT_INVITABLE` / 404, never a
+  403 that would confirm it exists. Proven red: without the tenant condition,
+  a rival company saw the role.
+- **Permissions stay seeded; only the bundles are the company's.** A role may
+  carry `portal.*` permissions only (`admin.*`, `client.*` and unknown codes
+  are `UNKNOWN_PERMISSION`), at least one, and **only ones the caller holds**
+  (SI-4, `CANNOT_GRANT_PERMISSION`). Editing or deleting also needs the caller
+  to hold everything the role carries now (`CANNOT_MANAGE_ROLE`), so a weaker
+  role manager can't strip a stronger role.
+- **Company-wide-only permissions need a `company` role** (decided with the
+  user). `permissions.requires_company_wide` marks `portal.branches.manage`,
+  `portal.staff.invite`, `portal.settlement.manage` and `portal.roles.manage`
+  — their routes refuse a branch-scoped caller, so in a `branch` **or
+  `either`** role they would look granted and always fail
+  (`PERMISSION_REQUIRES_COMPANY_SCOPE`). `either` is included because it can
+  be given for one branch.
+- **Codes are generated** (`custom_` + 16 hex), since `roles.code` is globally
+  unique; the company names the role. Names are unique per company ignoring
+  case (partial unique index `uq_roles_tenant_name`, plus the service check)
+  and may not repeat a standard role's name. **At most 30** per company.
+- **Scope is immutable** (`ROLE_SCOPE_IMMUTABLE`) — holders already have it
+  assigned one way. Standard roles can't be edited or deleted
+  (`STANDARD_ROLE_LOCKED`).
+- **Edits reach holders at their next sign-in or refresh**, within the access
+  token's 15 minutes — never described as instant. Permissions are replaced by
+  hard-deleting `role_permissions` rows (the unique constraint counts
+  soft-deleted ones, same reason as `user_roles`).
+- **Delete is soft and only for an unused role**: nobody holds it (deactivated
+  staff count) and no open invitation or branch request offers it
+  (`ROLE_IN_USE`). The row stays so past invitations still point at it; the
+  name becomes free again.
+- `permissions.label` (changeset 084) gives each `portal.*` permission a short
+  checkbox name. Audit: `role.created`, `role.updated` (field by field),
+  `role.deleted`; a no-op edit writes nothing.

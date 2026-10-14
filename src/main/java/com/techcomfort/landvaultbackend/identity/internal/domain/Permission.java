@@ -30,4 +30,12 @@ public class Permission extends AbstractEntity {
 
     @Column(name = "description", nullable = false)
     private String description;
+
+    /** A short name for a checkbox ("Verify buyers' payments"); set for portal.* permissions. Changeset 084. */
+    @Column(name = "label", length = 80)
+    private String label;
+
+    /** The routes behind it refuse a branch-scoped caller, so a branch-only role may not carry it. Changeset 084. */
+    @Column(name = "requires_company_wide", nullable = false)
+    private Boolean requiresCompanyWide;
 }

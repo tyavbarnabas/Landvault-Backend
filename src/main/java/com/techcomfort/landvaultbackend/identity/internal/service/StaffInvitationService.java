@@ -90,7 +90,7 @@ public class StaffInvitationService {
             throw new InvitationException.TenantNotActive();
         }
 
-        Role role = rules.assignableRole(request.roleCode());
+        Role role = rules.assignableRole(request.roleCode(), tenantId);
         rules.requireCallerHolds(role);
 
         String branchName = rules.branchFor(role, request.branchId(), tenantId);
@@ -186,7 +186,7 @@ public class StaffInvitationService {
         if (!tenancyApi.isTenantActive(tenantId)) {
             throw new InvitationException.TenantNotActive();
         }
-        Role role = rules.assignableRole(request.roleCode());
+        Role role = rules.assignableRole(request.roleCode(), tenantId);
         if (role.getScope() == RoleScope.COMPANY) {
             throw new InvitationException.ScopeMismatch(
                     "'" + role.getCode() + "' is company-wide, so only head office can invite one.");

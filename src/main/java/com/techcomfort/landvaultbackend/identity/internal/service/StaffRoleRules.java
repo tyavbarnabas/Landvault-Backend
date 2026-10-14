@@ -40,11 +40,15 @@ public class StaffRoleRules {
     private final RolePermissionRepository rolePermissionRepository;
     private final TenancyApi tenancyApi;
 
-    /** Every role a tenant may assign (scope set), with whether the caller could grant it. */
+    /**
+     * Every role this company may assign — HomeTrue's standard roles (scope
+     * set) and the company's own — with whether the caller could grant it.
+     * Never another company's: {@code roles} has no RLS, so the tenant
+     * condition in the query is the wall.
+     */
     @Transactional(readOnly = true)
-    public List<AssignableRoleDto> assignableRoles() {
-        List<Role> roles = roleRepository.findAll().stream()
-                .filter(r -> r.getScope() != null)
+    public List<AssignableRoleDto> assignableRoles(UUID tenantId) {
+        List<Role> roles = roleRepository.findAssignable(tenantId).stream()
                 .sorted(Comparator.comparing(Role::getScope).thenComparing(Role::getName))
                 .toList();
         Map<UUID, String> permissionCodes = permissionRepository.findAll().stream()
@@ -62,9 +66,9 @@ public class StaffRoleRules {
         }).toList();
     }
 
-    public Role assignableRole(String roleCode) {
-        return roleRepository.findByCode(roleCode.trim())
-                .filter(r -> r.getScope() != null)
+    /** A standard role or one of this company's own; another company's role is "not assignable", never found. */
+    public Role assignableRole(String roleCode, UUID tenantId) {
+        return roleRepository.findAssignableByCode(roleCode.trim(), tenantId)
                 .orElseThrow(() -> new InvitationException.RoleNotInvitable(roleCode));
     }
 
