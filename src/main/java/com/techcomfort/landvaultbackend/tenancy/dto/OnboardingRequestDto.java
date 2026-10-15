@@ -8,6 +8,9 @@ import java.util.UUID;
  * A company's onboarding request, as a Super Admin sees it. {@code status} is
  * {@code new}, {@code contacted}, {@code converted} or {@code declined};
  * {@code organizationId} is the tenant it became, once converted.
+ * {@code needsAttention} is computed when read; {@code attentionReason} is
+ * {@code no_contact_yet} (still {@code new} after the configured working days)
+ * or null.
  */
 public record OnboardingRequestDto(
         UUID id,
@@ -31,6 +34,8 @@ public record OnboardingRequestDto(
         Instant decidedAt,
         UUID decidedBy,
         String declineReason,
-        UUID organizationId
+        UUID organizationId,
+        boolean needsAttention,
+        String attentionReason
 ) {
 }

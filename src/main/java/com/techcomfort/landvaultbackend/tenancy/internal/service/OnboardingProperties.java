@@ -6,6 +6,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.time.ZoneId;
 
 /** {@code landvault.onboarding.*}: the public "request onboarding" form. */
 @Getter
@@ -33,4 +34,10 @@ public class OnboardingProperties {
 
     /** Bound on tracked addresses; see MarketplaceRateLimitProperties for the same reasoning. */
     private int maxTrackedClients = 100_000;
+
+    /** A {@code new} request older than this many working days (Monday to Friday) needs attention. */
+    private int attentionAfterWorkingDays = 2;
+
+    /** Whose Monday to Friday: working days are counted in this time zone. */
+    private ZoneId timeZone = ZoneId.of("Africa/Lagos");
 }

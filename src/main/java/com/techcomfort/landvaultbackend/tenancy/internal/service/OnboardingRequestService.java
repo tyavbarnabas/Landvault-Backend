@@ -18,6 +18,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -98,17 +99,32 @@ public class OnboardingRequestService {
         afterCommit("onboarding confirmation", () -> mailer.confirmation(saved.getContactEmail()));
     }
 
+    /**
+     * Newest first; with {@code attentionOnly}, only requests needing attention,
+     * waiting longest first. Filtered in the query, so pages and totals stay right.
+     */
     @Transactional(readOnly = true)
-    public PageResponse<OnboardingRequestDto> list(OnboardingRequestStatus status, Pageable pageable) {
-        var page = status == null
-                ? repository.findAllByOrderByCreatedAtDesc(pageable)
-                : repository.findByStatusOrderByCreatedAtDesc(status, pageable);
-        return PageResponses.from(page, OnboardingRequestService::toDto);
+    public PageResponse<OnboardingRequestDto> list(OnboardingRequestStatus status, boolean attentionOnly,
+                                                   Pageable pageable) {
+        Instant cutoff = attentionCutoff();
+        Page<OnboardingRequest> page;
+        if (attentionOnly) {
+            // Only a new request can need attention today.
+            page = status == null || status == OnboardingRequestStatus.NEW
+                    ? repository.findByStatusAndCreatedAtBeforeOrderByCreatedAtAsc(OnboardingRequestStatus.NEW,
+                            cutoff, pageable)
+                    : Page.empty(pageable);
+        } else {
+            page = status == null
+                    ? repository.findAllByOrderByCreatedAtDesc(pageable)
+                    : repository.findByStatusOrderByCreatedAtDesc(status, pageable);
+        }
+        return PageResponses.from(page, r -> toDto(r, cutoff));
     }
 
     @Transactional(readOnly = true)
     public OnboardingRequestDto get(UUID id) {
-        return repository.findById(id).map(OnboardingRequestService::toDto)
+        return repository.findById(id).map(this::toDto)
                 .orElseThrow(TenancyException.OnboardingRequestNotFound::new);
     }
 
@@ -192,13 +208,24 @@ public class OnboardingRequestService {
                 r.getMessage());
     }
 
-    private static OnboardingRequestDto toDto(OnboardingRequest r) {
+    private Instant attentionCutoff() {
+        return WorkingDays.before(Instant.now(), properties.getAttentionAfterWorkingDays(), properties.getTimeZone());
+    }
+
+    private OnboardingRequestDto toDto(OnboardingRequest r) {
+        return toDto(r, attentionCutoff());
+    }
+
+    private static OnboardingRequestDto toDto(OnboardingRequest r, Instant cutoff) {
+        String attentionReason = r.getStatus() == OnboardingRequestStatus.NEW && r.getCreatedAt().isBefore(cutoff)
+                ? "no_contact_yet" : null;
         return new OnboardingRequestDto(r.getId(), r.getStatus().getValue(), r.getCompanyName(), r.getRcNumber(),
                 r.getCompanyAddress(), r.getStatesOfOperation() == null ? List.of() : Arrays.asList(r.getStatesOfOperation()),
                 r.getEstimatedEstateCount(), r.getContactName(), r.getContactRole(), r.getContactEmail(),
                 r.getContactPhone(), r.getPreferredContactMethod().getValue(), r.getPreferredContactTime(),
                 r.getMessage(), r.getCreatedAt(), r.getContactedAt(), r.getContactedBy(), r.getContactNote(),
-                r.getDecidedAt(), r.getDecidedBy(), r.getDeclineReason(), r.getOrganizationId());
+                r.getDecidedAt(), r.getDecidedBy(), r.getDeclineReason(), r.getOrganizationId(),
+                attentionReason != null, attentionReason);
     }
 
     /**
