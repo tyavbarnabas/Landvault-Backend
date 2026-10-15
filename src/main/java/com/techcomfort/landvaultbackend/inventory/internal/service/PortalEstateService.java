@@ -777,6 +777,11 @@ public class PortalEstateService {
             codes.add("PUBLICATION_NO_PLOTS");
             reasons.add("Add this estate's plots before listing it — buyers need something to choose from.");
         }
+        if (!eligibility.hasPhoto()) {
+            codes.add("PUBLICATION_NO_PHOTO");
+            reasons.add("Add at least one photo of this estate before listing it — buyers want to see "
+                    + "what they're buying into.");
+        }
         if (conflicts.blocked()) {
             codes.add("PUBLICATION_CONFLICT_OUTSTANDING");
             reasons.add(conflicts.blockReason());

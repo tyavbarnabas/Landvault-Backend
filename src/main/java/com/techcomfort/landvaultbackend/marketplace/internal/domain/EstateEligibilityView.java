@@ -56,4 +56,8 @@ public class EstateEligibilityView {
     /** Changeset 063. Any live plot, whatever its status. */
     @Column(name = "has_plots")
     private boolean hasPlots;
+
+    /** Changeset 086. Estates published before it are exempt and report true. */
+    @Column(name = "has_photo")
+    private boolean hasPhoto;
 }

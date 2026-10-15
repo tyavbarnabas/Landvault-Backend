@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.core.exception.SdkException;
+import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
@@ -93,6 +94,25 @@ class ObjectStore {
             return s3.getObjectAsBytes(r -> r.bucket(bucket).key(key).range("bytes=0-" + (bytes - 1))).asByteArray();
         } catch (SdkException e) {
             throw unavailable("read", e);
+        }
+    }
+
+    /** The whole object. Only for files small enough to hold in memory (images being cleaned). */
+    byte[] readAll(String bucket, String key) {
+        try {
+            return s3.getObjectAsBytes(r -> r.bucket(bucket).key(key)).asByteArray();
+        } catch (SdkException e) {
+            throw unavailable("read", e);
+        }
+    }
+
+    /** Stores bytes the server produced itself (a cleaned image). */
+    void put(String bucket, String key, String contentType, byte[] bytes) {
+        try {
+            s3.putObject(r -> r.bucket(bucket).key(key).contentType(contentType).contentLength((long) bytes.length),
+                    RequestBody.fromBytes(bytes));
+        } catch (SdkException e) {
+            throw unavailable("write", e);
         }
     }
 

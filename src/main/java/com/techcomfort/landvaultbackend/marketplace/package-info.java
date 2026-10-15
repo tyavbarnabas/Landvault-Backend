@@ -10,7 +10,8 @@
  * Public surface: {@link com.techcomfort.landvaultbackend.marketplace.MarketplaceApi},
  * used by {@code inventory}'s publish endpoint so the publish check and the
  * public read are answered by the same SQL and cannot disagree, plus the DTOs
- * in {@code marketplace.dto}. Depends on {@code common} only.
+ * in {@code marketplace.dto}. Depends on {@code common}, and on {@code storage}
+ * for the public address of an estate's photos.
  */
 @org.springframework.modulith.ApplicationModule(
         displayName = "Marketplace"

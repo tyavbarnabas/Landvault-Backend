@@ -2041,8 +2041,9 @@ and title verification. Two columns carry the weight:
 ## The marketplace publication gate: four conditions, recorded here, enforced there
 
 An estate is publicly listable only when **every** condition holds — five
-originally, now nine (fees and refund terms from full cost disclosure, the
-boundary from BG-1, at least one plot from changeset 063; see those sections):
+originally, now ten (fees and refund terms from full cost disclosure, the
+boundary from BG-1, at least one plot from changeset 063, a photo from 086;
+see those sections):
 
 1. `estates.published` is true (the developer's own opt-in switch)
 2. the owning tenant's `verificationState` is `VERIFIED`
@@ -2057,6 +2058,8 @@ boundary from BG-1, at least one plot from changeset 063; see those sections):
    disclosure, changeset 059)
 8. **the estate has a boundary** (BG-1, changeset 061)
 9. **the estate has at least one plot**, in any status (changeset 063)
+10. **the estate has at least one photo** (changeset 086; estates already
+    published then are exempt — see "Estate photos")
 
 **Built in the publication slice** as `marketplace_estate_eligibility`
 (changeset 049) — see "The public marketplace" below.
@@ -5246,8 +5249,8 @@ request failed though the email was all that broke).
 Uploaded files — estate photos first, then KYC, tenant and title documents —
 live in **S3-compatible object storage**, never in the database or on the
 server's disk. Built in steps, decided with the user (2026-10-11): (1) this
-module, (2) estate photos (`estate_media`, replacing the never-written
-`estates.image_url`), (3) KYC and tenant documents onto the private bucket,
+module, (2) estate photos (built as `estate_photos`, replacing the
+never-written `estates.image_url` — see "Estate photos" below), (3) KYC and tenant documents onto the private bucket,
 (4) estate title documents incl. site/survey plans, (5) resized photo
 versions. **Flyers were dropped** on purpose: Nigerian flyers carry "pay into
 this account" details, the exact off-platform fraud the platform exists to
@@ -5325,8 +5328,94 @@ the two buckets, an API token limited to them, CORS for the frontend origin, a
 custom domain on the public bucket; set `STORAGE_ENDPOINT`
 (`https://<account>.r2.cloudflarestorage.com`), `STORAGE_REGION=auto`,
 `STORAGE_ACCESS_KEY`/`STORAGE_SECRET_KEY`, the bucket names and
-`STORAGE_PUBLIC_BASE_URL`. No code change. Still to do in later steps: EXIF
-stripping and takedown (step 2), resized versions (step 5).
+`STORAGE_PUBLIC_BASE_URL`. No code change. Still to do in later steps:
+resized versions (step 5). Metadata removal arrived with step 2.
+
+## Estate photos (storage step 2, changeset 086)
+
+Built 2026-10-15 from the frontend's request. Routes under
+`/api/portal/estates/{estateId}/photos` (`EstatePhotoService`): `POST /uploads`,
+`POST /{fileId}/confirm`, `GET`, `PATCH /{photoId}` (caption), `PUT /order`,
+`PUT /cover`, `DELETE /{photoId}`. Reads `portal.estates.view`, the rest
+`portal.estates.manage`, own company only, EB-2 branch rule on every write.
+JPG/PNG/WebP, **5,242,880 bytes**, **20 per estate** (checked at upload request
+*and* confirm, under the estate's row lock — `findByIdAndTenantIdForUpdate` —
+so the limit, positions and the one cover can't be raced). Audit:
+`estate.photo_added`, `estate.photo_cover_changed`, `estate.photo_deleted`;
+captions aren't audited (wording, not a change of what's shown).
+
+### Metadata is removed at confirmation, keeping only the orientation
+
+Decided with the user. Phone photos carry GPS position, camera serial and
+times; a public estate photo taken by a staff member must not publish where
+they live or were. `StorageApi.requestUpload` takes `stripImageMetadata`
+(stored as `stored_files.strip_metadata`), and `confirmUpload` then runs
+`ImageMetadataStripper` after the magic-byte check:
+
+- **Lossless**: metadata segments/chunks are cut out; the picture data is
+  copied byte for byte, never re-encoded (pixels proven identical). JPEG: every
+  APPn except JFIF, the ICC profile and Adobe APP14 (colour), plus comments and
+  anything after EOI — phones put preview images there, *with their own EXIF*.
+  PNG: `eXIf`, `tEXt`, `zTXt`, `iTXt`, `tIME`, and anything after IEND. WebP:
+  `EXIF` and `XMP ` chunks, with VP8X's flags corrected.
+- **The orientation survives** as a freshly written EXIF block holding that
+  one tag. Without it phone photos show sideways — the whole reason "remove
+  everything" was rejected.
+- **A file it can't parse is refused** (`IMAGE_UNREADABLE`, deleted, marked
+  rejected), never kept as is: a file it doesn't understand is one it can't
+  promise is clean.
+- **The cleaned file goes under a NEW key** and the original is deleted, never
+  overwritten in place: the uploader could fetch the original from the public
+  bucket before confirming, and a CDN caching it would keep serving the
+  metadata at the address that becomes the photo's. Keys stay never-reused.
+- Inventory's `confirm` carries `noRollbackFor = StorageException.UploadRejected`
+  — the storage trap one level up: storage's own `noRollbackFor` doesn't help
+  when the *caller's* transaction rolls back. Proven red.
+
+**Known gap, from step 1, not closed here**: an upload sits in the *public*
+bucket, at a random unguessable key, between the browser's PUT and confirm (or
+until the 24h sweep). Only the uploader has that address. Closing it means a
+staging bucket or prefix; worth doing before any public upload by buyers.
+
+### A photo is a publication condition; live estates exempt
+
+Decided with the user: `has_photo` in `marketplace_estate_eligibility`,
+`PUBLICATION_NO_PHOTO` (after `PUBLICATION_NO_PLOTS`, before the conflict), on
+`EstateEligibilityDto.hasPhoto`. **Unlike BG-1, existing listings are
+grandfathered** (`estates.photo_requirement_exempt`, set once for estates
+published when 086 ran — the fee-disclosure precedent): a photo is about a
+listing's quality, not an anti-fraud hole. An exempt estate reports
+`hasPhoto: true` and lists with `imageUrl: null`. Deleting a listed estate's
+last photo drops it off the feed (flag untouched, PB-5) and it returns when a
+photo is added. **TODO** in the column comment: clear the exemptions once those
+estates have photos, then drop the column and its term.
+
+### The marketplace: cover as `imageUrl`, gallery as `photos`
+
+`estates.image_url` (never set by anything) is **dropped**; `marketplace_listings`
+now selects `cover_file_id`, and the new `marketplace_estate_photos` view
+(SELECT-only, `security_barrier`, eligible estates only, `PUBLIC`+`READY`
+files only) gives the gallery. Neither exposes the file name or uploader.
+**Views carry file ids, not URLs**: `marketplace` asks `StorageApi.findAll`
+for the public addresses (new edge `marketplace → storage`), so a URL is built
+in exactly one place. Batched: two queries per page.
+
+**The eligibility rollback keeps a constant `has_photo`**: removing a view
+column needs DROP, and dropping `marketplace_estate_eligibility` would take
+every `marketplace_*` view with it. `marketplace_listings` is dropped and
+recreated (its rollback restores 066's), re-granted SELECT only.
+
+### Tests
+
+`ImageMetadataStripperTest` (pictures generated in code, metadata planted as
+phones write it; JPEG baseline and progressive, PNG, WebP). `EstatePhotosUnderRlsIT`:
+restricted role + RustFS, real uploads over HTTP. Proven red: stripping off,
+the inventory `noRollbackFor`, the publish check, and the view's photo term.
+**Every IT that publishes now needs a photo**: `testsupport.EstatePhotoFixture`
+inserts one in SQL (idempotent) for the four that do, which don't run storage.
+
+**Not built**: resized versions (step 5), plot photos, video, a takedown route
+for Super Admins.
 
 ## One password rule, wherever a password is set (`PasswordPolicy`)
 

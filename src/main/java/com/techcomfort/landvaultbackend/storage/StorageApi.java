@@ -1,5 +1,7 @@
 package com.techcomfort.landvaultbackend.storage;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -24,18 +26,24 @@ public interface StorageApi {
     /**
      * After the browser's upload: checks the file really arrived, is the size
      * promised and really is the type it claimed (by its first bytes). A file
-     * that isn't is deleted from storage and the file marked rejected.
+     * that isn't is deleted from storage and the file marked rejected. When the
+     * upload asked for it, an image's metadata is then removed: the cleaned
+     * file is stored under a new key, so its size and public URL change.
      * Confirming a ready file again returns it unchanged.
      *
      * @throws StorageException.FileNotFound      no such file, or someone else's
      * @throws StorageException.UploadNotReceived nothing has arrived yet; try again after uploading
      * @throws StorageException.UploadExpired     too late; request a new upload
-     * @throws StorageException.UploadRejected    the size or content didn't match
+     * @throws StorageException.UploadRejected    the size or content didn't match, or an image
+     *                                            to be cleaned couldn't be read
      */
     StoredFileInfo confirmUpload(UUID fileId, UUID ownerUserId);
 
     /** Any file, whoever uploaded it. For the calling module, which decides who may see it. */
     Optional<StoredFileInfo> find(UUID fileId);
+
+    /** {@link #find} for many files in one query, in no particular order; unknown ids are left out. */
+    List<StoredFileInfo> findAll(Collection<UUID> fileIds);
 
     /**
      * A link to a ready file that expires in minutes. For a private file this

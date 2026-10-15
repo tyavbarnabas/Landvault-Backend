@@ -29,7 +29,11 @@ import com.techcomfort.landvaultbackend.marketplace.dto.MarketplacePriceTierDto;
 import com.techcomfort.landvaultbackend.marketplace.dto.MarketplaceVerificationCheckDto;
 import com.techcomfort.landvaultbackend.marketplace.dto.BranchOfficeDto;
 import com.techcomfort.landvaultbackend.marketplace.dto.SellerDto;
+import com.techcomfort.landvaultbackend.marketplace.dto.MarketplacePhotoDto;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.AmenityView;
+import com.techcomfort.landvaultbackend.marketplace.internal.domain.EstatePhotoView;
+import com.techcomfort.landvaultbackend.marketplace.internal.repository.EstatePhotoViewRepository;
+import com.techcomfort.landvaultbackend.storage.StorageApi;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.ListingView;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.PlotView;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.PriceTierView;
@@ -49,6 +53,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -85,6 +91,8 @@ public class MarketplaceQueryService {
     private final RefundTermsViewRepository refundTerms;
     private final DefaultTermsViewRepository defaultTerms;
     private final PenaltyTierViewRepository penaltyTiers;
+    private final EstatePhotoViewRepository photos;
+    private final StorageApi storage;
 
     @Transactional(readOnly = true)
     public PageResponse<MarketplaceListingDto> search(ListingViewSpecifications.Filters filters, Pageable pageable) {
@@ -188,6 +196,27 @@ public class MarketplaceQueryService {
                 : penaltyTiers.findByEstateIdInOrderByMonthsLateAsc(ids).stream()
                         .collect(Collectors.groupingBy(PenaltyTierView::getEstateId));
 
+        // Photos, then every photo's URL from storage, in two more queries.
+        // Storage builds the public address, so it is built in one place.
+        Map<UUID, List<EstatePhotoView>> photosByEstate = ids.isEmpty() ? Map.of()
+                : photos.findByEstateIdInOrderByPositionAsc(ids).stream()
+                        .sorted(Comparator.comparing(EstatePhotoView::isCover).reversed())
+                        .collect(Collectors.groupingBy(EstatePhotoView::getEstateId, LinkedHashMap::new,
+                                Collectors.toList()));
+        Set<UUID> fileIds = new HashSet<>();
+        photosByEstate.values().forEach(list -> list.forEach(p -> fileIds.add(p.getFileId())));
+        page.forEach(l -> {
+            if (l.getCoverFileId() != null) {
+                fileIds.add(l.getCoverFileId());
+            }
+        });
+        Map<UUID, String> urls = new HashMap<>();
+        storage.findAll(fileIds).forEach(f -> {
+            if (f.publicUrl() != null) {
+                urls.put(f.id(), f.publicUrl());
+            }
+        });
+
         Map<ListingView, MarketplaceListingDto> result = new LinkedHashMap<>();
         for (ListingView l : page) {
             List<FeeView> estateFees = feesByEstate.getOrDefault(l.getEstateId(), List.of());
@@ -200,7 +229,7 @@ public class MarketplaceQueryService {
                     l.getState(),
                     l.getDescription(),
                     amenitiesByEstate.getOrDefault(l.getEstateId(), List.of()),
-                    l.getImageUrl(),
+                    l.getCoverFileId() == null ? null : urls.get(l.getCoverFileId()),
                     l.getTitleType() == null ? null : l.getTitleType().getValue(),
                     l.getLastVerifiedAt(),
                     estateTiers.stream()
@@ -220,7 +249,11 @@ public class MarketplaceQueryService {
                     costDisclosure(estateFees, estateTiers,
                             refundByEstate.get(l.getEstateId()),
                             defaultsByEstate.get(l.getEstateId()),
-                            penaltiesByEstate.getOrDefault(l.getEstateId(), List.of()))));
+                            penaltiesByEstate.getOrDefault(l.getEstateId(), List.of())),
+                    photosByEstate.getOrDefault(l.getEstateId(), List.of()).stream()
+                            .filter(p -> urls.containsKey(p.getFileId()))
+                            .map(p -> new MarketplacePhotoDto(urls.get(p.getFileId()), p.getCaption()))
+                            .toList()));
         }
         return result;
     }

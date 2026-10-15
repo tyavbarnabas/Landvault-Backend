@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -76,6 +77,7 @@ public class StorageService implements StorageApi {
                 .fileType(type)
                 .sizeBytes(request.sizeBytes())
                 .status(StoredFileStatus.PENDING)
+                .stripMetadata(request.stripImageMetadata() && type != FileType.PDF)
                 .uploadedBy(request.ownerUserId())
                 .uploadLinkExpiresAt(now.plus(properties.uploadLinkTtl()))
                 .build());
@@ -123,6 +125,9 @@ public class StorageService implements StorageApi {
             reject(file, "UPLOAD_CONTENT_MISMATCH",
                     "That file isn't really " + label(file.getFileType()) + ". Upload a real one.");
         }
+        if (file.isStripMetadata()) {
+            removeMetadata(file);
+        }
 
         file.setStatus(StoredFileStatus.READY);
         file.setConfirmedAt(Instant.now());
@@ -133,6 +138,12 @@ public class StorageService implements StorageApi {
     @Transactional(readOnly = true)
     public Optional<StoredFileInfo> find(UUID fileId) {
         return files.findById(fileId).map(this::toInfo);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<StoredFileInfo> findAll(Collection<UUID> fileIds) {
+        return fileIds.isEmpty() ? List.of() : files.findAllById(fileIds).stream().map(this::toInfo).toList();
     }
 
     @Override
@@ -184,6 +195,31 @@ public class StorageService implements StorageApi {
         file.setRemovedAt(Instant.now());
         files.save(file);
         return true;
+    }
+
+    /**
+     * Rewrites the image without its metadata (see {@link ImageMetadataStripper})
+     * under a NEW key, then deletes the original. Never overwritten in place: the
+     * uploader could have fetched the original from the public bucket before
+     * confirming, and a CDN that cached it would go on serving the metadata at
+     * the same address. A file that can't be parsed is refused, never kept as is.
+     */
+    private void removeMetadata(StoredFile file) {
+        byte[] original = objects.readAll(file.getBucket(), file.getObjectKey());
+        byte[] cleaned;
+        try {
+            cleaned = ImageMetadataStripper.strip(file.getFileType(), original);
+        } catch (ImageMetadataStripper.Unreadable e) {
+            reject(file, "IMAGE_UNREADABLE", "That image couldn't be read. Export it again as "
+                    + label(file.getFileType()) + " and upload it again.");
+            return;
+        }
+        String oldKey = file.getObjectKey();
+        String newKey = file.getPurpose() + "/" + UUID.randomUUID() + file.getFileType().extension();
+        objects.put(file.getBucket(), newKey, file.getFileType().mimeType(), cleaned);
+        file.setObjectKey(newKey);
+        file.setSizeBytes((long) cleaned.length);
+        objects.delete(file.getBucket(), oldKey);
     }
 
     private void reject(StoredFile file, String code, String message) {

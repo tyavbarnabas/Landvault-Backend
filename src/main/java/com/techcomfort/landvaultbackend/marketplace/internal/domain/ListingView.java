@@ -49,8 +49,9 @@ public class ListingView {
     @Column(name = "description", columnDefinition = "text")
     private String description;
 
-    @Column(name = "image_url")
-    private String imageUrl;
+    /** The cover photo's stored file (changeset 086); its URL comes from storage. Null when there is none. */
+    @Column(name = "cover_file_id")
+    private UUID coverFileId;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "intent")
