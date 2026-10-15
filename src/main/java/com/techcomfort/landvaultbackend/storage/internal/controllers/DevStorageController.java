@@ -61,7 +61,8 @@ public class DevStorageController {
     @Operation(summary = "DEV ONLY: start an upload",
             description = "Super Admin (`admin.tenants.manage`). Returns a link valid for minutes: PUT the file to "
                     + "`uploadUrl` with exactly `headers`, then confirm. The size and type are part of the link's "
-                    + "signature. Any accepted type (JPG, PNG, WebP, PDF), up to the platform limit.")
+                    + "signature. Any accepted type (JPG, PNG, WebP, PDF), up to the platform limit. `visibility` is "
+                    + "`public` or `private` (either case).")
     @PostMapping("/uploads")
     @PreAuthorize("hasAuthority('admin.tenants.manage')")
     public ResponseEntity<UploadTicket> requestUpload(@Valid @RequestBody DevUploadRequest body) {

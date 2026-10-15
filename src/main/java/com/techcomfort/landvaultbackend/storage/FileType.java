@@ -1,12 +1,17 @@
 package com.techcomfort.landvaultbackend.storage;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonValue;
+
 import java.util.Arrays;
+import java.util.Locale;
 import java.util.Optional;
 
 /**
  * The file types storage accepts, each recognised by its first bytes — what a
  * file claims to be is never trusted. Deliberately no SVG or HTML: both can
- * carry script.
+ * carry script. On the wire {@code jpeg}, {@code png}, {@code webp}, {@code pdf};
+ * either case is accepted.
  */
 public enum FileType {
     JPEG("image/jpeg", ".jpg"),
@@ -23,6 +28,21 @@ public enum FileType {
     FileType(String mimeType, String extension) {
         this.mimeType = mimeType;
         this.extension = extension;
+    }
+
+    @JsonValue
+    public String getValue() {
+        return name().toLowerCase(Locale.ROOT);
+    }
+
+    @JsonCreator
+    public static FileType fromValue(String value) {
+        for (FileType type : values()) {
+            if (type.name().equalsIgnoreCase(value)) {
+                return type;
+            }
+        }
+        throw new IllegalArgumentException("Unknown file type: " + value);
     }
 
     public String mimeType() {
