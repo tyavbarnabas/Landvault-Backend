@@ -5572,6 +5572,17 @@ and time instead — add a link to the confirmation email if one ever exists).
   account), `.contacted`, `.declined`, `.converted`.
 - **Not built**: a CAPTCHA (the rate limit is the only bot defence; add one if
   spam appears), a decline email, and the frontend form and queue.
+- **Needs attention** (2026-10-15): a `new` request older than
+  `attention-after-working-days` (2) working days is `needsAttention`,
+  `attentionReason: "no_contact_yet"`; `?attention=true` filters to them, oldest
+  first. Computed at read time, filtered **in the query** (a cutoff instant
+  from `WorkingDays`), so pages and totals stay right. Mon–Fri in
+  `time-zone` (Africa/Lagos); a weekend "now" counts from Saturday 00:00, so a
+  weekend adds nothing. **Public holidays are not known** and count as working
+  days. A full contact log (attempts, outcomes, meetings, `meeting_outcome_missing`)
+  was requested by the frontend and **deferred, not rejected** — build it when a
+  second person handles onboarding or the "did HomeTrue get in touch?" email is
+  wanted; `/contacted` stays until then.
 
 ## Company-made roles (changeset 084)
 

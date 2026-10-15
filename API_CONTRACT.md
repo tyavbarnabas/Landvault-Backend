@@ -726,8 +726,13 @@ unknown state); 429 `RATE_LIMITED` with `Retry-After` past 5 an hour per address
 Creates no account and no company.
 
 **Super Admin** (`admin.tenants.view` to read, `admin.tenants.manage` to act):
-`GET /api/admin/onboarding-requests?status=new|contacted|converted|declined`
-(paged, newest first), `GET .../{id}`, `POST .../{id}/contacted` `{ note? }`,
+`GET /api/admin/onboarding-requests?status=new|contacted|converted|declined&attention=true`
+(paged, newest first), `GET .../{id}`. Every request carries `needsAttention: boolean` and
+`attentionReason: "no_contact_yet" | null` — `no_contact_yet` when it is still `new` after
+**2 working days** (Mon–Fri, Lagos time; public holidays count as working days;
+`landvault.onboarding.attention-after-working-days`). `attention=true` lists only those,
+**waiting longest first**, and combines with `status` (any status but `new` gives an empty
+page). Computed at read time; contacting, declining or converting clears it. `POST .../{id}/contacted` `{ note? }`,
 `POST .../{id}/decline` `{ reason }` (not emailed to the company),
 `POST .../{id}/convert` with **exactly `POST /api/admin/tenants`'s body** —
 prefill it from the request; it creates the tenant and invites its director,

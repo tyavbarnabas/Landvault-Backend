@@ -242,6 +242,43 @@ class OnboardingRequestUnderRlsIT {
                 String.class).getStatusCode()).as("converting twice").isEqualTo(HttpStatus.CONFLICT);
     }
 
+    /** A request nobody has contacted for 2 working days is flagged, and the filter is in the query. */
+    @Test
+    void aNewRequestLeftTooLongNeedsAttentionUntilSomeoneContactsIt() {
+        String fresh = uniqueEmail();
+        submit(submission("Fresh Co", fresh, "[]"));
+        String stale = uniqueEmail();
+        submit(submission("Stale Co", stale, "[]"));
+        String staler = uniqueEmail();
+        submit(submission("Staler Co", staler, "[]"));
+        UUID freshId = idFor(fresh);
+        UUID staleId = idFor(stale);
+        UUID stalerId = idFor(staler);
+        // Five calendar days always holds at least two working days; six, more.
+        execute("UPDATE onboarding_requests SET created_at = now() - interval '5 days' WHERE id = '" + staleId + "'");
+        execute("UPDATE onboarding_requests SET created_at = now() - interval '6 days' WHERE id = '" + stalerId + "'");
+
+        assertThat(get(freshId).needsAttention()).isFalse();
+        assertThat(get(freshId).attentionReason()).isNull();
+        assertThat(get(staleId).needsAttention()).isTrue();
+        assertThat(get(staleId).attentionReason()).isEqualTo("no_contact_yet");
+
+        List<UUID> attention = listIds("attention=true");
+        assertThat(attention).contains(staleId, stalerId).doesNotContain(freshId);
+        assertThat(attention.indexOf(stalerId)).as("waiting longest first").isLessThan(attention.indexOf(staleId));
+        assertThat(listIds("attention=true&status=new")).contains(staleId);
+        assertThat(listIds("attention=true&status=contacted")).as("only new requests need attention").isEmpty();
+        assertThat(list("new")).filteredOn(r -> r.id().equals(staleId)).singleElement()
+                .extracting(OnboardingRequestDto::attentionReason).isEqualTo("no_contact_yet");
+
+        restTemplate.exchange("/api/admin/onboarding-requests/" + staleId + "/contacted", HttpMethod.POST,
+                entity(adminToken(), "{}"), String.class);
+        assertThat(get(staleId).needsAttention()).as("contacted clears it").isFalse();
+        assertThat(listIds("attention=true")).doesNotContain(staleId);
+        decline(stalerId, "Not a developer");
+        assertThat(get(stalerId).needsAttention()).as("closed clears it").isFalse();
+    }
+
     /** Each accepted submission sends two emails, so the form is throttled hard — and a forged header doesn't help. */
     @Test
     void theFormIsRateLimitedPerAddress() {
@@ -307,6 +344,24 @@ class OnboardingRequestUnderRlsIT {
                 OnboardingRequestPage.class);
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         return response.getBody().items();
+    }
+
+    private List<UUID> listIds(String query) {
+        ResponseEntity<OnboardingRequestPage> response = restTemplate.exchange(
+                "/api/admin/onboarding-requests?limit=500&" + query, HttpMethod.GET, entity(adminToken(), null),
+                OnboardingRequestPage.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        return response.getBody().items().stream().map(OnboardingRequestDto::id).toList();
+    }
+
+    private static void execute(String sql) {
+        try (Connection c = DriverManager.getConnection(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(),
+                POSTGRES.getPassword());
+             Statement s = c.createStatement()) {
+            s.execute(sql);
+        } catch (SQLException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private record OnboardingRequestPage(List<OnboardingRequestDto> items, long total, String cursor, boolean hasMore) {

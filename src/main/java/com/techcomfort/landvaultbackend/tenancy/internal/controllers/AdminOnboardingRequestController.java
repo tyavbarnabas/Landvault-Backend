@@ -40,17 +40,22 @@ public class AdminOnboardingRequestController {
     private final OnboardingRequestService service;
 
     @Operation(summary = "Onboarding requests",
-            description = "Requires `admin.tenants.view`. Newest first. Filter with `status`: `new`, `contacted`, "
-                    + "`converted` or `declined`.")
+            description = """
+                    Requires `admin.tenants.view`. Newest first. Filter with `status`: `new`, `contacted`, \
+                    `converted` or `declined`. Each request carries `needsAttention` and `attentionReason`: \
+                    `no_contact_yet` when it is still `new` after 2 working days (Monday to Friday, Lagos time; \
+                    public holidays count as working days). `attention=true` lists only those, **waiting \
+                    longest first**, and combines with `status`.""")
     @GetMapping
     @PreAuthorize("hasAuthority('admin.tenants.view')")
     public ResponseEntity<PageResponse<OnboardingRequestDto>> list(
             @RequestParam(required = false) String status,
+            @RequestParam(defaultValue = "false") boolean attention,
             @RequestParam(required = false) Integer limit,
             @RequestParam(required = false) String cursor) {
         OnboardingRequestStatus filter = status == null || status.isBlank()
                 ? null : OnboardingRequestStatus.fromValue(status);
-        return ResponseEntity.ok(service.list(filter, PageResponses.pageable(cursor, limit)));
+        return ResponseEntity.ok(service.list(filter, attention, PageResponses.pageable(cursor, limit)));
     }
 
     @Operation(summary = "One onboarding request", description = "Requires `admin.tenants.view`.")

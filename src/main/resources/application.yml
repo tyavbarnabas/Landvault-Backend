@@ -140,6 +140,10 @@ landvault:
     # Security parameters: each accepted submission sends two emails.
     submissions-per-window: 5
     window: 1h
+    # A `new` request older than this many working days (Mon-Fri, in time-zone)
+    # is flagged needsAttention. Public holidays are not known and count.
+    attention-after-working-days: 2
+    time-zone: Africa/Lagos
   invitations:
     delivery: ${INVITATION_DELIVERY:email}
     from-address: ${MAIL_FROM:noreply@hometrue.com.ng}
