@@ -1,5 +1,6 @@
 package com.techcomfort.landvaultbackend.inventory;
 
+import com.techcomfort.landvaultbackend.testsupport.EstatePhotoFixture;
 import com.techcomfort.landvaultbackend.checkout.dto.CreateReservationRequest;
 import com.techcomfort.landvaultbackend.checkout.dto.ReservationDto;
 import com.techcomfort.landvaultbackend.checkout.dto.TransactionDto;
@@ -1396,6 +1397,7 @@ class InventoryEditUnderRlsIT {
                         """), String.class).getStatusCode())
                 .isEqualTo(HttpStatus.OK);
 
+        execute(EstatePhotoFixture.coverPhotoSql(estate.id()));
         ResponseEntity<String> published = restTemplate.exchange(
                 "/api/portal/estates/" + estate.id() + "/publish", HttpMethod.POST,
                 entity(tenant.token(), ""), String.class);

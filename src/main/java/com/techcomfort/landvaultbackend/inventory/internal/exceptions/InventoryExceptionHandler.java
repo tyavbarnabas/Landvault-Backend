@@ -6,6 +6,7 @@ import com.techcomfort.landvaultbackend.inventory.internal.controllers.AdminEsta
 import com.techcomfort.landvaultbackend.inventory.internal.controllers.PortalEstateBoundaryController;
 import com.techcomfort.landvaultbackend.inventory.internal.controllers.PortalEstateController;
 import com.techcomfort.landvaultbackend.inventory.internal.controllers.PortalEstateDisclosureController;
+import com.techcomfort.landvaultbackend.inventory.internal.controllers.PortalEstatePhotoController;
 import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -15,13 +16,15 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.util.Map;
 import java.util.stream.Collectors;
 
 /** Turns the estate-creation exceptions into AGENTS.md's {message, code, fieldErrors} shape. */
 @RestControllerAdvice(assignableTypes = {PortalEstateController.class, PortalEstateDisclosureController.class,
-        AdminEstateStateController.class, PortalEstateBoundaryController.class, AdminBoundaryChangeController.class})
+        AdminEstateStateController.class, PortalEstateBoundaryController.class, AdminBoundaryChangeController.class,
+        PortalEstatePhotoController.class})
 public class InventoryExceptionHandler {
 
     @ExceptionHandler(InventoryException.EstateNotFound.class)
@@ -30,6 +33,16 @@ public class InventoryExceptionHandler {
         // belongs to another tenant — otherwise this enumerates estate ids.
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(ErrorResponse.of("Estate not found.", "ESTATE_NOT_FOUND"));
+    }
+
+    @ExceptionHandler(InventoryException.PhotoNotFound.class)
+    public ResponseEntity<ErrorResponse> handlePhotoNotFound(InventoryException.PhotoNotFound ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ErrorResponse.of(ex.getMessage(), "PHOTO_NOT_FOUND"));
+    }
+
+    @ExceptionHandler(InventoryException.RequestRejected.class)
+    public ResponseEntity<ErrorResponse> handleRequestRejected(InventoryException.RequestRejected ex) {
+        return ResponseEntity.badRequest().body(ErrorResponse.of(ex.getMessage(), ex.code()));
     }
 
     @ExceptionHandler(InventoryException.PublicationRefused.class)
@@ -165,6 +178,13 @@ public class InventoryExceptionHandler {
                         fe -> fe.getDefaultMessage() == null ? "invalid" : fe.getDefaultMessage(),
                         (a, b) -> a));
         return ResponseEntity.badRequest().body(ErrorResponse.fieldErrors(fieldErrors));
+    }
+
+    /** A path or query value of the wrong type, e.g. an id that isn't a UUID. */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        return ResponseEntity.badRequest()
+                .body(ErrorResponse.of("'" + ex.getName() + "' isn't a valid value.", "INVALID_PARAMETER"));
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)

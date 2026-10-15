@@ -35,6 +35,11 @@ public record EstateEligibility(
          * checkout holds. Changeset 063.
          */
         boolean hasPlots,
+        /**
+         * At least one photo (changeset 086). Estates already published when
+         * the requirement shipped are exempt and report true.
+         */
+        boolean hasPhoto,
         boolean eligible
 ) {
 }

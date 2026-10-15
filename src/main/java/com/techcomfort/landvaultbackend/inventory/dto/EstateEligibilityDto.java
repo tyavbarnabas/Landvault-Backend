@@ -54,6 +54,10 @@ public record EstateEligibilityDto(
                 + "listed; an estate with nothing set up for sale does not.")
         boolean hasPlots,
 
+        @Schema(description = "The estate has at least one photo. Estates already listed when this "
+                + "requirement arrived are exempt and report true.")
+        boolean hasPhoto,
+
         /**
          * Explicit rather than inferable. Without it a client has to reason
          * "every named condition passes but {@code eligible} is false, so it

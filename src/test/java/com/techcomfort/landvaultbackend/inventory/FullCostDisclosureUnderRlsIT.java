@@ -1,5 +1,6 @@
 package com.techcomfort.landvaultbackend.inventory;
 
+import com.techcomfort.landvaultbackend.testsupport.EstatePhotoFixture;
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.PageResponse;
 import com.techcomfort.landvaultbackend.common.geojson.GeoJsonPolygonDto;
@@ -165,8 +166,10 @@ class FullCostDisclosureUnderRlsIT {
 
         // Exactly what changeset 056's one-time UPDATE does for a row that
         // predates the rule: published, exempt, and nothing ever declared.
+        // Live then means live when 086 ran too, so it is photo-exempt as well.
         execute("UPDATE estates SET published = true, published_at = now(), "
-                + "fees_declaration_exempt = true WHERE id = '" + listing.estateId() + "'");
+                + "fees_declaration_exempt = true, photo_requirement_exempt = true "
+                + "WHERE id = '" + listing.estateId() + "'");
 
         assertThat(feedNames())
                 .as("a live listing must not go dark because a new rule arrived")
@@ -563,6 +566,7 @@ class FullCostDisclosureUnderRlsIT {
     }
 
     private ResponseEntity<String> publish(Developer developer, UUID estateId) {
+        execute(EstatePhotoFixture.coverPhotoSql(estateId)); // changeset 086: listable needs a photo
         return restTemplate.exchange("/api/portal/estates/" + estateId + "/publish", HttpMethod.POST,
                 entity(developer.token(), ""), String.class);
     }

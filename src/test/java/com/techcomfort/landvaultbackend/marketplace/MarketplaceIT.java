@@ -1,5 +1,6 @@
 package com.techcomfort.landvaultbackend.marketplace;
 
+import com.techcomfort.landvaultbackend.testsupport.EstatePhotoFixture;
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.PageResponse;
 import com.techcomfort.landvaultbackend.common.geojson.GeoJsonFeatureCollectionDto;
@@ -636,6 +637,9 @@ class MarketplaceIT {
      * which is the feature working rather than a broken fixture.
      */
     private void declareMinimumDisclosure(Tenant tenant, UUID estateId) {
+        // Changeset 086: a photo is a publication condition too. Not a disclosure,
+        // but the same "the minimum to be listable" this helper exists for.
+        execute(EstatePhotoFixture.coverPhotoSql(estateId));
         assertThat(restTemplate.exchange(
                 "/api/portal/estates/" + estateId + "/fees", HttpMethod.PUT,
                 entity(tenant.token(), "{\"fees\":[]}"), String.class).getStatusCode())

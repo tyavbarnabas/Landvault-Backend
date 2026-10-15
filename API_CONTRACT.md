@@ -143,10 +143,35 @@ Requires `portal.estates.manage`.
 | POST | `/api/portal/estates/{id}/publish` | `{ estateId, published, publishedAt, warningConflictCount, warning }` |
 | POST | `/api/portal/estates/{id}/unpublish` | same shape, `published: false` |
 
-- **Refusal is a 409** naming every failing condition in `message`; `code` is the first of `PUBLICATION_VERIFICATION_PENDING`, `PUBLICATION_ENTITLEMENT_MISSING`, `PUBLICATION_TENANT_NOT_ACTIVE`, `PUBLICATION_CONFLICT_OUTSTANDING`. A conflict refusal never identifies the other company.
+- **Refusal is a 409** naming every failing condition in `message`; `code` is the first of, in this order, `PUBLICATION_VERIFICATION_PENDING`, `PUBLICATION_ENTITLEMENT_MISSING`, `PUBLICATION_TENANT_NOT_ACTIVE`, `PUBLICATION_FEES_UNDECLARED`, `PUBLICATION_REFUND_TERMS_UNDECLARED`, `PUBLICATION_BOUNDARY_MISSING`, `PUBLICATION_NO_PLOTS`, `PUBLICATION_NO_PHOTO`, `PUBLICATION_CONFLICT_OUTSTANDING`. A conflict refusal never identifies the other company. The estate detail's `eligibility` carries each condition as its own boolean (`hasPhoto` included), so a readiness screen never has to attempt a publish to find out.
 - **A MEDIUM conflict doesn't refuse** — publishing succeeds with `warningConflictCount > 0` and a `warning` to show.
 - Publishing an estate that's already published re-checks everything. That's the way to learn why a published estate isn't on the marketplace (tenant suspended, a conflict arrived since).
 - **`published` is the developer's intent and is never cleared by the platform.** If the company stops qualifying, its listings disappear from the marketplace and return on reinstatement, with no republishing.
+
+### Estate photos (tenant portal) — **built**
+
+All under `/api/portal/estates/{estateId}/photos`. Reads need `portal.estates.view`, everything else `portal.estates.manage`, on the caller's own company's estates (another company's is a 404). Branch staff can't change a company-level estate's photos (`ESTATE_READ_ONLY_FOR_BRANCH`, 403), as for every inventory write.
+
+| Method | Path | Request | Response |
+|---|---|---|---|
+| POST | `/uploads` | `{ fileName, contentType, sizeBytes }` | 201 upload ticket `{ fileId, uploadUrl, method, headers, expiresAt }` |
+| POST | `/{fileId}/confirm` | `{ caption? }` (body optional) | 201 `EstatePhoto` (200 with the same photo if already confirmed) |
+| GET | *(the base path)* | — | `EstatePhoto[]` in order |
+| PATCH | `/{photoId}` | `{ caption? }` | `EstatePhoto` |
+| PUT | `/order` | `{ photoIds }` | `EstatePhoto[]` in the new order |
+| PUT | `/cover` | `{ photoId }` | `EstatePhoto[]` |
+| DELETE | `/{photoId}` | — | 204 |
+
+`EstatePhoto`: `{ id, url, caption, position, cover, fileType, sizeBytes, uploadedBy, uploadedAt }`.
+
+- **Limits**: JPG, PNG or WebP (`FILE_TYPE_NOT_ALLOWED`); at most **5,242,880 bytes** (`FILE_TOO_LARGE`); at most **20 photos** per estate (409 `ESTATE_PHOTO_LIMIT_REACHED`, checked at `/uploads` and again at confirm). `sizeBytes` must be exact; storage refuses any other size.
+- **Confirm removes the image's metadata** (GPS position, camera, dates), keeping only its orientation so phone photos stay upright. The cleaned file is stored under a new address, so the photo's `url` and `sizeBytes` differ from the upload's. A file that can't be read as the image it claims to be is refused (400 `IMAGE_UNREADABLE`) and deleted — upload it again. Only the person who uploaded a file can confirm it (`FILE_NOT_FOUND` otherwise).
+- **Order and cover**: a confirmed photo joins the end. The first photo becomes the cover; exactly one photo is the cover whenever there are any. `/order` needs every photo id exactly once (400 `PHOTO_ORDER_MISMATCH` otherwise — usually a stale list; reload) and doesn't move the cover. Deleting the cover passes it to the next in order.
+- **`caption`**: at most 200 characters, shown with the photo on the marketplace — use it as alt text. An empty string clears it.
+- **Delete** removes the file from storage; a copy a CDN or browser already cached may linger for a while.
+- **Photos are public**: while the estate is listed, the photos and captions are on the marketplace. The file's own name and who uploaded it never are.
+- **A photo is a publication condition** (`PUBLICATION_NO_PHOTO`). Estates that were already published when this arrived are exempt and report `hasPhoto: true`. Deleting a listed estate's last photo takes it off the marketplace; it returns, without republishing, when a photo is added.
+- Errors: `ESTATE_NOT_FOUND`, `PHOTO_NOT_FOUND` (404), plus the storage codes below.
 
 ### Public marketplace — **built, no authentication**
 
@@ -159,6 +184,7 @@ No `Authorization` header needed (or sent). Rate-limited: 429 with `Retry-After`
 | GET | `/api/marketplace/estates/{id}/geojson` | GeoJSON `FeatureCollection`, same shape as the portal's |
 
 - Only estates passing all five conditions appear. Anything else, including an id that exists but isn't eligible, is a plain **404**, with no hint that it exists.
+- **`imageUrl` is the cover photo's URL**, and `photos: [{ url, caption }]` the gallery, cover first then in the developer's order. An estate exempt from the photo requirement may have `imageUrl: null` and `photos: []`; render a placeholder.
 - `Listing` follows the frontend's shape: `priceTiers` (each with `price`, `pricePerSqm` — null for a unit-type tier — `plotsRemaining`, `availability`), `cornerPremiumPct`, `seller: { branchName, companyName }`, `verified: true`, plus `fromPrice`/`fromPriceCurrency`, `plotsRemaining`, `hasMap`, and `verificationChecks`.
 - **`verificationChecks` carry their `verificationSource`** — `manual_review` versus a registry is a real difference in front of a buyer. A check type that isn't listed was **never checked**: render it as unchecked, never as verified.
 - **Plot `availability` on the map is only `AVAILABLE` or `UNAVAILABLE`.** Reserved and sold are deliberately indistinguishable. Plots carry `priceTierId` and `isCorner` but no price: compute it from the tier and `cornerPremiumPct`, as `priceForPlot()` already does.
@@ -319,7 +345,7 @@ a scheduled sweep, not a client timer. **Holds cannot be extended.**
 | POST | `/api/documents/{id}/void` | 204 |
 | POST | `/api/documents` (batch issue) | `Document[]` |
 
-File storage: **the storage module is built (step 1)**, not yet wired to any feature. Files upload straight from the browser to object storage: the backend returns `{ fileId, uploadUrl, method: "PUT", headers, expiresAt }`; the browser sends the file to `uploadUrl` with exactly `headers` (the size and type are part of the signature); then the feature's own confirm route is called with `fileId`. Errors: `FILE_TYPE_NOT_ALLOWED`, `FILE_TOO_LARGE`, `FILE_EMPTY` (400), `UPLOAD_SIZE_MISMATCH` / `UPLOAD_CONTENT_MISMATCH` (400: what arrived wasn't what was promised; deleted, start again), `UPLOAD_NOT_RECEIVED` / `UPLOAD_EXPIRED` / `FILE_NOT_READY` (409), `FILE_NOT_FOUND` (404), `STORAGE_UNAVAILABLE` (503, retry). Public files come back with a `publicUrl`; private ones only through short-lived links. Accepted: JPG, PNG, WebP, PDF (never SVG). A stored file's `visibility` is `public` | `private` and its `fileType` `jpeg` | `png` | `webp` | `pdf` — lowercase like every other value in this API (`status` already was); requests accept either case. Estate photos (step 2) are the first feature to use it; `Document` downloads come with step 3/4.
+File storage: **the storage module is built (step 1)**; estate photos (step 2) are the first feature using it — see "Estate photos" above. Files upload straight from the browser to object storage: the backend returns `{ fileId, uploadUrl, method: "PUT", headers, expiresAt }`; the browser sends the file to `uploadUrl` with exactly `headers` (the size and type are part of the signature); then the feature's own confirm route is called with `fileId`. Errors: `FILE_TYPE_NOT_ALLOWED`, `FILE_TOO_LARGE`, `FILE_EMPTY` (400), `UPLOAD_SIZE_MISMATCH` / `UPLOAD_CONTENT_MISMATCH` (400: what arrived wasn't what was promised; deleted, start again), `UPLOAD_NOT_RECEIVED` / `UPLOAD_EXPIRED` / `FILE_NOT_READY` (409), `FILE_NOT_FOUND` (404), `STORAGE_UNAVAILABLE` (503, retry). Public files come back with a `publicUrl`; private ones only through short-lived links. Accepted: JPG, PNG, WebP, PDF (never SVG). A stored file's `visibility` is `public` | `private` and its `fileType` `jpeg` | `png` | `webp` | `pdf` — lowercase like every other value in this API (`status` already was); requests accept either case. `IMAGE_UNREADABLE` (400) is added for features that ask for metadata removal (estate photos). `Document` downloads come with step 3/4.
 
 ## KYC — `kycService.ts` — **built**
 | Method | Path | Request | Response |

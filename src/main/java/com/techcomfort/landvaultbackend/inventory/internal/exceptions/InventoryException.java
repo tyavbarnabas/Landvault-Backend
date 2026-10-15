@@ -11,6 +11,35 @@ public abstract class InventoryException extends RuntimeException {
     public static class EstateNotFound extends InventoryException {
     }
 
+    /** No photo with that id on this estate (changeset 086). */
+    public static class PhotoNotFound extends InventoryException {
+        @Override
+        public String getMessage() {
+            return "Photo not found.";
+        }
+    }
+
+    /** A request that breaks a rule of its own, with a code naming the rule (400). */
+    public static class RequestRejected extends InventoryException {
+
+        private final String code;
+        private final String detail;
+
+        public RequestRejected(String code, String detail) {
+            this.code = code;
+            this.detail = detail;
+        }
+
+        public String code() {
+            return code;
+        }
+
+        @Override
+        public String getMessage() {
+            return detail;
+        }
+    }
+
     /** A block, tier or plot referenced a row that isn't part of this estate. */
     public static class RelatedRecordNotFound extends InventoryException {
 

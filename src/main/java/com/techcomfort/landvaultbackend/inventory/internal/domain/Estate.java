@@ -127,9 +127,6 @@ public class Estate extends AbstractEntity {
     @Column(name = "published_at")
     private Instant publishedAt;
 
-    @Column(name = "image_url")
-    private String imageUrl;
-
     /**
      * When the fee schedule was last declared — the sixth publication
      * condition reads this, not a count of fee rows. Declaring an

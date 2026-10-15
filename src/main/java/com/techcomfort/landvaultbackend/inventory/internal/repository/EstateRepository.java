@@ -1,8 +1,10 @@
 package com.techcomfort.landvaultbackend.inventory.internal.repository;
 
 import com.techcomfort.landvaultbackend.inventory.internal.domain.Estate;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -20,6 +22,14 @@ public interface EstateRepository extends JpaRepository<Estate, UUID>, JpaSpecif
     boolean existsByTenantIdAndSlugIgnoreCaseAndIdNot(UUID tenantId, String slug, UUID id);
 
     Optional<Estate> findByIdAndTenantId(UUID id, UUID tenantId);
+
+    /**
+     * The estate row locked for the rest of the transaction, so changes to
+     * its photos (the count limit, positions, the one cover) serialize.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT e FROM Estate e WHERE e.id = :id AND e.tenantId = :tenantId")
+    Optional<Estate> findByIdAndTenantIdForUpdate(@Param("id") UUID id, @Param("tenantId") UUID tenantId);
 
     /**
      * Footprint areas in square metres for a whole page of estates in one

@@ -1,0 +1,472 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        ESTATE PHOTOS (file storage, step 2). See AGENTS.md, "Estate photos".
+
+        A developer's photos of an estate, in an order they choose, one of them
+        the cover. The bytes live in the public bucket (stored_files, 081); a
+        row here points at one. On the marketplace the cover becomes the
+        listing's image, and the photos the gallery. estates.image_url, which
+        nothing ever set, is dropped: the cover photo is the one source.
+
+        Decided with the user (2026-10-15):
+        - an estate needs at least one photo to be listed, as a new condition
+          in marketplace_estate_eligibility, with estates already published
+          exempt (photo_requirement_exempt, the fee-disclosure precedent, 056);
+        - every photo's metadata (GPS, camera, dates) is removed when the
+          upload is confirmed, keeping only its orientation (stored_files.strip_metadata).
+    -->
+
+    <changeSet id="086-stored-files-strip-metadata" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE stored_files ADD COLUMN strip_metadata boolean NOT NULL DEFAULT false;
+            COMMENT ON COLUMN stored_files.strip_metadata IS
+                'The uploading module asked for an image''s metadata (GPS, camera, dates) to be removed at confirmation, keeping only its orientation. The cleaned file replaces the original under a new key.';
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE stored_files DROP COLUMN strip_metadata;
+        ]]></rollback>
+    </changeSet>
+
+    <!--
+        Soft-deleted, never hard-deleted: a removed photo's row stays (its file
+        is deleted from storage and its stored_files row says so). Positions
+        are kept contiguous from 0 by the service; deliberately no unique index
+        on them, which would make every reorder a dance around the constraint.
+        At most one cover per estate, by index. RLS-policied in the same
+        changeset, like every inventory table (044's shape).
+    -->
+    <changeSet id="086-create-estate-photos" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE estate_photos (
+                id          uuid NOT NULL PRIMARY KEY,
+                tenant_id   uuid NOT NULL REFERENCES organizations (id),
+                branch_id   uuid REFERENCES branches (id),
+                created_at  timestamp(6) with time zone NOT NULL,
+                updated_at  timestamp(6) with time zone,
+                created_by  varchar(255),
+                updated_by  varchar(255),
+                deleted     boolean NOT NULL,
+
+                estate_id   uuid NOT NULL REFERENCES estates (id),
+                file_id     uuid NOT NULL REFERENCES stored_files (id),
+                caption     varchar(200),
+                position    integer NOT NULL,
+                cover       boolean NOT NULL,
+
+                CONSTRAINT chk_estate_photos_position CHECK (position >= 0)
+            );
+            CREATE INDEX idx_estate_photos_estate ON estate_photos (estate_id, position) WHERE deleted = false;
+            CREATE UNIQUE INDEX uq_estate_photos_file ON estate_photos (file_id) WHERE deleted = false;
+            CREATE UNIQUE INDEX uq_estate_photos_one_cover ON estate_photos (estate_id) WHERE cover AND deleted = false;
+            REVOKE DELETE, TRUNCATE ON estate_photos FROM ${appDbUsername};
+            COMMENT ON TABLE estate_photos IS
+                'An estate''s photos, in order, one the cover. Public: shown on the marketplace while the estate is listed. Soft-deleted only. See AGENTS.md, "Estate photos".';
+            COMMENT ON COLUMN estate_photos.caption IS
+                'Shown with the photo and used as its alt text. Published.';
+
+            ALTER TABLE estate_photos ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE estate_photos FORCE ROW LEVEL SECURITY;
+            CREATE POLICY estate_photos_platform ON estate_photos FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY estate_photos_tenant ON estate_photos FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                );
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE estate_photos;
+        ]]></rollback>
+    </changeSet>
+
+    <!--
+        Grandfathering, applied once, exactly as 056 did for fees: estates
+        already on the marketplace keep their listing. Decided with the user.
+        New publications get no exemption.
+    -->
+    <changeSet id="086-photo-requirement-exemption" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE estates ADD COLUMN photo_requirement_exempt boolean NOT NULL DEFAULT false;
+            UPDATE estates SET photo_requirement_exempt = true
+             WHERE published = true AND deleted = false;
+            COMMENT ON COLUMN estates.photo_requirement_exempt IS
+                'One-time grandfathering: true for estates already published when the photo requirement shipped (changeset 086). They keep their listing without a photo. TODO: once they have photos, clear the flag and drop this column and its term in marketplace_estate_eligibility.';
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE estates DROP COLUMN photo_requirement_exempt;
+        ]]></rollback>
+    </changeSet>
+
+    <!--
+        The tenth condition: at least one photo. has_photo appended at the end,
+        so CREATE OR REPLACE is permitted (as 059/061/063). Everything else is
+        063's definition, unchanged.
+    -->
+    <changeSet id="086-eligibility-requires-a-photo" author="landvault">
+        <sql><![CDATA[
+            CREATE OR REPLACE VIEW marketplace_estate_eligibility WITH (security_barrier = true) AS
+            SELECT
+                e.id                                   AS estate_id,
+                e.published                            AS published,
+                (o.verification_state = 'VERIFIED')    AS tenant_verified,
+                o.marketplace_publishing               AS tenant_entitled,
+                (o.status = 'ACTIVE')                  AS tenant_active,
+                -- CASE short-circuits, so the conflict function — the only
+                -- expensive term — runs last, and only for estates that
+                -- already pass every cheap condition.
+                CASE
+                    WHEN e.published
+                     AND o.verification_state = 'VERIFIED'
+                     AND o.marketplace_publishing
+                     AND o.status = 'ACTIVE'
+                     AND (e.fees_declared_at IS NOT NULL OR e.fees_declaration_exempt)
+                     AND (e.fees_declaration_exempt OR EXISTS (
+                            SELECT 1 FROM estate_refund_terms rt
+                             WHERE rt.estate_id = e.id AND rt.deleted = false))
+                     AND e.footprint IS NOT NULL
+                     AND EXISTS (SELECT 1 FROM plots p WHERE p.estate_id = e.id AND p.deleted = false)
+                     AND (e.photo_requirement_exempt OR EXISTS (
+                            SELECT 1 FROM estate_photos ph
+                             WHERE ph.estate_id = e.id AND ph.deleted = false))
+                    THEN (SELECT s.blocking_count FROM landvault_estate_conflict_summary(e.id) s) = 0
+                    ELSE false
+                END                                    AS eligible,
+                -- Declaring an EMPTY schedule counts: an estate with no
+                -- extra charges may list, but by saying so. Silence does
+                -- not, and the two are different facts.
+                (e.fees_declared_at IS NOT NULL OR e.fees_declaration_exempt) AS fees_declared,
+                -- RF-4: a developer who will not state what a buyer gets
+                -- back does not get a listing. Its own boolean beside the
+                -- others so the publish endpoint can name which one failed.
+                (e.fees_declaration_exempt OR EXISTS (
+                        SELECT 1 FROM estate_refund_terms rt
+                         WHERE rt.estate_id = e.id AND rt.deleted = false)) AS refund_terms_declared,
+                -- BG-1: an estate with no boundary is invisible to conflict
+                -- detection, so listing without one would be a way around
+                -- it. No exemption for estates already published: an
+                -- exempt boundary-less listing is exactly the hole.
+                (e.footprint IS NOT NULL)              AS has_boundary,
+                -- An estate with nothing to sell is not a listing. ANY live
+                -- plot counts, whatever its status: requiring an AVAILABLE
+                -- one would pull a sold-out estate off the marketplace and
+                -- make one flicker during checkout holds, revealing exactly
+                -- the sales velocity marketplace_plots collapses statuses to
+                -- hide.
+                EXISTS (SELECT 1 FROM plots p WHERE p.estate_id = e.id AND p.deleted = false) AS has_plots,
+                -- A buyer should see what they are buying into. Estates
+                -- already published when this shipped are exempt and report
+                -- true, like fees_declared.
+                (e.photo_requirement_exempt OR EXISTS (
+                        SELECT 1 FROM estate_photos ph
+                         WHERE ph.estate_id = e.id AND ph.deleted = false)) AS has_photo
+            FROM estates e
+            JOIN organizations o ON o.id = e.tenant_id AND o.deleted = false
+            WHERE e.deleted = false;
+        ]]></sql>
+        <rollback>
+            <!-- 063's condition, restored. A view's column can't be removed by
+                 CREATE OR REPLACE, and dropping the view would take every
+                 marketplace_* view built on it with it, so has_photo stays as a
+                 constant true. It references neither estate_photos nor
+                 photo_requirement_exempt, which the rollbacks after this drop. -->
+            <![CDATA[
+            CREATE OR REPLACE VIEW marketplace_estate_eligibility WITH (security_barrier = true) AS
+            SELECT
+                e.id                                   AS estate_id,
+                e.published                            AS published,
+                (o.verification_state = 'VERIFIED')    AS tenant_verified,
+                o.marketplace_publishing               AS tenant_entitled,
+                (o.status = 'ACTIVE')                  AS tenant_active,
+                -- CASE short-circuits, so the conflict function — the only
+                -- expensive term — runs last, and only for estates that
+                -- already pass every cheap condition.
+                CASE
+                    WHEN e.published
+                     AND o.verification_state = 'VERIFIED'
+                     AND o.marketplace_publishing
+                     AND o.status = 'ACTIVE'
+                     AND (e.fees_declared_at IS NOT NULL OR e.fees_declaration_exempt)
+                     AND (e.fees_declaration_exempt OR EXISTS (
+                            SELECT 1 FROM estate_refund_terms rt
+                             WHERE rt.estate_id = e.id AND rt.deleted = false))
+                     AND e.footprint IS NOT NULL
+                     AND EXISTS (SELECT 1 FROM plots p WHERE p.estate_id = e.id AND p.deleted = false)
+                    THEN (SELECT s.blocking_count FROM landvault_estate_conflict_summary(e.id) s) = 0
+                    ELSE false
+                END                                    AS eligible,
+                -- Declaring an EMPTY schedule counts: an estate with no
+                -- extra charges may list, but by saying so. Silence does
+                -- not, and the two are different facts.
+                (e.fees_declared_at IS NOT NULL OR e.fees_declaration_exempt) AS fees_declared,
+                -- RF-4: a developer who will not state what a buyer gets
+                -- back does not get a listing. Its own boolean beside the
+                -- others so the publish endpoint can name which one failed.
+                (e.fees_declaration_exempt OR EXISTS (
+                        SELECT 1 FROM estate_refund_terms rt
+                         WHERE rt.estate_id = e.id AND rt.deleted = false)) AS refund_terms_declared,
+                -- BG-1: an estate with no boundary is invisible to conflict
+                -- detection, so listing without one would be a way around
+                -- it. No exemption for estates already published: an
+                -- exempt boundary-less listing is exactly the hole.
+                (e.footprint IS NOT NULL)              AS has_boundary,
+                -- An estate with nothing to sell is not a listing. ANY live
+                -- plot counts, whatever its status: requiring an AVAILABLE
+                -- one would pull a sold-out estate off the marketplace and
+                -- make one flicker during checkout holds, revealing exactly
+                -- the sales velocity marketplace_plots collapses statuses to
+                -- hide.
+                EXISTS (SELECT 1 FROM plots p WHERE p.estate_id = e.id AND p.deleted = false) AS has_plots,
+                true                                   AS has_photo
+            FROM estates e
+            JOIN organizations o ON o.id = e.tenant_id AND o.deleted = false
+            WHERE e.deleted = false;
+            ]]>
+        </rollback>
+    </changeSet>
+
+    <!--
+        The listing's image becomes its cover photo. Dropped and recreated
+        rather than replaced, because image_url is removed (CREATE OR REPLACE
+        can only append). ADDING A COLUMN TO A marketplace_* VIEW IS PUBLISHING
+        IT: cover_file_id is a stored file id, not a path, and the file is
+        public by design. Dropping a view drops its grants: SELECT only again.
+    -->
+    <changeSet id="086-marketplace-listings-cover-photo" author="landvault">
+        <sql splitStatements="false"><![CDATA[
+            DROP VIEW marketplace_listings;
+            CREATE VIEW marketplace_listings WITH (security_barrier = true) AS
+            SELECT
+                e.id                     AS estate_id,
+                e.name                   AS name,
+                e.area                   AS area,
+                e.city                   AS city,
+                e.state                  AS state,
+                e.description            AS description,
+                e.intent                 AS intent,
+                e.corner_premium_pct     AS corner_premium_pct,
+                e.published_at           AS published_at,
+                e.footprint              AS footprint,
+                t.title_type             AS title_type,
+                b.name                   AS branch_name,
+                COALESCE(NULLIF(btrim(o.trading_name), ''), o.registered_name) AS company_name,
+                v.last_verified_at       AS last_verified_at,
+                ft.price                 AS from_price,
+                ft.currency              AS from_price_currency,
+                ft.price_per_sqm         AS from_price_per_sqm,
+                sz.min_size_sqm          AS min_size_sqm,
+                sz.max_size_sqm          AS max_size_sqm,
+                COALESCE(pr.plots_remaining, 0) AS plots_remaining,
+                -- The branch office, so a buyer can visit or call the people
+                -- they would actually deal with. Published deliberately: the
+                -- portal tells developers these appear on their listings.
+                b.street                 AS branch_street,
+                b.city                   AS branch_city,
+                b.state                  AS branch_state,
+                b.phone                  AS branch_phone,
+                b.email                  AS branch_email,
+                -- The cover photo's stored file. The marketplace module asks
+                -- storage for its public URL, so the address is built in one
+                -- place. Null when the estate has no photo (an exempt one).
+                cv.file_id               AS cover_file_id
+            FROM marketplace_estate_eligibility el
+            JOIN estates e       ON e.id = el.estate_id
+            JOIN organizations o ON o.id = e.tenant_id
+            LEFT JOIN branches b      ON b.id = e.branch_id AND b.deleted = false
+            LEFT JOIN estate_titles t ON t.estate_id = e.id AND t.deleted = false
+            -- The most recent check that actually came back VERIFIED. Never a
+            -- pending or not_checked one: absent verification stays absent.
+            LEFT JOIN LATERAL (
+                SELECT max(c.last_verified_at) AS last_verified_at
+                FROM estate_verification_checks c
+                WHERE c.estate_id = e.id AND c.deleted = false AND c.status = 'VERIFIED'
+            ) v ON true
+            -- "From" price: the cheapest tier that still has a plot for sale,
+            -- falling back to the cheapest tier overall when everything is
+            -- sold (the frontend's fromPrice() rule). The tier's own base
+            -- price: a corner premium only ever raises it.
+            LEFT JOIN LATERAL (
+                SELECT pt.price, pt.currency,
+                       CASE WHEN pt.tier_type = 'LAND_SIZE' AND pt.size_sqm > 0
+                            THEN round(pt.price / pt.size_sqm, 2) END AS price_per_sqm
+                FROM price_tiers pt
+                WHERE pt.estate_id = e.id AND pt.deleted = false
+                ORDER BY EXISTS (
+                            SELECT 1 FROM plots p
+                            WHERE p.price_tier_id = pt.id AND p.deleted = false
+                              AND p.status IN ('AVAILABLE_DEV', 'AVAILABLE_INV')
+                         ) DESC,
+                         pt.price ASC
+                LIMIT 1
+            ) ft ON true
+            LEFT JOIN LATERAL (
+                SELECT min(pt.size_sqm) AS min_size_sqm, max(pt.size_sqm) AS max_size_sqm
+                FROM price_tiers pt
+                WHERE pt.estate_id = e.id AND pt.deleted = false AND pt.tier_type = 'LAND_SIZE'
+            ) sz ON true
+            LEFT JOIN LATERAL (
+                SELECT count(*) AS plots_remaining
+                FROM plots p
+                WHERE p.estate_id = e.id AND p.deleted = false
+                  AND p.status IN ('AVAILABLE_DEV', 'AVAILABLE_INV')
+            ) pr ON true
+            LEFT JOIN LATERAL (
+                SELECT ph.file_id
+                FROM estate_photos ph
+                JOIN stored_files f ON f.id = ph.file_id
+                WHERE ph.estate_id = e.id AND ph.deleted = false AND ph.cover
+                  AND f.visibility = 'PUBLIC' AND f.status = 'READY'
+            ) cv ON true
+            WHERE el.eligible;
+            REVOKE ALL ON marketplace_listings FROM ${appDbUsername};
+            GRANT SELECT ON marketplace_listings TO ${appDbUsername};
+        ]]></sql>
+        <rollback>
+            <sql splitStatements="false"><![CDATA[
+            -- 066's definition. Runs after image_url has been re-added.
+            DROP VIEW marketplace_listings;
+            CREATE VIEW marketplace_listings WITH (security_barrier = true) AS
+            SELECT
+                e.id                     AS estate_id,
+                e.name                   AS name,
+                e.area                   AS area,
+                e.city                   AS city,
+                e.state                  AS state,
+                e.description            AS description,
+                e.image_url              AS image_url,
+                e.intent                 AS intent,
+                e.corner_premium_pct     AS corner_premium_pct,
+                e.published_at           AS published_at,
+                e.footprint              AS footprint,
+                t.title_type             AS title_type,
+                b.name                   AS branch_name,
+                COALESCE(NULLIF(btrim(o.trading_name), ''), o.registered_name) AS company_name,
+                v.last_verified_at       AS last_verified_at,
+                ft.price                 AS from_price,
+                ft.currency              AS from_price_currency,
+                ft.price_per_sqm         AS from_price_per_sqm,
+                sz.min_size_sqm          AS min_size_sqm,
+                sz.max_size_sqm          AS max_size_sqm,
+                COALESCE(pr.plots_remaining, 0) AS plots_remaining,
+                -- The branch office, so a buyer can visit or call the people
+                -- they would actually deal with. Published deliberately: the
+                -- portal tells developers these appear on their listings.
+                b.street                 AS branch_street,
+                b.city                   AS branch_city,
+                b.state                  AS branch_state,
+                b.phone                  AS branch_phone,
+                b.email                  AS branch_email
+            FROM marketplace_estate_eligibility el
+            JOIN estates e       ON e.id = el.estate_id
+            JOIN organizations o ON o.id = e.tenant_id
+            LEFT JOIN branches b      ON b.id = e.branch_id AND b.deleted = false
+            LEFT JOIN estate_titles t ON t.estate_id = e.id AND t.deleted = false
+            -- The most recent check that actually came back VERIFIED. Never a
+            -- pending or not_checked one: absent verification stays absent.
+            LEFT JOIN LATERAL (
+                SELECT max(c.last_verified_at) AS last_verified_at
+                FROM estate_verification_checks c
+                WHERE c.estate_id = e.id AND c.deleted = false AND c.status = 'VERIFIED'
+            ) v ON true
+            -- "From" price: the cheapest tier that still has a plot for sale,
+            -- falling back to the cheapest tier overall when everything is
+            -- sold (the frontend's fromPrice() rule). The tier's own base
+            -- price: a corner premium only ever raises it.
+            LEFT JOIN LATERAL (
+                SELECT pt.price, pt.currency,
+                       CASE WHEN pt.tier_type = 'LAND_SIZE' AND pt.size_sqm > 0
+                            THEN round(pt.price / pt.size_sqm, 2) END AS price_per_sqm
+                FROM price_tiers pt
+                WHERE pt.estate_id = e.id AND pt.deleted = false
+                ORDER BY EXISTS (
+                            SELECT 1 FROM plots p
+                            WHERE p.price_tier_id = pt.id AND p.deleted = false
+                              AND p.status IN ('AVAILABLE_DEV', 'AVAILABLE_INV')
+                         ) DESC,
+                         pt.price ASC
+                LIMIT 1
+            ) ft ON true
+            LEFT JOIN LATERAL (
+                SELECT min(pt.size_sqm) AS min_size_sqm, max(pt.size_sqm) AS max_size_sqm
+                FROM price_tiers pt
+                WHERE pt.estate_id = e.id AND pt.deleted = false AND pt.tier_type = 'LAND_SIZE'
+            ) sz ON true
+            LEFT JOIN LATERAL (
+                SELECT count(*) AS plots_remaining
+                FROM plots p
+                WHERE p.estate_id = e.id AND p.deleted = false
+                  AND p.status IN ('AVAILABLE_DEV', 'AVAILABLE_INV')
+            ) pr ON true
+            WHERE el.eligible;
+            REVOKE ALL ON marketplace_listings FROM ${appDbUsername};
+            GRANT SELECT ON marketplace_listings TO ${appDbUsername};
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
+    <!--
+        A listed estate's photos, for the buyer's gallery. Only what is meant
+        to be seen: the caption the developer wrote and the file to show.
+        Never the uploader, the original file name (people's file names say
+        things), or anything about an estate that isn't eligible.
+    -->
+    <changeSet id="086-marketplace-estate-photos-view" author="landvault">
+        <sql splitStatements="false"><![CDATA[
+            CREATE VIEW marketplace_estate_photos WITH (security_barrier = true) AS
+            SELECT
+                ph.id          AS photo_id,
+                ph.estate_id   AS estate_id,
+                ph.file_id     AS file_id,
+                ph.caption     AS caption,
+                ph.position    AS position,
+                ph.cover       AS cover
+            FROM marketplace_estate_eligibility el
+            JOIN estate_photos ph ON ph.estate_id = el.estate_id AND ph.deleted = false
+            JOIN stored_files f   ON f.id = ph.file_id AND f.visibility = 'PUBLIC' AND f.status = 'READY'
+            WHERE el.eligible;
+            REVOKE ALL ON marketplace_estate_photos FROM ${appDbUsername};
+            GRANT SELECT ON marketplace_estate_photos TO ${appDbUsername};
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP VIEW marketplace_estate_photos;
+        ]]></rollback>
+    </changeSet>
+
+    <!--
+        Nothing ever set image_url. With the cover photo as the listing's image,
+        keeping it would be a second source of truth waiting to disagree.
+    -->
+    <changeSet id="086-drop-estates-image-url" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE estates DROP COLUMN image_url;
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE estates ADD COLUMN image_url varchar(255);
+        ]]></rollback>
+    </changeSet>
+
+</databaseChangeLog>

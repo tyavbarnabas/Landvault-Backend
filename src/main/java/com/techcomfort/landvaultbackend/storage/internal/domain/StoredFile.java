@@ -63,6 +63,10 @@ public class StoredFile extends AbstractEntity {
     @Column(name = "upload_link_expires_at", nullable = false)
     private Instant uploadLinkExpiresAt;
 
+    /** Remove an image's metadata at confirmation (changeset 086). */
+    @Column(name = "strip_metadata", nullable = false)
+    private boolean stripMetadata;
+
     @Column(name = "confirmed_at")
     private Instant confirmedAt;
 

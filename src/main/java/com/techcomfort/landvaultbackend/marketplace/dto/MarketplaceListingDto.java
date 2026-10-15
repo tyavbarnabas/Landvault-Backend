@@ -29,6 +29,7 @@ public record MarketplaceListingDto(
         String state,
         String description,
         List<String> amenities,
+        /** The cover photo's URL, or null when the estate has none (one listed before photos were required). */
         String imageUrl,
         String titleType,
         Instant lastVerifiedDate,
@@ -51,6 +52,9 @@ public record MarketplaceListingDto(
          * than two. Null only for a grandfathered estate that predates the
          * requirement.
          */
-        CostDisclosureDto costDisclosure
+        CostDisclosureDto costDisclosure,
+
+        /** Every photo, the cover first, then in the developer's order. Empty when there are none. */
+        List<MarketplacePhotoDto> photos
 ) {
 }
