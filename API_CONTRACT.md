@@ -739,13 +739,19 @@ admin queue with a "convert" action that opens the tenant wizard prefilled.
 
 ## Company-made roles — **built**
 
-`GET /api/portal/permissions` → `[{ code, label, description, requiresCompanyWide, held }]`
-(the role editor's checkboxes). `POST /api/portal/roles` `{ name, description?,
+`GET /api/portal/permissions` → `[{ code, label, description, requiresCompanyWide, held,
+group, groupLabel }]` (the role editor's checkboxes), ordered by group and then within the
+group — both orders HomeTrue's (changeset 085). `group`/`groupLabel` are always present
+(the database refuses an ungrouped `portal.*` permission). Groups today, in order:
+`estates` "Estates", `finance` "Money", `branches` "Branches", `staff` "Staff and roles".
+`permissions` in a create/edit body is capped at 100 entries — a request bound kept above
+the catalogue size by a test, not a business limit. `POST /api/portal/roles` `{ name, description?,
 scope: "company"|"branch"|"either", permissions: string[] }` → 201 the role
 (`AssignableRoleDto`, `custom: true`, a generated `code` like `custom_9f…`).
 `PUT /api/portal/roles/{code}` `{ name?, description?, permissions? }` (scope can't
-change), `DELETE /api/portal/roles/{code}` → 204. All `portal.roles.manage`
-(Executive Director) from a company-wide view. `GET /api/portal/roles` now
+change; don't send it), `DELETE /api/portal/roles/{code}` → 204. All `portal.roles.manage`
+(Executive Director); create, edit and delete also need a company-wide view (the two
+GETs don't). `GET /api/portal/roles` now
 includes the company's own roles, and invitations / role changes take their
 `code` like any other. Codes: `UNKNOWN_PERMISSION`, `CANNOT_GRANT_PERMISSION`,
 `CANNOT_MANAGE_ROLE`, `PERMISSION_REQUIRES_COMPANY_SCOPE`, `INVALID_ROLE_SCOPE`,

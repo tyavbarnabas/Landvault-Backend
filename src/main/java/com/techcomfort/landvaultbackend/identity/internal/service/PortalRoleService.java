@@ -9,10 +9,12 @@ import com.techcomfort.landvaultbackend.identity.dto.CreateRoleRequest;
 import com.techcomfort.landvaultbackend.identity.dto.PortalPermissionDto;
 import com.techcomfort.landvaultbackend.identity.dto.UpdateRoleRequest;
 import com.techcomfort.landvaultbackend.identity.internal.domain.Permission;
+import com.techcomfort.landvaultbackend.identity.internal.domain.PermissionGroup;
 import com.techcomfort.landvaultbackend.identity.internal.domain.Role;
 import com.techcomfort.landvaultbackend.identity.internal.domain.RolePermission;
 import com.techcomfort.landvaultbackend.identity.internal.enums.RoleScope;
 import com.techcomfort.landvaultbackend.identity.internal.exceptions.RoleException;
+import com.techcomfort.landvaultbackend.identity.internal.repository.PermissionGroupRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.PermissionRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.RolePermissionRepository;
 import com.techcomfort.landvaultbackend.identity.internal.repository.RoleRepository;
@@ -50,19 +52,28 @@ public class PortalRoleService {
 
     private final RoleRepository roleRepository;
     private final PermissionRepository permissionRepository;
+    private final PermissionGroupRepository permissionGroupRepository;
     private final RolePermissionRepository rolePermissionRepository;
     private final UserRoleRepository userRoleRepository;
     private final StaffInvitationRepository invitationRepository;
     private final StaffRoleRules rules;
     private final AuditApi auditApi;
 
-    /** The permissions a company role may carry, and which of them the caller holds. */
+    /**
+     * The permissions a company role may carry, and which of them the caller holds, ordered by group then
+     * within it. The database requires every portal permission to have a group (changeset 085).
+     */
     @Transactional(readOnly = true)
     public List<PortalPermissionDto> permissions() {
         Set<String> held = StaffRoleRules.heldAuthorities();
+        Map<String, PermissionGroup> groups = permissionGroupRepository.findAll().stream()
+                .collect(Collectors.toMap(PermissionGroup::getCode, Function.identity()));
         return permissionRepository.findByCodeStartingWithOrderByCodeAsc(PORTAL_PREFIX).stream()
+                .sorted(Comparator.<Permission>comparingInt(p -> groups.get(p.getGroupCode()).getSortOrder())
+                        .thenComparing(Permission::getSortOrder))
                 .map(p -> new PortalPermissionDto(p.getCode(), p.getLabel(), p.getDescription(),
-                        Boolean.TRUE.equals(p.getRequiresCompanyWide()), held.contains(p.getCode())))
+                        Boolean.TRUE.equals(p.getRequiresCompanyWide()), held.contains(p.getCode()),
+                        p.getGroupCode(), groups.get(p.getGroupCode()).getLabel()))
                 .toList();
     }
 

@@ -6,6 +6,7 @@ import ch.qos.logback.core.read.ListAppender;
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.identity.dto.AssignableRoleDto;
 import com.techcomfort.landvaultbackend.identity.dto.AuthResponse;
+import com.techcomfort.landvaultbackend.identity.dto.CreateRoleRequest;
 import com.techcomfort.landvaultbackend.identity.dto.LoginRequest;
 import com.techcomfort.landvaultbackend.identity.dto.PortalPermissionDto;
 import com.techcomfort.landvaultbackend.identity.dto.RegisterRequest;
@@ -47,6 +48,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Company-made roles. The wall that matters: {@code roles} has no RLS, so the
@@ -202,6 +204,38 @@ class CompanyRolesUnderRlsIT {
                 .containsExactlyInAnyOrder("portal.branches.manage", "portal.staff.invite",
                         "portal.settlement.manage", "portal.roles.manage");
         assertThat(permissions).allMatch(p -> p.label() != null && p.held());
+    }
+
+    /** The frontend's role editor groups checkboxes; the grouping and both orders are HomeTrue's, from changeset 085. */
+    @Test
+    void permissionsComeGroupedInHomeTruesOrder() {
+        List<PortalPermissionDto> permissions = restTemplate.exchange("/api/portal/permissions", HttpMethod.GET,
+                json(director, null), new ParameterizedTypeReference<List<PortalPermissionDto>>() {
+                }).getBody();
+        assertThat(permissions).allMatch(p -> p.group() != null && p.groupLabel() != null);
+        assertThat(permissions).extracting(PortalPermissionDto::code).containsExactly(
+                "portal.estates.view", "portal.estates.manage",
+                "portal.payments.verify", "portal.settlement.manage",
+                "portal.branches.manage",
+                "portal.staff.invite", "portal.staff.request", "portal.roles.manage");
+        assertThat(permissions).extracting(PortalPermissionDto::group).containsExactly(
+                "estates", "estates", "finance", "finance", "branches", "staff", "staff", "staff");
+        assertThat(permissions).extracting(PortalPermissionDto::groupLabel).containsSubsequence(
+                "Estates", "Money", "Branches", "Staff and roles");
+        // A company must always be able to make a role carrying every portal permission.
+        assertThat(permissions).hasSizeLessThanOrEqualTo(CreateRoleRequest.MAX_PERMISSIONS);
+    }
+
+    /** A new portal.* permission seeded without a group is refused by the database, not shown ungrouped. */
+    @Test
+    void anUngroupedPortalPermissionCannotBeSeeded() throws SQLException {
+        try (Connection c = DriverManager.getConnection(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(),
+                POSTGRES.getPassword()); Statement s = c.createStatement()) {
+            assertThatThrownBy(() -> s.execute("INSERT INTO permissions (id, created_at, created_by, deleted, code, "
+                    + "description, label) VALUES (gen_random_uuid(), now(), 'test', false, 'portal.ungrouped.x', "
+                    + "'x', 'X')"))
+                    .hasMessageContaining("chk_permissions_portal_grouped");
+        }
     }
 
     @Test

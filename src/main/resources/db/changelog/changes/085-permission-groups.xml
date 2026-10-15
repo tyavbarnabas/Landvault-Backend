@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Groups for the role editor's checkboxes (asked for by the frontend,
+        2026-10-15). The grouping and its order are HomeTrue's decision, stored
+        here, never guessed from slug names. Every portal.* permission must have
+        a group, an order and a label (chk_permissions_portal_grouped), so a new
+        one can't reach the editor ungrouped. Reference data: the app role may
+        only read it, like nigerian_states.
+    -->
+    <changeSet id="085-permission-groups" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE permission_groups (
+                code       varchar(40) PRIMARY KEY,
+                label      varchar(80) NOT NULL,
+                sort_order integer     NOT NULL UNIQUE
+            );
+            COMMENT ON TABLE permission_groups IS
+                'Headings for the portal role editor, in display order. Changed by migration only.';
+            INSERT INTO permission_groups (code, label, sort_order) VALUES
+                ('estates', 'Estates', 10),
+                ('finance', 'Money', 20),
+                ('branches', 'Branches', 30),
+                ('staff', 'Staff and roles', 40);
+
+            ALTER TABLE permissions
+                ADD COLUMN group_code varchar(40) REFERENCES permission_groups (code),
+                ADD COLUMN sort_order integer;
+
+            UPDATE permissions SET group_code = 'estates', sort_order = 10 WHERE code = 'portal.estates.view';
+            UPDATE permissions SET group_code = 'estates', sort_order = 20 WHERE code = 'portal.estates.manage';
+            UPDATE permissions SET group_code = 'finance', sort_order = 10 WHERE code = 'portal.payments.verify';
+            UPDATE permissions SET group_code = 'finance', sort_order = 20 WHERE code = 'portal.settlement.manage';
+            UPDATE permissions SET group_code = 'branches', sort_order = 10 WHERE code = 'portal.branches.manage';
+            UPDATE permissions SET group_code = 'staff', sort_order = 10 WHERE code = 'portal.staff.invite';
+            UPDATE permissions SET group_code = 'staff', sort_order = 20 WHERE code = 'portal.staff.request';
+            UPDATE permissions SET group_code = 'staff', sort_order = 30 WHERE code = 'portal.roles.manage';
+
+            ALTER TABLE permissions ADD CONSTRAINT chk_permissions_portal_grouped
+                CHECK (code NOT LIKE 'portal.%'
+                       OR (group_code IS NOT NULL AND sort_order IS NOT NULL AND label IS NOT NULL));
+
+            REVOKE ALL ON permission_groups FROM ${appDbUsername};
+            GRANT SELECT ON permission_groups TO ${appDbUsername};
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE permissions DROP CONSTRAINT chk_permissions_portal_grouped;
+            ALTER TABLE permissions DROP COLUMN sort_order, DROP COLUMN group_code;
+            DROP TABLE permission_groups;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>
