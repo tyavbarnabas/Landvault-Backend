@@ -11,7 +11,7 @@ public record UpdateRoleRequest(
         @Schema(description = "A blank description clears it.")
         @Size(max = 500) String description,
         @Schema(description = "Replaces the role's permissions; must not be empty.")
-        @Size(max = 50) List<String> permissions,
+        @Size(max = CreateRoleRequest.MAX_PERMISSIONS) List<String> permissions,
         @Schema(description = "Can't be changed — accepted only if it equals the current scope. Create a new role "
                 + "instead.")
         String scope

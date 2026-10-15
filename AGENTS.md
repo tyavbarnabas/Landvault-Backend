@@ -5618,5 +5618,11 @@ Director only) **and** a company-wide view (`ROLES_REQUIRE_COMPANY_WIDE_SCOPE`);
   (`ROLE_IN_USE`). The row stays so past invitations still point at it; the
   name becomes free again.
 - `permissions.label` (changeset 084) gives each `portal.*` permission a short
-  checkbox name. Audit: `role.created`, `role.updated` (field by field),
+  checkbox name. **Changeset 085 groups them** for the editor: `permission_groups`
+  (code, label, sort order; read-only to the app role) and `permissions.group_code`
+  / `sort_order`. A CHECK (`chk_permissions_portal_grouped`) refuses a `portal.*`
+  permission without a group, order or label — **a new portal permission's
+  changeset must set all three**. The request cap on a role's permissions
+  (`CreateRoleRequest.MAX_PERMISSIONS`, 100) is a bound, not a limit:
+  `CompanyRolesUnderRlsIT` fails if the catalogue outgrows it. Audit: `role.created`, `role.updated` (field by field),
   `role.deleted`; a no-op edit writes nothing.

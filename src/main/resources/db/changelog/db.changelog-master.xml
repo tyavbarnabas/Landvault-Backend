@@ -90,6 +90,7 @@
     <include file="changes/082-rename-brand-in-permission-description.xml" relativeToChangelogFile="true"/>
     <include file="changes/083-create-onboarding-requests.xml" relativeToChangelogFile="true"/>
     <include file="changes/084-company-made-roles.xml" relativeToChangelogFile="true"/>
+    <include file="changes/085-permission-groups.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

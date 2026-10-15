@@ -38,4 +38,12 @@ public class Permission extends AbstractEntity {
     /** The routes behind it refuse a branch-scoped caller, so a branch-only role may not carry it. Changeset 084. */
     @Column(name = "requires_company_wide", nullable = false)
     private Boolean requiresCompanyWide;
+
+    /** Its heading in the role editor; required for portal.* permissions. Changeset 085. */
+    @Column(name = "group_code", length = 40)
+    private String groupCode;
+
+    /** Its place within that heading. Changeset 085. */
+    @Column(name = "sort_order")
+    private Integer sortOrder;
 }

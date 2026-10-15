@@ -18,6 +18,11 @@ public record CreateRoleRequest(
         @NotBlank String scope,
         @Schema(description = "`portal.*` permission codes from `GET /api/portal/permissions`, all of which you hold.",
                 example = "[\"portal.estates.view\", \"portal.payments.verify\"]")
-        @NotEmpty @Size(max = 50) List<String> permissions
+        @NotEmpty @Size(max = MAX_PERMISSIONS) List<String> permissions
 ) {
+    /**
+     * A bound on the request, not a business limit: a company must always be able to make a role carrying
+     * every portal permission, so CompanyRolesUnderRlsIT fails if the catalogue outgrows this.
+     */
+    public static final int MAX_PERMISSIONS = 100;
 }
