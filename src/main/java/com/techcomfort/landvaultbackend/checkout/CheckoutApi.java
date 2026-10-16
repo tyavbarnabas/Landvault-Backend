@@ -78,4 +78,11 @@ public interface CheckoutApi {
      * stays expired, as history.
      */
     FinanceDecision allocateAbandoned(UUID transactionId, UUID tenantId, UUID financeUserId);
+
+    /**
+     * The buyer's purchases that are paid and waiting for finance, newest
+     * first. The portfolio lists them as pending verification; they become
+     * owned plots only when finance verifies ({@link PlotAllocated}).
+     */
+    List<PendingPurchase> purchasesAwaitingFinance(UUID buyerUserId);
 }

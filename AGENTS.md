@@ -4900,11 +4900,11 @@ Proven red: the grace period, ask-Paystack-first, and abandoned-is-not-final.
   wasn't in the caller's queue by calling `verifyAndAllocate` — which would
   have sold the plot, skipping the payment check, had it been allocatable.
   Replaced by the read-only `CheckoutApi.financeStatusOf`.
-- **Portfolio entry and deed don't exist yet** (decided with the user:
-  allocation now is sold + verified + converted). **When the portfolio and
-  documents modules are built, they must join `verifyAndAllocate`'s same
-  transaction** — a plot sold with no deed, or a deed for a plot nobody
-  allocated, is exactly the corruption FV-3 exists to prevent.
+- **The portfolio entry now joins the same transaction** (changeset 088, see
+  "Portfolio"); the deed doesn't exist yet. **When documents are built, they
+  must join `verifyAndAllocate`'s same transaction too** — a plot sold with no
+  deed, or a deed for a plot nobody allocated, is exactly the corruption FV-3
+  exists to prevent.
 - Late-money (`underReview`) payments on abandoned purchases are not in this
   queue yet; resolving them (re-allocate or refund) is its own follow-up.
 
@@ -5508,6 +5508,101 @@ and the reviewer's document scope.
 a verified title as a publication condition, a reviewer email when titles
 arrive (they sit in the queue), and a history table of earlier submissions
 (the audit entries record each submission old → new, and the files are kept).
+
+## Portfolio: what a buyer owns (changeset 088)
+
+Built 2026-10-16 from the PF/IS/AR stories, **outright purchases only**
+(PF-1..PF-6). `GET /api/portfolio/plots`, `/plots/{id}`, `/summary`
+(`client.portfolio.view`), module `portfolio`. Decided with the user, from the
+recommendations:
+
+1. **An owned plot is created when finance verifies the sale**, never earlier.
+   Checkout publishes `PlotAllocated` from both `verifyAndAllocate` and
+   `allocateAbandoned` (late money); `PortfolioAllocationListener` is a plain
+   synchronous `@EventListener` with `MANDATORY`, so the record and the plot
+   becoming SOLD commit or roll back together (FV-3) — the
+   `TenantStaffAccountRequested` pattern again, since portfolio depends on
+   checkout. **Never make it asynchronous or after-commit.** Before
+   verification a paid purchase is read from checkout
+   (`CheckoutApi.purchasesAwaitingFinance`) and listed as
+   `pending_verification`, id = its transaction id.
+2. **An unpaid hold is not in the portfolio.** Nor are rejected or abandoned
+   purchases.
+3. **Verified outright = `completed`** (paid in full). `allocated` means
+   "documents issued", and there are none yet.
+4. **`/summary` computes the totals** per currency, owned plots only, retired
+   records excluded; the frontend's page-level sum was wrong past page one.
+5. **`titleStatus` is live** from HomeTrue's title review; `titleVerified` is
+   true only while verified (the mock hard-coded true).
+
+### Buyers can't read inventory: the seventh escape
+
+The labels a portfolio needs — estate, block, plot number, location, size,
+surveyed area, title — live in RLS-policied inventory tables, and a buyer has
+no tenant scope. `landvault_buyer_plot_details(buyer)` is `SECURITY DEFINER`
+(hardened like 043/047/054), returns only those columns, and only for plots
+that buyer has a purchase awaiting finance or verified, or an owned record,
+for. Read live rather than copied, because none of them can change once a plot
+is sold (resizes and boundary edits are available-plots only) except the title
+status, which must be live. **Do not "simplify" it into a repository call** —
+under a buyer's session it would return nothing, silently.
+
+### `owned_plots`
+
+- **Buyer-owned like `transactions`**: `tenant_id` null, `seller_tenant_id`
+  the seller, not RLS-policied, reached only by `buyer_user_id`.
+  DELETE/TRUNCATE revoked; never deleted.
+- **Prices copied from the sale** (`base_price`, `corner_premium_pct`,
+  `total_price`, `currency`), never recomputed: an upgrade will create owned
+  records with no sale behind them, so the record must carry what was agreed.
+- **One live owner per plot**, by partial unique index
+  (`uq_owned_plots_one_owner`, ignoring TRANSFERRED/SUPERSEDED) — a structural
+  guard against double allocation — and one record per sale.
+- All nine statuses are legal in the CHECK; only `COMPLETED` is written.
+  **TRANSFERRED** (another buyer, by resale) and **SUPERSEDED** (the same
+  buyer's equity moved to another plot, by upgrade) are different facts.
+- **Backfilled**: sales verified before 088 became `COMPLETED` records, their
+  acquisition time taken from the `transaction.verified` audit entry.
+- The listener refuses a non-outright allocation (it would roll the sale back)
+  rather than record a plan the portfolio can't show — installments can't be
+  paid today, so it can't happen.
+
+### Equity and payments
+
+`paidAmount` is what finance verified — **zero while pending**, because
+equity doesn't advance until finance signs off (IS-3). Payments come from the
+payments module through checkout's `PaymentSummaryProvider` (portfolio
+depends on checkout only). `receiptId` is the payment reference until receipts
+exist.
+
+### Tests
+
+In `ReservationCheckoutUnderRlsIT` (restricted role, stand-in Paystack), where
+real paid purchases already exist. **Proven red**: removing the event from
+the verify path and from the late-money path, and dropping the
+retired-records filter from the summary. The rollback test
+(`ifTheOwnedRecordCannotBeWrittenTheSaleRollsBack`) **could not be made red**
+by any synchronous break — swallowing the error, or a `REQUIRES_NEW` listener
+— because the failed insert marks the shared transaction rollback-only and the
+sale is undone regardless; it guards the after-commit/async change. Trying
+`@TransactionalEventListener` hit a separate finding: **Modulith's event
+publication registry records after-commit listeners too, and its
+`listener_id` column (varchar 255) is too short for this listener's id**, so
+that insert itself failed. Worth knowing before the first
+`@ApplicationModuleListener`.
+
+### Not built — installment plans are the next epic
+
+IS-1..IS-4 and AR-1..AR-3 need data that doesn't exist: nothing records a
+developer's plans (deposit, months, per-period amounts), checkout refuses
+non-outright payment (`PAYMENT_PLAN_NOT_SUPPORTED`), so a schedule would be
+invented. The epic: developers declare plans → checkout accepts one → deposit
+and each period paid through the same Paystack path (one-off payments, no
+saved card) → schedule, arrears (penalties from the declared default terms),
+restructure requests (approval is a portal slice). Also not built: documents
+(`allocated`, receipts), upgrades, resale. **`POST`/`PUT
+/api/portfolio/plots` will never exist** — the client must not create or
+change ownership.
 
 ## One password rule, wherever a password is set (`PasswordPolicy`)
 

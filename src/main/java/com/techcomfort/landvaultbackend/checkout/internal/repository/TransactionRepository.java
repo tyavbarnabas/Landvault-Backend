@@ -1,6 +1,7 @@
 package com.techcomfort.landvaultbackend.checkout.internal.repository;
 
 import com.techcomfort.landvaultbackend.checkout.internal.domain.Transaction;
+import com.techcomfort.landvaultbackend.checkout.internal.enums.TransactionStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -25,6 +26,8 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
     Page<Transaction> findAllByBuyerUserIdOrderByCreatedAtDesc(UUID buyerUserId, Pageable pageable);
 
     Optional<Transaction> findByIdAndBuyerUserId(UUID id, UUID buyerUserId);
+
+    List<Transaction> findByBuyerUserIdAndStatusOrderByCreatedAtDesc(UUID buyerUserId, TransactionStatus status);
 
     /**
      * A confirmed payment moves a transaction on — once. One statement that

@@ -1,6 +1,11 @@
 package com.techcomfort.landvaultbackend.checkout;
 
 import com.techcomfort.landvaultbackend.testsupport.EstatePhotoFixture;
+import org.springframework.core.ParameterizedTypeReference;
+import com.techcomfort.landvaultbackend.common.PageResponse;
+import com.techcomfort.landvaultbackend.testsupport.EstateTitleFixture;
+import com.techcomfort.landvaultbackend.portfolio.dto.PortfolioSummaryDto;
+import com.techcomfort.landvaultbackend.portfolio.dto.OwnedPlotDto;
 import com.techcomfort.landvaultbackend.checkout.dto.CreateReservationRequest;
 import com.techcomfort.landvaultbackend.checkout.dto.ReservationDto;
 import com.techcomfort.landvaultbackend.checkout.dto.TransactionDto;
@@ -2166,6 +2171,154 @@ class ReservationCheckoutUnderRlsIT {
                 {"reservationId":"%s","intent":"development","plan":"%s"%s}
                 """.formatted(reservationId, plan,
                 months == null ? "" : ",\"installmentMonths\":" + months);
+    }
+
+    // --- portfolio (changeset 088) ---
+
+    /** Paid and waiting: shown, no equity. Verified: owned, in the same step as the plot being sold. */
+    @Test
+    void aPaidPurchaseIsPendingInThePortfolioAndBecomesOwnedWhenFinanceVerifies() {
+        TransactionDto transaction = paidPurchase();
+
+        OwnedPlotDto pending = portfolio(buyer).items().getFirst();
+        assertThat(portfolio(buyer).total()).isOne();
+        assertThat(pending.status()).isEqualTo("pending_verification");
+        assertThat(pending.id()).isEqualTo(transaction.id());
+        assertThat(pending.paidAmount()).as("equity waits for finance").isEqualByComparingTo("0");
+        assertThat(pending.acquiredDate()).isNull();
+        assertThat(pending.payments()).singleElement().satisfies(p -> {
+            assertThat(p.status()).isEqualTo("pending_verification");
+            assertThat(p.amount()).isEqualByComparingTo(TIER_PRICE);
+        });
+        PortfolioSummaryDto before = get("/api/portfolio/summary", buyer.token(), PortfolioSummaryDto.class).getBody();
+        assertThat(before.awaitingVerification()).isOne();
+        assertThat(before.byCurrency()).as("not owned yet").isEmpty();
+
+        financeAction(staffWithRole(seller.id(), "finance_officer", null), transaction.id(), "verify", null);
+
+        OwnedPlotDto owned = portfolio(buyer).items().getFirst();
+        assertThat(portfolio(buyer).total()).as("the purchase became the owned plot, not a second row").isOne();
+        assertThat(owned.status()).isEqualTo("completed");
+        assertThat(owned.id()).isNotEqualTo(transaction.id());
+        assertThat(owned.transactionId()).isEqualTo(transaction.id());
+        assertThat(owned.paidAmount()).isEqualByComparingTo(TIER_PRICE);
+        assertThat(owned.totalPrice()).isEqualByComparingTo(TIER_PRICE);
+        assertThat(owned.basePrice()).isEqualByComparingTo(TIER_PRICE);
+        assertThat(owned.acquiredDate()).isNotNull();
+        assertThat(owned.estateId()).isEqualTo(estateId);
+        assertThat(owned.plotId()).isEqualTo(plotId);
+        assertThat(owned.plotLabel()).as("read through the buyer's own definer function").isNotBlank();
+        assertThat(owned.estate()).isNotBlank();
+        assertThat(owned.plan()).isEqualTo("outright");
+        assertThat(owned.payments()).singleElement().satisfies(p -> assertThat(p.status()).isEqualTo("confirmed"));
+        assertThat(owned.titleVerified()).as("no title declared").isFalse();
+
+        assertThat(get("/api/portfolio/plots/" + transaction.id(), buyer.token(), OwnedPlotDto.class).getBody().id())
+                .as("the pending id keeps working").isEqualTo(owned.id());
+        PortfolioSummaryDto after = get("/api/portfolio/summary", buyer.token(), PortfolioSummaryDto.class).getBody();
+        assertThat(after.awaitingVerification()).isZero();
+        assertThat(after.byCurrency()).singleElement().satisfies(t -> {
+            assertThat(t.currency()).isEqualTo("NGN");
+            assertThat(t.count()).isOne();
+            assertThat(t.totalValue()).isEqualByComparingTo(TIER_PRICE);
+            assertThat(t.totalPaid()).isEqualByComparingTo(TIER_PRICE);
+        });
+    }
+
+    /** FV-3: if ownership can't be recorded, the plot isn't sold either. */
+    @Test
+    void ifTheOwnedRecordCannotBeWrittenTheSaleRollsBack() {
+        TransactionDto transaction = paidPurchase();
+        // Someone already owns this plot: the one-owner index refuses the new record.
+        execute("INSERT INTO owned_plots (id, created_at, deleted, buyer_user_id, plot_id, estate_id, seller_tenant_id, "
+                + "status, plan, intent, base_price, total_price, currency, acquired_at) VALUES (gen_random_uuid(), now(), "
+                + "false, '" + registerBuyer().id() + "', '" + plotId + "', '" + estateId + "', '" + seller.id()
+                + "', 'COMPLETED', 'OUTRIGHT', 'DEVELOPMENT', 1, 1, 'NGN', now())");
+
+        ResponseEntity<String> refused = financeAction(staffWithRole(seller.id(), "finance_officer", null),
+                transaction.id(), "verify", null);
+
+        assertThat(refused.getStatusCode().is2xxSuccessful()).isFalse();
+        assertThat(queryString("SELECT status FROM plots WHERE id = '" + plotId + "'")).isEqualTo("RESERVED");
+        assertThat(queryString("SELECT status FROM transactions WHERE id = '" + transaction.id() + "'"))
+                .isEqualTo("AWAITING_FINANCE");
+    }
+
+    @Test
+    void lateMoneyAllocatedByFinanceBecomesAnOwnedPlotToo() {
+        TransactionDto transaction = latePayment();
+        assertThat(portfolio(buyer).total()).as("abandoned, under review: not the buyer's").isZero();
+
+        assertThat(restTemplate.exchange("/api/portal/finance/late-payments/" + transaction.id() + "/allocate",
+                HttpMethod.POST, entity(staffWithRole(seller.id(), "finance_officer", null), null), String.class)
+                .getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        assertThat(portfolio(buyer).items()).singleElement().satisfies(p -> {
+            assertThat(p.status()).isEqualTo("completed");
+            assertThat(p.transactionId()).isEqualTo(transaction.id());
+        });
+    }
+
+    @Test
+    void anUnpaidHoldARejectedPurchaseAndAnotherBuyersPlotsAreNotInMyPortfolio() {
+        TransactionDto transaction = outrightTransaction();
+        assertThat(portfolio(buyer).total()).as("a hold isn't ownership").isZero();
+        String reference = startPayment(transaction);
+        paystackSays(reference, "success", 2_000_000_000L, "NGN", "Approved");
+        assertThat(confirm(buyer, reference).getBody()).contains("\"status\":\"succeeded\"");
+
+        Buyer other = verifiedBuyer();
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        financeAction(officer, transaction.id(), "verify", null);
+        UUID ownedId = portfolio(buyer).items().getFirst().id();
+
+        assertThat(portfolio(other).total()).isZero();
+        ResponseEntity<String> theirs = get("/api/portfolio/plots/" + ownedId, other.token(), String.class);
+        assertThat(theirs.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(theirs.getBody()).contains("OWNED_PLOT_NOT_FOUND");
+        assertThat(get("/api/portfolio/plots?sort=cheapest", buyer.token(), String.class).getBody())
+                .contains("INVALID_PARAMETER");
+    }
+
+    /** PF-2: a retired record stays in the ledger and never counts in the totals. */
+    @Test
+    void transferredAndSupersededRecordsAreListedButNeverCounted() {
+        TransactionDto transaction = paidPurchase();
+        financeAction(staffWithRole(seller.id(), "finance_officer", null), transaction.id(), "verify", null);
+        execute("INSERT INTO owned_plots (id, created_at, deleted, buyer_user_id, plot_id, estate_id, seller_tenant_id, "
+                + "status, plan, intent, base_price, total_price, currency, acquired_at) VALUES (gen_random_uuid(), now(), "
+                + "false, '" + buyer.id() + "', '" + plotId + "', '" + estateId + "', '" + seller.id()
+                + "', 'SUPERSEDED', 'OUTRIGHT', 'DEVELOPMENT', 5000000, 5000000, 'NGN', now() - interval '1 year')");
+
+        assertThat(portfolio(buyer).items()).extracting(OwnedPlotDto::status).containsExactly("completed", "superseded");
+        assertThat(get("/api/portfolio/summary", buyer.token(), PortfolioSummaryDto.class).getBody().byCurrency())
+                .singleElement().satisfies(t -> {
+                    assertThat(t.count()).isOne();
+                    assertThat(t.totalValue()).as("the superseded equity isn't counted twice").isEqualByComparingTo(TIER_PRICE);
+                });
+    }
+
+    @Test
+    void theTitleStatusIsLiveAndOnlyAVerifiedTitleReadsVerified() {
+        TransactionDto transaction = paidPurchase();
+        financeAction(staffWithRole(seller.id(), "finance_officer", null), transaction.id(), "verify", null);
+        execute(EstateTitleFixture.verifiedTitleSql(estateId, "FCT/TEST/1", "note"));
+
+        OwnedPlotDto owned = portfolio(buyer).items().getFirst();
+        assertThat(owned.titleType()).isEqualTo("C of O");
+        assertThat(owned.titleStatus()).isEqualTo("verified");
+        assertThat(owned.titleVerified()).isTrue();
+
+        execute("UPDATE estate_titles SET status = 'PENDING', decided_at = NULL WHERE estate_id = '" + estateId + "'");
+        assertThat(portfolio(buyer).items().getFirst().titleVerified()).isFalse();
+    }
+
+    private PageResponse<OwnedPlotDto> portfolio(Buyer who) {
+        ResponseEntity<PageResponse<OwnedPlotDto>> response = restTemplate.exchange("/api/portfolio/plots",
+                HttpMethod.GET, new HttpEntity<>(bearer(who.token())), new ParameterizedTypeReference<>() {
+                });
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        return response.getBody();
     }
 
     private Buyer verifiedBuyer() {
