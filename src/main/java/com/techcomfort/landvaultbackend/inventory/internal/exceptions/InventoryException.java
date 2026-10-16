@@ -19,6 +19,27 @@ public abstract class InventoryException extends RuntimeException {
         }
     }
 
+    /** Something named in the path that isn't there, or isn't the caller's, with a code naming what (404). */
+    public static class NotFound extends InventoryException {
+
+        private final String code;
+        private final String detail;
+
+        public NotFound(String code, String detail) {
+            this.code = code;
+            this.detail = detail;
+        }
+
+        public String code() {
+            return code;
+        }
+
+        @Override
+        public String getMessage() {
+            return detail;
+        }
+    }
+
     /** A request that breaks a rule of its own, with a code naming the rule (400). */
     public static class RequestRejected extends InventoryException {
 

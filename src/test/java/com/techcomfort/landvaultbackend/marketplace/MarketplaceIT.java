@@ -1,6 +1,7 @@
 package com.techcomfort.landvaultbackend.marketplace;
 
 import com.techcomfort.landvaultbackend.testsupport.EstatePhotoFixture;
+import com.techcomfort.landvaultbackend.testsupport.EstateTitleFixture;
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.PageResponse;
 import com.techcomfort.landvaultbackend.common.geojson.GeoJsonFeatureCollectionDto;
@@ -13,11 +14,9 @@ import com.techcomfort.landvaultbackend.inventory.dto.EstateBoundaryDto;
 import com.techcomfort.landvaultbackend.inventory.dto.BlockDto;
 import com.techcomfort.landvaultbackend.inventory.dto.CreateBlockRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreateEstateRequest;
-import com.techcomfort.landvaultbackend.inventory.dto.CreateEstateTitleRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreatePlotRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreatePlotsRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreatePriceTierRequest;
-import com.techcomfort.landvaultbackend.inventory.dto.CreateVerificationCheckRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PriceTierDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PublicationDto;
@@ -142,6 +141,8 @@ class MarketplaceIT {
         assertThat(dto.seller().companyName()).isEqualTo(listing.tenant().name());
         assertThat(dto.verified()).isTrue();
         assertThat(dto.titleType()).isEqualTo("C of O");
+        assertThat(dto.titleStatus()).isEqualTo("verified");
+        assertThat(dto.titleVerifiedAt()).isNotNull();
         assertThat(dto.priceTiers()).singleElement().satisfies(tier -> {
             assertThat(tier.price()).isEqualByComparingTo("20000000");
             assertThat(tier.pricePerSqm()).isEqualByComparingTo("80000.00");
@@ -669,11 +670,7 @@ class MarketplaceIT {
                         plot("3", blockId, tierId, "sold", plotRing(2))))),
                 String.class);
         assertThat(plots.getStatusCode()).as(plots.getBody()).isEqualTo(HttpStatus.CREATED);
-        post(tenant, "/api/portal/estates/" + estate.id() + "/title",
-                new CreateEstateTitleRequest("C of O", "LA-SECRET-TITLE", "2024-01-01", null, null), String.class);
-        post(tenant, "/api/portal/estates/" + estate.id() + "/verification-checks",
-                new CreateVerificationCheckRequest("title_verification", "verified", "manual_review",
-                        "SECRET-NOTE internal only"), String.class);
+        execute(EstateTitleFixture.verifiedTitleSql(estate.id(), "LA-SECRET-TITLE", "SECRET-NOTE internal only"));
 
         declareMinimumDisclosure(tenant, estate.id());
 

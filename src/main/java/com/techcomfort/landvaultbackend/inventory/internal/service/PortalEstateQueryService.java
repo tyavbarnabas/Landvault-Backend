@@ -22,7 +22,6 @@ import com.techcomfort.landvaultbackend.inventory.dto.VerificationCheckDto;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.Block;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.Estate;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.EstateAmenity;
-import com.techcomfort.landvaultbackend.inventory.internal.domain.EstateTitle;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.EstateVerificationCheck;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.Plot;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.PriceTier;
@@ -80,6 +79,7 @@ public class PortalEstateQueryService {
     private final PriceTierRepository priceTierRepository;
     private final PlotRepository plotRepository;
     private final EstateTitleRepository estateTitleRepository;
+    private final EstateTitleMapper estateTitleMapper;
     private final EstateVerificationCheckRepository verificationCheckRepository;
     private final MarketplaceApi marketplace;
     private final ConflictDetectionApi conflictDetection;
@@ -137,7 +137,7 @@ public class PortalEstateQueryService {
                 .map(PortalEstateQueryService::toDto)
                 .toList();
         EstateTitleDto title = estateTitleRepository.findByEstateId(estateId)
-                .map(PortalEstateQueryService::toDto)
+                .map(estateTitleMapper::toDto)
                 .orElse(null);
         List<VerificationCheckDto> checks = verificationCheckRepository.findByEstateId(estateId).stream()
                 .map(PortalEstateQueryService::toDto)
@@ -416,12 +416,6 @@ public class PortalEstateQueryService {
     private static PriceTierDto toDto(PriceTier tier) {
         return new PriceTierDto(tier.getId(), tier.getEstateId(), tier.getTierType().getValue(),
                 tier.getSizeSqm(), tier.getPrice(), tier.getCurrency(), tier.getLabel(), tier.getRetiredAt());
-    }
-
-    private static EstateTitleDto toDto(EstateTitle title) {
-        return new EstateTitleDto(title.getId(), title.getEstateId(), title.getTitleType().getValue(),
-                title.getTitleNumber(), title.getIssuedDate(),
-                title.getSurveyPlanDocumentId(), title.getDeedDocumentId());
     }
 
     private static VerificationCheckDto toDto(EstateVerificationCheck check) {

@@ -8,12 +8,11 @@ import com.techcomfort.landvaultbackend.identity.dto.RegisterRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.BlockDto;
 import com.techcomfort.landvaultbackend.inventory.dto.CreateBlockRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreateEstateRequest;
-import com.techcomfort.landvaultbackend.inventory.dto.CreateEstateTitleRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreatePlotRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreatePlotsRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreatePriceTierRequest;
-import com.techcomfort.landvaultbackend.inventory.dto.CreateVerificationCheckRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateDetailDto;
+import com.techcomfort.landvaultbackend.testsupport.EstateTitleFixture;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateDto;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateSummaryDto;
 import com.techcomfort.landvaultbackend.common.geojson.GeoJsonFeatureCollectionDto;
@@ -467,11 +466,7 @@ class PortalEstateReadUnderRlsIT {
 
     @Test
     void estateDetailCarriesItsBlocksTiersTitleAndChecks() {
-        post("/api/portal/estates/" + alphaEstateId + "/title", directorToken,
-                new CreateEstateTitleRequest("C of O", "LA-2024-001", "2024-03-01", null, null));
-        post("/api/portal/estates/" + alphaEstateId + "/verification-checks", directorToken,
-                new CreateVerificationCheckRequest("title_verification", "verified", "manual_review",
-                        "Confirmed at Alausa."));
+        execute(EstateTitleFixture.verifiedTitleSql(alphaEstateId, "LA-2024-001", "Confirmed at Alausa."));
 
         EstateDetailDto detail = get(
                 "/api/portal/estates/" + alphaEstateId, directorToken, EstateDetailDto.class).getBody();
@@ -481,6 +476,7 @@ class PortalEstateReadUnderRlsIT {
         assertThat(detail.priceTiers()).extracting(PriceTierDto::id)
                 .containsExactlyInAnyOrder(landTierId, unitTierId);
         assertThat(detail.title().titleNumber()).isEqualTo("LA-2024-001");
+        assertThat(detail.title().status()).isEqualTo("verified");
         assertThat(detail.verificationChecks()).singleElement()
                 .satisfies(check -> assertThat(check.status()).isEqualTo("verified"));
         assertThat(detail.footprintAreaSqm())

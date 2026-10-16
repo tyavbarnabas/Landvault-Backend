@@ -14,24 +14,18 @@ import com.techcomfort.landvaultbackend.inventory.dto.BlockDto;
 import com.techcomfort.landvaultbackend.inventory.dto.AddEstateBoundaryRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreateBlockRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreateEstateRequest;
-import com.techcomfort.landvaultbackend.inventory.dto.CreateEstateTitleRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreatePlotRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreatePlotsRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreatePriceTierRequest;
-import com.techcomfort.landvaultbackend.inventory.dto.CreateVerificationCheckRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateDto;
 import com.techcomfort.landvaultbackend.inventory.dto.UpdateEstateRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateBoundaryDto;
-import com.techcomfort.landvaultbackend.inventory.dto.EstateTitleDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PlotDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PriceTierDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PublicationDto;
-import com.techcomfort.landvaultbackend.inventory.dto.VerificationCheckDto;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.Block;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.Estate;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.EstateAmenity;
-import com.techcomfort.landvaultbackend.inventory.internal.domain.EstateTitle;
-import com.techcomfort.landvaultbackend.inventory.internal.domain.EstateVerificationCheck;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.Plot;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.PriceTier;
 import com.techcomfort.landvaultbackend.common.EstateIntent;
@@ -41,16 +35,10 @@ import com.techcomfort.landvaultbackend.inventory.internal.enums.PlotOrientation
 import com.techcomfort.landvaultbackend.inventory.internal.enums.PlotStatus;
 import com.techcomfort.landvaultbackend.inventory.internal.enums.PropertyType;
 import com.techcomfort.landvaultbackend.inventory.internal.enums.TierType;
-import com.techcomfort.landvaultbackend.common.TitleType;
-import com.techcomfort.landvaultbackend.common.VerificationCheckStatus;
-import com.techcomfort.landvaultbackend.common.VerificationCheckType;
-import com.techcomfort.landvaultbackend.common.VerificationSource;
 import com.techcomfort.landvaultbackend.inventory.internal.exceptions.InventoryException;
 import com.techcomfort.landvaultbackend.inventory.internal.repository.BlockRepository;
 import com.techcomfort.landvaultbackend.inventory.internal.repository.EstateAmenityRepository;
 import com.techcomfort.landvaultbackend.inventory.internal.repository.EstateRepository;
-import com.techcomfort.landvaultbackend.inventory.internal.repository.EstateTitleRepository;
-import com.techcomfort.landvaultbackend.inventory.internal.repository.EstateVerificationCheckRepository;
 import com.techcomfort.landvaultbackend.inventory.internal.repository.PlotRepository;
 import com.techcomfort.landvaultbackend.inventory.internal.repository.PriceTierRepository;
 import com.techcomfort.landvaultbackend.tenancy.TenancyApi;
@@ -62,7 +50,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -93,8 +80,6 @@ public class PortalEstateService {
     private final BlockRepository blockRepository;
     private final PriceTierRepository priceTierRepository;
     private final PlotRepository plotRepository;
-    private final EstateTitleRepository estateTitleRepository;
-    private final EstateVerificationCheckRepository verificationCheckRepository;
     private final GeoJsonPolygonParser geoJsonParser;
     private final GeometryCalculator geometry;
     private final TenancyApi tenancyApi;
@@ -571,86 +556,6 @@ public class PortalEstateService {
             return tier.getSizeSqm();
         }
         return request.nominalSizeSqmOverride();
-    }
-
-    // --- title ---
-
-    @Transactional
-    public EstateTitleDto recordTitle(UUID estateId, CreateEstateTitleRequest request) {
-        TenantScope scope = currentScope();
-        Estate estate = requireOwnedEstate(estateId, requireTenant(scope));
-
-        if (estateTitleRepository.existsByEstateId(estateId)) {
-            throw new InventoryException.DuplicateRecord(
-                    "This estate already has a title recorded. Title is 1:1 with an estate.");
-        }
-
-        EstateTitle title = EstateTitle.builder()
-                .estateId(estateId)
-                .titleType(TitleType.fromValue(request.titleType()))
-                .titleNumber(request.titleNumber())
-                .issuedDate(request.issuedDate() == null ? null : LocalDate.parse(request.issuedDate()))
-                .surveyPlanDocumentId(request.surveyPlanDocumentId())
-                .deedDocumentId(request.deedDocumentId())
-                .build();
-        title.setTenantId(estate.getTenantId());
-        title.setBranchId(estate.getBranchId());
-        title = estateTitleRepository.save(title);
-
-        auditApi.record(AuditEntryRequest.of(
-                scope.userId(), "estate.title_recorded", "estate", estateId, estate.getTenantId(),
-                "Title recorded: " + title.getTitleType().getValue()
-                        + (title.getTitleNumber() == null ? "" : " " + title.getTitleNumber()) + "."));
-        return new EstateTitleDto(title.getId(), estateId, title.getTitleType().getValue(),
-                title.getTitleNumber(), title.getIssuedDate(),
-                title.getSurveyPlanDocumentId(), title.getDeedDocumentId());
-    }
-
-    // --- verification check ---
-
-    @Transactional
-    public VerificationCheckDto recordVerificationCheck(UUID estateId, CreateVerificationCheckRequest request) {
-        TenantScope scope = currentScope();
-        Estate estate = requireOwnedEstate(estateId, requireTenant(scope));
-
-        VerificationCheckType checkType = VerificationCheckType.fromValue(request.checkType());
-        // NOT_CHECKED when omitted: the absence of a check is not a clean
-        // bill of health, and must never be recorded as one.
-        VerificationCheckStatus status = request.status() == null
-                ? VerificationCheckStatus.NOT_CHECKED
-                : VerificationCheckStatus.fromValue(request.status());
-        VerificationSource source = request.verificationSource() == null
-                ? null : VerificationSource.fromValue(request.verificationSource());
-
-        if (status == VerificationCheckStatus.VERIFIED && source == null) {
-            throw new InventoryException.InvalidRequest(
-                    "A VERIFIED check needs a verificationSource — a green badge from a registry lookup and one "
-                            + "from a human reading a PDF are different claims, and must stay distinguishable.");
-        }
-
-        EstateVerificationCheck check = verificationCheckRepository
-                .findByEstateIdAndCheckType(estateId, checkType)
-                .orElseGet(() -> {
-                    EstateVerificationCheck fresh = EstateVerificationCheck.builder()
-                            .estateId(estateId)
-                            .checkType(checkType)
-                            .build();
-                    fresh.setTenantId(estate.getTenantId());
-                    fresh.setBranchId(estate.getBranchId());
-                    return fresh;
-                });
-        check.setStatus(status);
-        check.setVerificationSource(source);
-        check.setNotes(request.notes());
-        check.setLastVerifiedAt(status == VerificationCheckStatus.VERIFIED ? Instant.now() : null);
-        check = verificationCheckRepository.save(check);
-
-        auditApi.record(AuditEntryRequest.of(
-                scope.userId(), "estate.verification_check_recorded", "estate", estateId, estate.getTenantId(),
-                checkType.getValue() + " -> " + status.getValue()
-                        + (source == null ? "" : " (" + source.getValue() + ")")));
-        return new VerificationCheckDto(check.getId(), estateId, checkType.getValue(), status.getValue(),
-                source == null ? null : source.getValue(), check.getLastVerifiedAt(), check.getNotes());
     }
 
     // --- publication (PB-1..PB-4) ---

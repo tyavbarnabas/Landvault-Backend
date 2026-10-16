@@ -2021,6 +2021,9 @@ the rule, deliberately holding corporate verification documents (CAC, TIN,
 SCUML) and no land title. The two halves are meant to be read together;
 changing one without the other reopens a question that is already settled.
 
+Since changeset 087 a title is **declared by the developer and verified by
+HomeTrue** — see "Estate titles: declared by developers, verified by HomeTrue".
+
 ## `verification_source` is what makes a check worth more than a boolean
 
 `estate_verification_checks` records AGIS registration, encroachment status
@@ -2037,6 +2040,11 @@ and title verification. Two columns carry the weight:
   badge would mean nothing. It is an enum rather than free text specifically
   so `MANUAL_REVIEW` can never be spelled two ways — a typo would silently
   split the one distinction the column exists to make.
+
+**Only HomeTrue records checks** (since changeset 087). A person may claim
+`MANUAL_REVIEW` or `REGISTRY_SEARCH` (an official registry search, report in
+hand) and nothing else; `AGIS`, `QOREID` and `CAC_REGISTRY` mean an
+integration called the registry itself, and none is built.
 
 ## The marketplace publication gate: four conditions, recorded here, enforced there
 
@@ -5251,7 +5259,8 @@ live in **S3-compatible object storage**, never in the database or on the
 server's disk. Built in steps, decided with the user (2026-10-11): (1) this
 module, (2) estate photos (built as `estate_photos`, replacing the
 never-written `estates.image_url` — see "Estate photos" below), (3) KYC and tenant documents onto the private bucket,
-(4) estate title documents incl. site/survey plans, (5) resized photo
+(4) estate title documents incl. site/survey plans (built, changeset 087 —
+see "Estate titles"), (5) resized photo
 versions. **Flyers were dropped** on purpose: Nigerian flyers carry "pay into
 this account" details, the exact off-platform fraud the platform exists to
 stop, and what they say (fees, terms) is already captured as structured cost
@@ -5416,6 +5425,89 @@ inserts one in SQL (idempotent) for the four that do, which don't run storage.
 
 **Not built**: resized versions (step 5), plot photos, video, a takedown route
 for Super Admins.
+
+## Estate titles: declared by developers, verified by HomeTrue (changeset 087)
+
+Built 2026-10-16 from the frontend's brief. **The hole**: the portal's
+`POST .../verification-checks` needed only `portal.estates.manage`, so a
+developer's own staff could mark their land `VERIFIED` (`MANUAL_REVIEW`) and
+buyers then read "Land checked <date>" — the developer vouching for itself.
+A recorded title also showed on the marketplace as a bare "C of O", which
+reads as fact before anyone has checked.
+
+**The rule now: developers declare, HomeTrue verifies.**
+
+- **Developer** (`EstateTitleService`, `/api/portal/estates/{id}/title`):
+  uploads evidence to the **private** bucket — `title_document`,
+  `survey_plan`, `deed`, PDF/JPG/PNG, 10 MB, kept byte for byte (it's
+  evidence; no metadata stripping, nothing public is made from it) — then
+  `PUT`s the title naming the files. A submission is create-or-replace and
+  **always `PENDING`**; it clears any previous decision, because a
+  verification was of the documents shown then. EB-2 on every write. The
+  portal verification-checks route is **gone**.
+- **HomeTrue** (`AdminTitleReviewService`, `admin.titles.review`, Super Admin):
+  a queue (pending oldest first), 5-minute links to **only the current
+  submission's** documents, verify (`manual_review` | `registry_search`) or
+  reject (note required; the developer sees it). Also
+  `POST /api/admin/estates/{id}/verification-checks` for AGIS/encroachment —
+  never `title_verification`, which follows the review.
+- **Evidence lives in `estate_title_documents`** (one row per confirmed file,
+  with its kind; RLS-policied, DELETE/TRUNCATE revoked). A file belongs to the
+  title only once a submission names it; a replaced submission's files stay as
+  the record of what was shown. The storage purpose carries the kind, so a
+  confirmed file says what it was uploaded as.
+
+### The title check moves with the title, always
+
+`estate_verification_checks.TITLE_VERIFICATION` is never set by hand any more:
+verify → `VERIFIED` with the same source and `last_verified_at = now`; reject
+→ `FAILED`; **every submission → `PENDING`** (source and time cleared). The
+last one wasn't in the brief and is load-bearing: the marketplace's "Land
+checked" date is the newest *verified* check, so without it a re-submitted
+title would keep the old green badge on documents nobody had checked. Proven
+red.
+
+### A decision names the submission it was made on
+
+Verify and reject require `submittedAt` — the submission the reviewer opened —
+and refuse with 409 `TITLE_CHANGED` if the developer has resubmitted since.
+Also not in the brief: without it, a developer could swap documents while a
+review was in progress and the reviewer's "verify" would land on files they
+never saw. The title row is locked (`findByIdForUpdate`) for the decision, so a
+resubmission and a decision take turns. Proven red. The frontend has to send
+it back from the `TitleReviewDto` it displayed.
+
+### Sources a person may claim
+
+`VerificationSource.recordableByAPerson()`: `MANUAL_REVIEW` and the new
+`REGISTRY_SEARCH`. `AGIS`/`QOREID`/`CAC_REGISTRY` are refused on both human
+routes (`VERIFICATION_SOURCE_NOT_ALLOWED`) — they'd claim an integration
+that doesn't exist. Proven red. `estate_titles.verification_source` only
+allows the two human values at the database level.
+
+### Existing titles, and the marketplace
+
+- **Titles recorded before 087 became `PENDING`** with their creation as the
+  submission and `submitted_by` null. They have no documents, so they can't be
+  verified (`TITLE_DOCUMENTS_MISSING`); reject them asking for uploads. The
+  never-used `survey_plan_document_id`/`deed_document_id` became
+  `survey_plan_file_id`/`deed_file_id` pointing at `stored_files`.
+- **`marketplace_listings` publishes `title_status` and `title_verified_at`**
+  (verified only) from the same row as `title_type`, so a buyer never gets a
+  type without its status. Title number, documents, reviewer and note stay
+  private. Its rollback restores 086's definition.
+- **A verified title is not a publication condition** — deliberately out of
+  scope, per the brief.
+
+`EstateTitlesUnderRlsIT` (restricted role + RustFS) covers all of it; the
+older ITs read titles through `testsupport.EstateTitleFixture` (SQL). Proven
+red: the stale-submission check, the check reset, the source restriction,
+and the reviewer's document scope.
+
+**Not built**: AGIS or registry integration, encroachment/AGIS check screens,
+a verified title as a publication condition, a reviewer email when titles
+arrive (they sit in the queue), and a history table of earlier submissions
+(the audit entries record each submission old → new, and the files are kept).
 
 ## One password rule, wherever a password is set (`PasswordPolicy`)
 

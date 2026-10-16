@@ -21,9 +21,19 @@ public enum VerificationSource {
 
     /** A person read a document and formed a judgement. Not an integration. */
     MANUAL_REVIEW("manual_review"),
+    /**
+     * A person ran an official search at the land registry and holds the
+     * search report. Still a person, not an integration (changeset 087).
+     */
+    REGISTRY_SEARCH("registry_search"),
     AGIS("agis"),
     QOREID("qoreid"),
     CAC_REGISTRY("cac_registry");
+
+    /** What a person may record. The others are reserved for integrations that call a registry themselves. */
+    public boolean recordableByAPerson() {
+        return this == MANUAL_REVIEW || this == REGISTRY_SEARCH;
+    }
 
     private final String value;
 

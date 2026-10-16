@@ -1,7 +1,9 @@
 package com.techcomfort.landvaultbackend.inventory.internal.domain;
 
 import com.techcomfort.landvaultbackend.common.AbstractEntity;
+import com.techcomfort.landvaultbackend.common.TitleStatus;
 import com.techcomfort.landvaultbackend.common.TitleType;
+import com.techcomfort.landvaultbackend.common.VerificationSource;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -16,6 +18,7 @@ import lombok.Setter;
 import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.SQLRestriction;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
 
@@ -28,6 +31,8 @@ import java.util.UUID;
  * mirror of this rule, deliberately holding corporate verification documents
  * (CAC, TIN, SCUML) and no land title. The two halves of the rule are meant
  * to be read together; see AGENTS.md.
+ * <p>
+ * Declared by the developer, verified by HomeTrue: see AGENTS.md, "Estate titles".
  */
 @Getter
 @Setter
@@ -56,14 +61,39 @@ public class EstateTitle extends AbstractEntity {
     @Column(name = "issued_date")
     private LocalDate issuedDate;
 
-    /**
-     * References into the documents module, stored as opaque ids — inventory
-     * does not resolve them, and must not reach into that module to do so.
-     * Nullable: title can be recorded before the scans are uploaded.
-     */
-    @Column(name = "survey_plan_document_id")
-    private UUID surveyPlanDocumentId;
+    /** Private stored files ({@code estate_title_documents}); the first two are required at submission. */
+    @Column(name = "title_document_file_id")
+    private UUID titleDocumentFileId;
 
-    @Column(name = "deed_document_id")
-    private UUID deedDocumentId;
+    @Column(name = "survey_plan_file_id")
+    private UUID surveyPlanFileId;
+
+    @Column(name = "deed_file_id")
+    private UUID deedFileId;
+
+    /** Only HomeTrue moves it off {@code PENDING}; every submission puts it back. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false, length = 20)
+    private TitleStatus status;
+
+    @Column(name = "submitted_at", nullable = false)
+    private Instant submittedAt;
+
+    /** Null for titles recorded before review existed (changeset 087). */
+    @Column(name = "submitted_by")
+    private UUID submittedBy;
+
+    @Column(name = "decided_at")
+    private Instant decidedAt;
+
+    @Column(name = "decided_by")
+    private UUID decidedBy;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "verification_source", length = 32)
+    private VerificationSource verificationSource;
+
+    /** The reviewer's note. Shown to the developer; required on a rejection. */
+    @Column(name = "decision_note", columnDefinition = "text")
+    private String decisionNote;
 }

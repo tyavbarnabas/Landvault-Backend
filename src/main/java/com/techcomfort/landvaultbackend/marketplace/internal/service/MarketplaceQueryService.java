@@ -231,6 +231,8 @@ public class MarketplaceQueryService {
                     amenitiesByEstate.getOrDefault(l.getEstateId(), List.of()),
                     l.getCoverFileId() == null ? null : urls.get(l.getCoverFileId()),
                     l.getTitleType() == null ? null : l.getTitleType().getValue(),
+                    l.getTitleStatus() == null ? null : l.getTitleStatus().getValue(),
+                    l.getTitleVerifiedAt(),
                     l.getLastVerifiedAt(),
                     estateTiers.stream()
                             .map(tier -> toDto(tier, estateFees, l.getCornerPremiumPct()))
