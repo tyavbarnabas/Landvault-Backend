@@ -111,7 +111,9 @@ public class SecurityConfig {
             "/api/marketplace/estates",
             "/api/marketplace/estates/*",
             "/api/marketplace/estates/*/geojson",
-            "/api/marketplace/estates/*/plots"
+            "/api/marketplace/estates/*/plots",
+            // A document's QR code opens this for anyone holding a copy (DV-2); rate limited.
+            "/api/documents/verify/*"
     };
 
     // A publicly readable OpenAPI document hands an attacker the complete

@@ -130,6 +130,13 @@ landvault:
     stuck-after: 30m
   # The public "request onboarding" form (POST /api/onboarding-requests).
   # `delivery` works like invitations.delivery; "log" is for tests only.
+  documents:
+    # The frontend's verify page; every document's QR code opens {verify-url}/{code}.
+    # Printed on documents, so it must be the public address.
+    verify-url: ${DOCUMENTS_VERIFY_URL:http://localhost:8443/verify}
+    # Security parameters: the public verify route, per connection.
+    verify-requests-per-window: 30
+    verify-window: 1m
   onboarding:
     delivery: ${ONBOARDING_DELIVERY:email}
     from-address: ${MAIL_FROM:noreply@hometrue.com.ng}

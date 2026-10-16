@@ -5,6 +5,7 @@ import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
 import com.techcomfort.landvaultbackend.checkout.CheckoutApi;
 import com.techcomfort.landvaultbackend.common.TenantContext;
 import com.techcomfort.landvaultbackend.common.TenantScope;
+import com.techcomfort.landvaultbackend.payments.PaymentSucceeded;
 import com.techcomfort.landvaultbackend.payments.dto.PaymentDto;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
 import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentStatus;
@@ -13,6 +14,7 @@ import com.techcomfort.landvaultbackend.payments.internal.paystack.PaystackClien
 import com.techcomfort.landvaultbackend.payments.internal.repository.PaymentRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -38,6 +40,7 @@ public class PaymentConfirmationService {
     private final PaystackClient paystack;
     private final CheckoutApi checkoutApi;
     private final AuditApi auditApi;
+    private final ApplicationEventPublisher events;
 
     /** The return page asking "did it go through?" — only for the buyer's own payment. */
     @Transactional
@@ -87,6 +90,9 @@ public class PaymentConfirmationService {
                 payments.saveAndFlush(payment);
                 audit(payment, "payment.succeeded", "Paystack confirmed ₦" + payment.getAmount().toPlainString()
                         + " (" + verification.channel() + ").");
+                // The receipt is issued in this same transaction (documents module): money confirmed
+                // and its receipt commit together, or neither does.
+                events.publishEvent(new PaymentSucceeded(payment.getId()));
                 if (!checkoutApi.recordPaymentReceived(payment.getTransactionId(), payment.getReference())) {
                     // Real money for a purchase no longer waiting for it — abandoned, its plot
                     // back on sale. Recorded truthfully; a person decides (decided with the user).

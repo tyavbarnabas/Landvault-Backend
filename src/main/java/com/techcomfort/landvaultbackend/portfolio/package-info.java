@@ -11,7 +11,8 @@
  * <p>
  * Depends on {@code checkout} (the event, pending purchases, and the payment
  * summaries the payments module provides through checkout's interface),
- * {@code audit} and {@code common}. Nothing depends on it.
+ * {@code audit} and {@code common}. The documents module asks it which purchase
+ * a portfolio entry is ({@code PortfolioApi}), to list that entry's documents.
  */
 @org.springframework.modulith.ApplicationModule(
         displayName = "Portfolio"

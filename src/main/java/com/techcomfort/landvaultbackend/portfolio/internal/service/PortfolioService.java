@@ -9,6 +9,7 @@ import com.techcomfort.landvaultbackend.common.PageResponse;
 import com.techcomfort.landvaultbackend.common.PageResponses;
 import com.techcomfort.landvaultbackend.common.TitleStatus;
 import com.techcomfort.landvaultbackend.common.TitleType;
+import com.techcomfort.landvaultbackend.portfolio.PortfolioApi;
 import com.techcomfort.landvaultbackend.portfolio.dto.OwnedPlotDto;
 import com.techcomfort.landvaultbackend.portfolio.dto.PortfolioPaymentDto;
 import com.techcomfort.landvaultbackend.portfolio.dto.PortfolioSummaryDto;
@@ -35,6 +36,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.TreeMap;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -48,7 +50,7 @@ import java.util.stream.Stream;
  */
 @Service
 @RequiredArgsConstructor
-public class PortfolioService {
+public class PortfolioService implements PortfolioApi {
 
     private static final ZoneId NIGERIA = ZoneId.of("Africa/Lagos");
 
@@ -84,6 +86,17 @@ public class PortfolioService {
                 .filter(p -> p.id().equals(id) || id.equals(p.transactionId()))
                 .findFirst()
                 .orElseThrow(PortfolioException.PlotNotFound::new);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<UUID> transactionIdOf(UUID buyerUserId, UUID ownedPlotOrTransactionId) {
+        return everything(buyerUserId).stream().map(Entry::dto)
+                .filter(p -> p.id().equals(ownedPlotOrTransactionId)
+                        || ownedPlotOrTransactionId.equals(p.transactionId()))
+                .map(OwnedPlotDto::transactionId)
+                .filter(Objects::nonNull)
+                .findFirst();
     }
 
     @Transactional(readOnly = true)
@@ -167,7 +180,8 @@ public class PortfolioService {
 
     private static PortfolioPaymentDto paymentDto(PaymentSummary p, Currency currency, String status, Instant verifiedAt) {
         return new PortfolioPaymentDto(p.reference(), p.paidAt() == null ? null : LocalDate.ofInstant(p.paidAt(), NIGERIA),
-                p.amountPaid(), currency.name(), "outright", status, p.reference(), null, verifiedAt);
+                p.amountPaid(), currency.name(), "outright", status,
+                p.receiptId() == null ? null : p.receiptId().toString(), null, verifiedAt);
     }
 
     private Map<UUID, PlotDetails> details(UUID buyer) {

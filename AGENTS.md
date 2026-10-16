@@ -4901,7 +4901,8 @@ Proven red: the grace period, ask-Paystack-first, and abandoned-is-not-final.
   have sold the plot, skipping the payment check, had it been allocatable.
   Replaced by the read-only `CheckoutApi.financeStatusOf`.
 - **The portfolio entry now joins the same transaction** (changeset 088, see
-  "Portfolio"); the deed doesn't exist yet. **When documents are built, they
+  "Portfolio"); receipts are issued earlier, when Paystack confirms the payment
+  ("Documents"); the deed doesn't exist yet. **When letters are built, they
   must join `verifyAndAllocate`'s same transaction too** — a plot sold with no
   deed, or a deed for a plot nobody allocated, is exactly the corruption FV-3
   exists to prevent.
@@ -5572,8 +5573,8 @@ under a buyer's session it would return nothing, silently.
 `paidAmount` is what finance verified — **zero while pending**, because
 equity doesn't advance until finance signs off (IS-3). Payments come from the
 payments module through checkout's `PaymentSummaryProvider` (portfolio
-depends on checkout only). `receiptId` is the payment reference until receipts
-exist.
+depends on checkout only). `receiptId` is HomeTrue's receipt (changeset 089),
+reached the same way — see "Documents".
 
 ### Tests
 
@@ -5603,6 +5604,78 @@ restructure requests (approval is a portal slice). Also not built: documents
 (`allocated`, receipts), upgrades, resale. **`POST`/`PUT
 /api/portfolio/plots` will never exist** — the client must not create or
 change ownership.
+
+## Documents: receipts HomeTrue issues (changeset 089)
+
+Built 2026-10-16 from the RC/DV stories (receipts and their verify page; offer
+and allocation letters, then the irrevocable power of attorney, come next).
+Module `documents`. Decided with the user: HomeTrue generates documents rather
+than waiting for developers to upload them; a receipt is issued by **HomeTrue**
+(it received the money, through Paystack) and names the developer as seller.
+
+- **Issued when Paystack confirms the payment, in the same transaction.**
+  `PaymentConfirmationService` publishes `payments.PaymentSucceeded` after
+  marking the payment succeeded; `ReceiptIssuer` is a plain synchronous
+  `@EventListener` with `MANDATORY` (the `PlotAllocated` pattern), so a
+  succeeded payment never exists without its receipt. Every route to
+  "succeeded" — return page, webhook, the sweep, late money — goes through
+  `confirm`, so all get one. Never for failed, abandoned or mismatched money.
+  **Never make it asynchronous or after-commit.** Proven red by removing the
+  publish.
+- **A receipt is a stored copy of everything it prints** (`receipts`: buyer,
+  seller and RC number, estate, plot, size, amount, channel, last 4, reference,
+  dates). The PDF and JPEG are **drawn on demand** from that row, never stored,
+  so they can always be reproduced and never drift. The labels come through
+  `landvault_receipt_details(payment)` — the eighth `SECURITY DEFINER` escape:
+  the confirmation runs with no tenant scope (a buyer's request or Paystack's
+  webhook) and the labels live in RLS-policied tables; documents can't read
+  payments either (a module boundary), so the payment's own figures come back
+  from it too. Narrow: one *succeeded* payment, these columns.
+- **Never changed, never deleted**: the app role is revoked UPDATE, DELETE and
+  TRUNCATE (proven red). A refund doesn't touch the receipt — the money did
+  arrive; `PaymentsApi.refundedAt` makes the vault and the verify page say
+  `refunded` instead. Buyer-owned like `payments`: not RLS-policied, reached by
+  `buyer_user_id` (another buyer's is 404, proven red) or by verification code.
+- **Numbers**: `HT-RCT-{year in Lagos}-{six digits}` from `receipt_number_seq` —
+  never reused, never reset. Existing succeeded payments were backfilled in the
+  order they were paid.
+- **Verification code**: 64 random bits as 16 hex characters
+  (`VerificationCodes`), printed as `3F9A-1C77-B02E-55D1` and in a QR code
+  opening `{landvault.documents.verify-url}/{code}` (the frontend page). Never
+  derived from the id or the number. `GET /api/documents/verify/{code}` is
+  public, GET only, rate limited per remote address (30/min, same remote-address
+  rule as the marketplace), and answers one 404 `NOT_A_HOMETRUE_DOCUMENT` for
+  unknown and malformed codes alike. **It shows no amount and no personal
+  detail beyond initials** — anyone holding a copy can open it.
+- **Rendering**: PDFBox draws the page and renders the JPEG (150 dpi); ZXing
+  draws the QR as vector squares (error correction Q, so a creased print still
+  scans — a unit test decodes it from the JPEG). Fonts are **Noto Sans** (SIL
+  OFL, `src/main/resources/fonts/`, licence alongside) because the PDF standard
+  fonts have no ₦ sign. Neither library brings an HTTP client (checked, given
+  the AWS SDK lesson).
+- **No bank account on a document, ever** — the footer says payment is only
+  ever made through HomeTrue. The developers' own letters tell buyers to pay
+  into their accounts: the off-platform payment the flyer decision rejected.
+- **Purchases and the portfolio name the receipt**: payments declares
+  `ReceiptLookup` and documents implements it (`PaymentReceiptLookup`) — the
+  seventh inverted interface, since documents depends on payments.
+  `PaymentSummary` gained `receiptId`/`receiptNumber`; the portfolio's
+  `receiptId` is now the receipt, not the payment reference. The lookup is its
+  own bean on purpose: `DocumentService` needs the portfolio, whose summaries
+  need the lookup — one class would be a bean cycle.
+- Downloads are served straight to the owner with `Cache-Control: private,
+  no-store` (a receipt names a person and an amount), not through storage links.
+- **Errors set `Content-Type: application/json` explicitly.** A download is
+  requested with `Accept: application/pdf` (Swagger does this), and an
+  unset type makes Spring negotiate the JSON error against that header and
+  answer an **empty 500** instead of the 404 — found in the Swagger
+  walkthrough, proven red. Any future route that `produces` a non-JSON type
+  needs its module's handler to do the same.
+- Audit: `receipt.issued` (a system entry — Paystack confirmed, no person did).
+
+**Not built**: offer letter, allocation letter (must join `verifyAndAllocate`'s
+transaction, like the portfolio record), developer letterhead/signature/seal,
+the power of attorney, and an email carrying the receipt link.
 
 ## One password rule, wherever a password is set (`PasswordPolicy`)
 

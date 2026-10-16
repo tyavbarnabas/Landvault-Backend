@@ -4,6 +4,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * How a purchase's payment stands, as its buyer sees it. Filled in by the
@@ -26,6 +27,11 @@ public record PaymentSummary(
                 nullable = true) String reviewKind,
         @Schema(description = """
                 The refund's status if one has started: sending, pending, processing, needs-attention, \
-                processed, failed. Null when none has.""", nullable = true) String refundStatus
+                processed, failed. Null when none has.""", nullable = true) String refundStatus,
+        @Schema(description = """
+                HomeTrue's receipt for this payment — the key to `/api/documents/receipts/{id}`. Issued when \
+                Paystack confirms the payment; null before then.""", nullable = true) UUID receiptId,
+        @Schema(description = "The receipt's printed number, e.g. `HT-RCT-2026-000123`.", nullable = true)
+        String receiptNumber
 ) {
 }

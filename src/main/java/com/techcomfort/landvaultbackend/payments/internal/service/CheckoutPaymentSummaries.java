@@ -2,6 +2,7 @@ package com.techcomfort.landvaultbackend.payments.internal.service;
 
 import com.techcomfort.landvaultbackend.checkout.PaymentSummary;
 import com.techcomfort.landvaultbackend.checkout.PaymentSummaryProvider;
+import com.techcomfort.landvaultbackend.payments.ReceiptLookup;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Refund;
 import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentStatus;
@@ -23,7 +24,8 @@ import java.util.stream.Collectors;
  * Checkout's {@link PaymentSummaryProvider} — the inverted interface: checkout
  * declares it, payments fills it in. For each purchase, the payment that
  * matters to the buyer (decided with the user): the successful attempt if
- * there is one, otherwise the most recent. Batched — two queries per page.
+ * there is one, otherwise the most recent, with its receipt when it has one.
+ * Batched — three queries per page.
  */
 @Service
 @RequiredArgsConstructor
@@ -34,6 +36,7 @@ public class CheckoutPaymentSummaries implements PaymentSummaryProvider {
 
     private final PaymentRepository payments;
     private final RefundRepository refunds;
+    private final ReceiptLookup receiptLookup;
 
     @Override
     @Transactional(readOnly = true)
@@ -47,14 +50,18 @@ public class CheckoutPaymentSummaries implements PaymentSummaryProvider {
         Map<UUID, Refund> latestRefund = refunds.findAllByPaymentIdInOrderByCreatedAtDesc(
                         chosen.values().stream().map(Payment::getId).toList()).stream()
                 .collect(Collectors.toMap(Refund::getPaymentId, r -> r, (newest, older) -> newest));
+        Map<UUID, ReceiptLookup.ReceiptRef> receipts = receiptLookup.receiptsFor(
+                chosen.values().stream().map(Payment::getId).toList());
         Map<UUID, PaymentSummary> summaries = new HashMap<>();
         chosen.forEach((transactionId, p) -> {
             Refund refund = latestRefund.get(p.getId());
+            ReceiptLookup.ReceiptRef receipt = receipts.get(p.getId());
             boolean underReview = p.getReviewReason() != null;
             summaries.put(transactionId, new PaymentSummary(p.getReference(), p.getStatus().wire(),
                     p.getStatus() == PaymentStatus.SUCCEEDED ? p.getAmount() : null, p.getPaidAt(), underReview,
                     !underReview ? null : p.getRefundRequestedAt() != null ? REFUND_DUE : LATE_PAYMENT,
-                    refund == null ? null : refund.getStatus().wire()));
+                    refund == null ? null : refund.getStatus().wire(),
+                    receipt == null ? null : receipt.id(), receipt == null ? null : receipt.number()));
         });
         return summaries;
     }

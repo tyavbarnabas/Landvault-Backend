@@ -18,7 +18,7 @@ public record PortfolioPaymentDto(
         String type,
         @Schema(description = "`pending_verification` (Paystack confirmed it, finance hasn't) or `confirmed` (finance verified it).")
         String status,
-        @Schema(description = "The payment reference until receipts are issued — not yet a receipt number.")
+        @Schema(description = "HomeTrue's receipt id (`/api/documents/receipts/{id}`); null until Paystack confirms the payment.", nullable = true)
         String receiptId,
         String rejectionReason,
         @Schema(description = "When finance verified it; null until then.")
