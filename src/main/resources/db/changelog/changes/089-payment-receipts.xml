@@ -1,0 +1,181 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Payment receipts issued by HomeTrue. See AGENTS.md, "Documents".
+
+        A receipt is created when Paystack confirms a payment, in the same
+        database transaction, and holds a copy of everything printed on it: the
+        PDF and JPEG are drawn from this row on demand, so they can always be
+        reproduced exactly and never drift from what was issued.
+
+        Buyer-owned like payments: not RLS-policied, reached only by
+        buyer_user_id (or, for the public verify page, by verification_code).
+        Never changed and never deleted: UPDATE, DELETE and TRUNCATE are revoked.
+    -->
+    <changeSet id="089-receipt-details-function" author="landvault">
+        <comment>
+            The labels a receipt prints live in RLS-policied tables (plots, estates,
+            blocks, organizations) and the confirmation runs with no tenant scope
+            (a buyer's return page, or Paystack's webhook). SECURITY DEFINER,
+            hardened like 043/047/054/088, and narrow: one succeeded payment,
+            these columns only. The documents module can't read payments either
+            (a module boundary), so the payment's own figures come back here too.
+        </comment>
+        <sql splitStatements="false"><![CDATA[
+            CREATE FUNCTION landvault_receipt_details(p_payment uuid)
+            RETURNS TABLE (
+                transaction_id    uuid,
+                buyer_user_id     uuid,
+                seller_tenant_id  uuid,
+                amount            numeric,
+                currency          varchar,
+                channel           varchar,
+                last4             varchar,
+                reference         varchar,
+                paid_at           timestamptz,
+                buyer_name        varchar,
+                seller_name       varchar,
+                seller_rc_number  varchar,
+                plot_id           uuid,
+                estate_id         uuid,
+                estate_name       varchar,
+                estate_area       varchar,
+                estate_city       varchar,
+                estate_state      varchar,
+                block_name        varchar,
+                plot_number       varchar,
+                plot_size_sqm     numeric,
+                is_corner         boolean
+            )
+            LANGUAGE sql
+            STABLE
+            SECURITY DEFINER
+            SET search_path = public, pg_temp
+            AS $$
+                SELECT p.transaction_id, p.buyer_user_id, p.seller_tenant_id, p.amount, p.currency, p.channel,
+                       p.last4, p.reference, p.paid_at,
+                       trim(u.first_name || ' ' || u.last_name), o.registered_name, o.rc_number,
+                       pl.id, e.id, e.name, e.area, e.city, e.state, b.name, pl.plot_number,
+                       pl.nominal_size_sqm, pl.is_corner
+                FROM payments p
+                JOIN transactions t ON t.id = p.transaction_id
+                JOIN users u ON u.id = p.buyer_user_id
+                JOIN organizations o ON o.id = p.seller_tenant_id
+                JOIN plots pl ON pl.id = t.plot_id
+                JOIN estates e ON e.id = pl.estate_id
+                LEFT JOIN blocks b ON b.id = pl.block_id
+                WHERE p.id = p_payment AND p.status = 'SUCCEEDED'
+            $$;
+            REVOKE EXECUTE ON FUNCTION landvault_receipt_details(uuid) FROM PUBLIC;
+            GRANT EXECUTE ON FUNCTION landvault_receipt_details(uuid) TO ${appDbUsername};
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP FUNCTION landvault_receipt_details(uuid);
+        ]]></rollback>
+    </changeSet>
+
+    <changeSet id="089-create-receipts" author="landvault">
+        <sql><![CDATA[
+            CREATE SEQUENCE receipt_number_seq;
+            GRANT USAGE ON SEQUENCE receipt_number_seq TO ${appDbUsername};
+
+            CREATE TABLE receipts (
+                id                 uuid NOT NULL PRIMARY KEY,
+                created_at         timestamp(6) with time zone NOT NULL,
+                created_by         varchar(255),
+
+                number             varchar(32) NOT NULL,
+                verification_code  varchar(16) NOT NULL,
+                payment_id         uuid NOT NULL REFERENCES payments (id),
+                transaction_id     uuid NOT NULL REFERENCES transactions (id),
+                buyer_user_id      uuid NOT NULL REFERENCES users (id),
+                seller_tenant_id   uuid NOT NULL REFERENCES organizations (id),
+                plot_id            uuid NOT NULL REFERENCES plots (id),
+                estate_id          uuid NOT NULL REFERENCES estates (id),
+                issued_at          timestamp(6) with time zone NOT NULL,
+
+                buyer_name         varchar(255) NOT NULL,
+                seller_name        varchar(255) NOT NULL,
+                seller_rc_number   varchar(64),
+                estate_name        varchar(255) NOT NULL,
+                estate_location    varchar(512),
+                block_name         varchar(255),
+                plot_number        varchar(32) NOT NULL,
+                plot_size_sqm      numeric(12, 2),
+                is_corner          boolean NOT NULL,
+                amount             numeric(19, 4) NOT NULL,
+                currency           varchar(3) NOT NULL,
+                channel            varchar(32),
+                last4              varchar(8),
+                payment_reference  varchar(64) NOT NULL,
+                paid_at            timestamp(6) with time zone,
+
+                CONSTRAINT uq_receipts_number UNIQUE (number),
+                CONSTRAINT uq_receipts_verification_code UNIQUE (verification_code),
+                CONSTRAINT uq_receipts_payment UNIQUE (payment_id),
+                CONSTRAINT chk_receipts_verification_code CHECK (verification_code ~ '^[0-9A-F]{16}$'),
+                CONSTRAINT chk_receipts_amount CHECK (amount > 0)
+            );
+            CREATE INDEX idx_receipts_buyer ON receipts (buyer_user_id, issued_at DESC);
+            CREATE INDEX idx_receipts_transaction ON receipts (transaction_id);
+            REVOKE UPDATE, DELETE, TRUNCATE ON receipts FROM ${appDbUsername};
+
+            COMMENT ON TABLE receipts IS
+                'Payment receipts issued by HomeTrue when Paystack confirms a payment (same transaction). Holds a copy of everything printed; the PDF/JPEG are drawn from it. Buyer-owned: not RLS-policied, reached by buyer_user_id or verification_code. Never updated or deleted. See AGENTS.md, "Documents".';
+            COMMENT ON COLUMN receipts.verification_code IS
+                '64 random bits as 16 hex characters, printed on the receipt and in its QR code; the public verify page looks a receipt up by it. Never the id or the number, which are guessable or sequential.';
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE receipts;
+            DROP SEQUENCE receipt_number_seq;
+        ]]></rollback>
+    </changeSet>
+
+    <!--
+        Payments confirmed before receipts existed get one each, numbered in the
+        order they were paid, dated when HomeTrue confirmed them. The code is 64
+        random bits of a v4 UUID (skipping its fixed version and variant bits).
+    -->
+    <changeSet id="089-backfill-receipts" author="landvault">
+        <sql><![CDATA[
+            WITH paid AS (
+                SELECT p.id, COALESCE(p.verified_at, p.paid_at, p.updated_at, p.created_at) AS issued_at
+                FROM payments p
+                WHERE p.status = 'SUCCEEDED' AND p.deleted = false
+                ORDER BY COALESCE(p.paid_at, p.verified_at, p.created_at), p.id
+            ), numbered AS (
+                SELECT paid.*, nextval('receipt_number_seq') AS seq,
+                       replace(gen_random_uuid()::text, '-', '') AS hex
+                FROM paid
+            )
+            INSERT INTO receipts (id, created_at, number, verification_code, payment_id, transaction_id,
+                                  buyer_user_id, seller_tenant_id, plot_id, estate_id, issued_at, buyer_name,
+                                  seller_name, seller_rc_number, estate_name, estate_location, block_name,
+                                  plot_number, plot_size_sqm, is_corner, amount, currency, channel, last4,
+                                  payment_reference, paid_at)
+            SELECT gen_random_uuid(), now(),
+                   'HT-RCT-' || to_char(n.issued_at AT TIME ZONE 'Africa/Lagos', 'YYYY') || '-'
+                       || lpad(n.seq::text, 6, '0'),
+                   upper(substr(n.hex, 1, 12) || substr(n.hex, 18, 4)),
+                   n.id, d.transaction_id, d.buyer_user_id, d.seller_tenant_id, d.plot_id, d.estate_id,
+                   n.issued_at, d.buyer_name, d.seller_name, d.seller_rc_number, d.estate_name,
+                   NULLIF(concat_ws(', ', NULLIF(d.estate_area, ''), NULLIF(d.estate_city, ''),
+                                    NULLIF(d.estate_state, '')), ''),
+                   d.block_name, d.plot_number, d.plot_size_sqm, d.is_corner, d.amount, d.currency,
+                   d.channel, d.last4, d.reference, d.paid_at
+            FROM numbered n
+            CROSS JOIN LATERAL landvault_receipt_details(n.id) d
+            ORDER BY n.seq;
+        ]]></sql>
+        <rollback><![CDATA[
+            -- receipts is never deleted by the app; a rollback of this changeset is a migration act.
+            TRUNCATE receipts;
+        ]]></rollback>
+    </changeSet>
+
+</databaseChangeLog>

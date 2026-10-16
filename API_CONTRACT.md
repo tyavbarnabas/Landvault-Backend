@@ -339,12 +339,13 @@ this table never existed and are gone.
 payment moves straight to `awaiting_finance`. **Only `verified` means the plot is the buyer's.**
 
 Every `Transaction` carries **`payment`** — null until the buyer first presses pay:
-`{ reference, status, amountPaid, paidAt, underReview, reviewKind, refundStatus }`. It is the
+`{ reference, status, amountPaid, paidAt, underReview, reviewKind, refundStatus, receiptId, receiptNumber }`. It is the
 successful attempt if there is one, otherwise the most recent. `reviewKind`: `late_payment`
 (paid after the reservation ended — the developer will allocate the plot or refund it),
 `refund_due` (the money is being returned), or null. `refundStatus`: the refund's status once one
 has started (`sending | pending | processing | needs-attention | processed | failed`), else null.
-Use `payment.reference` for `/api/payments/{reference}/refund` and friends.
+Use `payment.reference` for `/api/payments/{reference}/refund` and friends. `receiptId`/`receiptNumber`: HomeTrue's
+receipt, issued the moment Paystack confirms the payment (null before) — see Documents.
 
 **`InitiateTransactionInput` is deliberately not the accepted body.** The
 frontend currently posts `basePrice`, `totalPrice`, `amountDue`,
@@ -393,18 +394,30 @@ All need `client.portfolio.view` (every buyer has it). Read-only: **ownership on
 - **No money arithmetic in the frontend**: `paidAmount` is what finance verified (**zero while pending** — equity doesn't advance before verification), and `/summary` gives totals per currency, never added across currencies, counting only plots still owned (`transferred`/`superseded` are listed as history but never counted), with pending purchases counted separately. Use it instead of `groupPlotsByCurrency`, which only sees the page loaded.
 - **Title**: `titleType`, plus **`titleStatus`** (`pending` | `verified` | `rejected`, live from HomeTrue's review) and `titleVerified` (true only while verified). The frontend's mock always set `titleVerified: true`; that is no longer true.
 - `basePrice` is always the agreed pre-premium price; `cornerPremiumPct` only when a premium was applied. `sqm` is what it was sold as; `actualSqm` the survey, null when unsurveyed — never reconcile them.
-- `payments`: the purchase's payment, `pending_verification` then `confirmed`. **`receiptId` is the payment reference** until receipts exist (document vault).
+- `payments`: the purchase's payment, `pending_verification` then `confirmed`. **`receiptId` is HomeTrue's receipt id** (`/api/documents/receipts/{id}`), null until Paystack confirms the payment. *(Changed: it used to be the payment reference.)*
 - Installment fields (`nextDueDate`, `nextDueAmount`, `installmentMonths`, `installmentsPaid`, `arrears`, `restructureStatus`) and `supersedes` are null: nothing can be bought on a plan yet.
 
 **Not built, and the frontend's live calls to them will 404/405**: `POST /api/portfolio/plots` and `PUT /api/portfolio/plots/{id}` (**never will be** — a client must not be able to create or change ownership), the schedule, installment payment and verify routes, and `restructure-requests`. They arrive with installment plans.
 
-## Documents — `documentsService.ts`
+## Documents — `documentsService.ts` — **receipts built** (changeset 089)
+
+All need `client.documents.view` (every buyer has it) except verify, which is public. Read-only: documents are issued by events, never by a client.
+
 | Method | Path | Response |
 |---|---|---|
-| GET | `/api/documents?cursor&limit` | `Page<Document>` |
-| GET | `/api/documents/by-plot/{plotId}` | `Document[]` |
-| POST | `/api/documents/{id}/void` | 204 |
-| POST | `/api/documents` (batch issue) | `Document[]` |
+| GET | `/api/documents?cursor&limit` | `Page<Document>`, newest first. `limit` default 20, max 100. |
+| GET | `/api/portfolio/plots/{id}/documents` | `Document[]` for one portfolio entry — the same ids `/api/portfolio/plots/{id}` takes (owned-plot or transaction id). Another buyer's: 404 `PORTFOLIO_PLOT_NOT_FOUND`. |
+| GET | `/api/documents/receipts/{id}` | `Document`; another buyer's: 404 `DOCUMENT_NOT_FOUND`. |
+| GET | `/api/documents/receipts/{id}/pdf` | The PDF (A4), as an attachment named `HomeTrue-<number>.pdf`. |
+| GET | `/api/documents/receipts/{id}/jpeg` | The same page as a JPEG (150 dpi), for sharing. |
+| GET | `/api/documents/verify/{code}` | **Public**, rate limited (30/min per connection). `DocumentVerification`, or 404 `NOT_A_HOMETRUE_DOCUMENT` (unknown or malformed code — one answer for both). |
+
+- **A receipt is issued the moment Paystack confirms a payment** (return page, webhook or sweep), in the same database step, by **HomeTrue** — it received the money — naming the developer as seller. Never for a failed, abandoned or mismatched payment.
+- `Document`: the frontend's shape — `id, type ("receipt"), title, date, status, qrCode, size, plotId, transactionId, supersedes` — plus `number` (`HT-RCT-2026-000123`), `issuedAt`, `verifyUrl`, `refundedAt`, `pdfUrl`, `jpegUrl`. `qrCode` is the printed verification code (`3F9A-1C77-B02E-55D1`). `size` is null (drawn on demand). `plotId` is the **inventory** plot, not a portfolio id. `status` is `valid`; a refunded payment's receipt stays `valid` (the money did arrive) with `refundedAt` set.
+- **Downloads need the bearer token**, so fetch them as a blob (`apiClient` with `responseType: blob`) and hand the `File` to `navigator.share({ files })`; fall back to a download link where sharing files isn't supported. The backend never sends a document anywhere itself.
+- **The QR code opens `{frontend}/verify/{code}`** (`DOCUMENTS_VERIFY_URL`, default `http://localhost:8443/verify`). That frontend page calls the verify route. `DocumentVerification`: `{ status ("valid" | "refunded"), documentType, number, issuedAt, issuedBy ("HomeTrue"), developer, estate, location, plot, holderInitials, refundedAt }` — **never an amount, and never the holder's name, email or phone** (initials only): anyone holding a copy can open it.
+- The frontend's `POST /api/documents` (batch issue), `POST /api/documents/{id}/void` and `/api/documents/by-plot/{plotId}` **don't exist and won't**: documents are issued by the backend at the moment the event happens, and a reissue (letters, later) is a new document pointing at the old one.
+- **Next**: offer and allocation letters (generated from the developer's letterhead, signature, seal and the estate's disclosed terms), then the irrevocable power of attorney.
 
 File storage: **the storage module is built (step 1)**; estate photos (step 2) are the first feature using it — see "Estate photos" above. Files upload straight from the browser to object storage: the backend returns `{ fileId, uploadUrl, method: "PUT", headers, expiresAt }`; the browser sends the file to `uploadUrl` with exactly `headers` (the size and type are part of the signature); then the feature's own confirm route is called with `fileId`. Errors: `FILE_TYPE_NOT_ALLOWED`, `FILE_TOO_LARGE`, `FILE_EMPTY` (400), `UPLOAD_SIZE_MISMATCH` / `UPLOAD_CONTENT_MISMATCH` (400: what arrived wasn't what was promised; deleted, start again), `UPLOAD_NOT_RECEIVED` / `UPLOAD_EXPIRED` / `FILE_NOT_READY` (409), `FILE_NOT_FOUND` (404), `STORAGE_UNAVAILABLE` (503, retry). Public files come back with a `publicUrl`; private ones only through short-lived links. Accepted: JPG, PNG, WebP, PDF (never SVG). A stored file's `visibility` is `public` | `private` and its `fileType` `jpeg` | `png` | `webp` | `pdf` — lowercase like every other value in this API (`status` already was); requests accept either case. `IMAGE_UNREADABLE` (400) is added for features that ask for metadata removal (estate photos). `Document` downloads come with step 3/4.
 

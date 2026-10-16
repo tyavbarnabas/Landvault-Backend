@@ -1,6 +1,10 @@
 package com.techcomfort.landvaultbackend.checkout;
 
 import com.techcomfort.landvaultbackend.testsupport.EstatePhotoFixture;
+import com.techcomfort.landvaultbackend.documents.dto.DocumentDto;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.core.ParameterizedTypeReference;
 import com.techcomfort.landvaultbackend.common.PageResponse;
 import com.techcomfort.landvaultbackend.testsupport.EstateTitleFixture;
@@ -73,6 +77,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -2311,6 +2316,158 @@ class ReservationCheckoutUnderRlsIT {
 
         execute("UPDATE estate_titles SET status = 'PENDING', decided_at = NULL WHERE estate_id = '" + estateId + "'");
         assertThat(portfolio(buyer).items().getFirst().titleVerified()).isFalse();
+    }
+
+    // --- documents: receipts (changeset 089) ---
+
+    /** RC-1/2/4: confirmed money gets exactly one receipt, downloadable and reachable from the purchase. */
+    @Test
+    void aConfirmedPaymentGetsOneReceiptTheBuyerCanDownload() throws Exception {
+        TransactionDto transaction = paidPurchase();
+        String reference = queryString("SELECT reference FROM payments WHERE transaction_id = '" + transaction.id() + "'");
+        assertThat(confirm(buyer, reference).getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(queryString("SELECT count(*) FROM receipts WHERE payment_reference = '" + reference + "'"))
+                .as("a second confirmation issues nothing new").isEqualTo("1");
+
+        PageResponse<DocumentDto> documents = documents(buyer);
+        assertThat(documents.total()).isOne();
+        DocumentDto receipt = documents.items().getFirst();
+        assertThat(receipt.type()).isEqualTo("receipt");
+        assertThat(receipt.number()).matches("HT-RCT-\\d{4}-\\d{6}");
+        assertThat(receipt.status()).isEqualTo("valid");
+        assertThat(receipt.transactionId()).isEqualTo(transaction.id());
+        assertThat(receipt.plotId()).isEqualTo(plotId);
+        assertThat(receipt.qrCode()).matches("[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}");
+        assertThat(receipt.verifyUrl()).endsWith("/verify/" + receipt.qrCode().replace("-", ""));
+
+        ResponseEntity<byte[]> pdf = get(receipt.pdfUrl(), buyer.token(), byte[].class);
+        assertThat(pdf.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(pdf.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_PDF);
+        assertThat(pdf.getHeaders().getContentDisposition().getFilename()).isEqualTo("HomeTrue-" + receipt.number() + ".pdf");
+        try (PDDocument document = Loader.loadPDF(pdf.getBody())) {
+            String text = new PDFTextStripper().getText(document);
+            assertThat(text).contains(receipt.number(), "₦20,000,000.00", "Twenty Million Naira Only", "Ada Buyer",
+                    reference, receipt.qrCode());
+        }
+        ResponseEntity<byte[]> jpeg = get(receipt.jpegUrl(), buyer.token(), byte[].class);
+        assertThat(jpeg.getHeaders().getContentType()).isEqualTo(MediaType.IMAGE_JPEG);
+        assertThat(jpeg.getBody()).startsWith((byte) 0xFF, (byte) 0xD8);
+
+        assertThat(get("/api/checkout/transactions/mine", buyer.token(), String.class).getBody())
+                .contains("\"receiptId\":\"" + receipt.id() + "\"", "\"receiptNumber\":\"" + receipt.number() + "\"");
+        assertThat(portfolio(buyer).items().getFirst().payments().getFirst().receiptId())
+                .isEqualTo(receipt.id().toString());
+        assertThat(restTemplate.exchange("/api/portfolio/plots/" + transaction.id() + "/documents", HttpMethod.GET,
+                new HttpEntity<>(bearer(buyer.token())), new ParameterizedTypeReference<List<DocumentDto>>() {
+                }).getBody()).extracting(DocumentDto::id).containsExactly(receipt.id());
+    }
+
+    @Test
+    void anotherBuyerCannotReachMyReceipt() {
+        TransactionDto transaction = paidPurchase();
+        DocumentDto receipt = documents(buyer).items().getFirst();
+        Buyer other = verifiedBuyer();
+
+        assertThat(documents(other).total()).isZero();
+        for (String path : List.of(receipt.pdfUrl(), receipt.jpegUrl(), "/api/documents/receipts/" + receipt.id())) {
+            ResponseEntity<String> theirs = get(path, other.token(), String.class);
+            assertThat(theirs.getStatusCode()).as(path).isEqualTo(HttpStatus.NOT_FOUND);
+        }
+        // A download asks for the file type only (Swagger, a browser fetch); the refusal must still be a 404
+        // in the standard JSON shape, never an empty 500 from content negotiation.
+        for (var download : List.of(
+                Map.entry(receipt.pdfUrl(), MediaType.APPLICATION_PDF),
+                Map.entry(receipt.jpegUrl(), MediaType.IMAGE_JPEG))) {
+            HttpHeaders headers = bearer(other.token());
+            headers.setAccept(List.of(download.getValue()));
+            ResponseEntity<String> theirs = restTemplate.exchange(download.getKey(), HttpMethod.GET,
+                    new HttpEntity<>(headers), String.class);
+            assertThat(theirs.getStatusCode()).as(download.getKey()).isEqualTo(HttpStatus.NOT_FOUND);
+            assertThat(theirs.getBody()).as(download.getKey()).contains("DOCUMENT_NOT_FOUND");
+        }
+        assertThat(get("/api/portfolio/plots/" + transaction.id() + "/documents", other.token(), String.class)
+                .getBody()).contains("PORTFOLIO_PLOT_NOT_FOUND");
+    }
+
+    @Test
+    void aFailedOrMismatchedPaymentGetsNoReceipt() {
+        TransactionDto transaction = outrightTransaction();
+        String reference = startPayment(transaction);
+        paystackSays(reference, "success", 1_000L, "NGN", "Approved");
+        assertThat(confirm(buyer, reference).getBody()).contains("\"status\":\"mismatched\"");
+
+        assertThat(queryString("SELECT count(*) FROM receipts WHERE payment_reference = '" + reference + "'"))
+                .isEqualTo("0");
+        assertThat(documents(buyer).total()).isZero();
+    }
+
+    /** DV-2: anyone may check a code; nothing about money or the person beyond initials. */
+    @Test
+    void theVerifyPageIsPublicAndShowsNoAmountOrName() {
+        paidPurchase();
+        DocumentDto receipt = documents(buyer).items().getFirst();
+
+        ResponseEntity<String> anonymous = restTemplate.getForEntity(
+                "/api/documents/verify/" + receipt.qrCode().toLowerCase(), String.class);
+        assertThat(anonymous.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(anonymous.getBody()).contains("\"status\":\"valid\"", receipt.number(), "\"holderInitials\":\"A. B.\"",
+                "\"issuedBy\":\"HomeTrue\"");
+        assertThat(anonymous.getBody()).doesNotContain("20000000", "20,000,000", "Ada", buyer.email(),
+                buyer.id().toString(), "+234");
+
+        for (String code : List.of("0000-0000-0000-0000", "not-a-code")) {
+            ResponseEntity<String> unknown = restTemplate.getForEntity("/api/documents/verify/" + code, String.class);
+            assertThat(unknown.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+            assertThat(unknown.getBody()).contains("NOT_A_HOMETRUE_DOCUMENT");
+        }
+        assertThat(restTemplate.getForEntity("/api/documents", String.class).getStatusCode())
+                .as("only verify is public").isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    /** RC-5: a refund never changes the receipt; the verify page and the vault say it was returned. */
+    @Test
+    void aRefundedPaymentsReceiptReadsRefunded() {
+        TransactionDto transaction = paidPurchase();
+        DocumentDto receipt = documents(buyer).items().getFirst();
+        execute("INSERT INTO refunds (id, created_at, deleted, payment_id, transaction_id, buyer_user_id, seller_tenant_id, "
+                + "amount, currency, amount_kobo, status, reason, initiated_by, refunded_at) SELECT gen_random_uuid(), now(), "
+                + "false, p.id, p.transaction_id, p.buyer_user_id, p.seller_tenant_id, p.amount, 'NGN', p.amount_kobo, "
+                + "'PROCESSED', 'test', p.buyer_user_id, now() FROM payments p WHERE p.transaction_id = '"
+                + transaction.id() + "'");
+
+        assertThat(restTemplate.getForEntity("/api/documents/verify/" + receipt.qrCode(), String.class).getBody())
+                .contains("\"status\":\"refunded\"");
+        DocumentDto after = documents(buyer).items().getFirst();
+        assertThat(after.status()).as("the money did arrive").isEqualTo("valid");
+        assertThat(after.refundedAt()).isNotNull();
+        assertThat(after.number()).isEqualTo(receipt.number());
+    }
+
+    @Test
+    void theDatabaseRefusesToChangeOrDeleteAReceipt() {
+        paidPurchase();
+        UUID receiptId = documents(buyer).items().getFirst().id();
+        assertThat(appRoleCan("UPDATE receipts SET amount = 1 WHERE id = '" + receiptId + "'")).isFalse();
+        assertThat(appRoleCan("DELETE FROM receipts WHERE id = '" + receiptId + "'")).isFalse();
+    }
+
+    private boolean appRoleCan(String sql) {
+        try (Connection connection = DriverManager.getConnection(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(),
+                POSTGRES.getPassword()); Statement statement = connection.createStatement()) {
+            statement.execute("SET ROLE " + APP_ROLE);
+            statement.execute(sql);
+            return true;
+        } catch (SQLException e) {
+            return false;
+        }
+    }
+
+    private PageResponse<DocumentDto> documents(Buyer who) {
+        ResponseEntity<PageResponse<DocumentDto>> response = restTemplate.exchange("/api/documents",
+                HttpMethod.GET, new HttpEntity<>(bearer(who.token())), new ParameterizedTypeReference<>() {
+                });
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        return response.getBody();
     }
 
     private PageResponse<OwnedPlotDto> portfolio(Buyer who) {

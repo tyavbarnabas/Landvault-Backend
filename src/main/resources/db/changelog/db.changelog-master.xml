@@ -94,6 +94,7 @@
     <include file="changes/086-estate-photos.xml" relativeToChangelogFile="true"/>
     <include file="changes/087-estate-title-review.xml" relativeToChangelogFile="true"/>
     <include file="changes/088-portfolio-owned-plots.xml" relativeToChangelogFile="true"/>
+    <include file="changes/089-payment-receipts.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>
