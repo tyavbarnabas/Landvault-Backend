@@ -20,8 +20,9 @@
  * everything it needs about a plot comes back from the acquire itself, taken
  * from the same locked snapshot that granted the hold.
  * <p>
- * Nothing here allocates a plot or advances a payment. Allocation follows
- * finance verification, and {@code finance} does not exist yet.
+ * A plot is allocated only when finance verifies the sale
+ * ({@code CheckoutApi.verifyAndAllocate}), which publishes {@code PlotAllocated}
+ * for the portfolio to record ownership in the same transaction.
  */
 @org.springframework.modulith.ApplicationModule(
         displayName = "Checkout"

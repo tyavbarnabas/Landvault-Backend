@@ -43,6 +43,7 @@ public class OpenApiConfig {
     public static final String TAG_RESERVATIONS = "Reservations";
     public static final String TAG_CHECKOUT = "Checkout";
     public static final String TAG_PAYMENTS = "Payments";
+    public static final String TAG_PORTFOLIO = "Portfolio";
     public static final String TAG_PORTAL_FINANCE = "Portal — Finance";
     public static final String TAG_PORTAL_SETTLEMENT = "Portal — Payout account";
     public static final String TAG_PORTAL_ESTATES = "Portal — Estates";
@@ -147,6 +148,9 @@ public class OpenApiConfig {
                         new Tag().name(TAG_CHECKOUT)
                                 .description("The pending purchase record. Price is captured at "
                                         + "reservation; nothing here allocates a plot."),
+                        new Tag().name(TAG_PORTFOLIO)
+                                .description("What a buyer owns, across every company, and its payments. "
+                                        + "Ownership comes only from finance verifying a sale."),
                         new Tag().name(TAG_PORTAL_FINANCE)
                                 .description("A developer's finance staff verify payments before a plot is sold. "
                                         + "Approving allocates the plot; rejecting puts it back on sale."),

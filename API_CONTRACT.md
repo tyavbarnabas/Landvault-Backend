@@ -377,18 +377,26 @@ The hold is acquired by a database-level compare-and-swap inside a
 one plot, and a buyer cannot read or write `plots` directly at all. Expiry is
 a scheduled sweep, not a client timer. **Holds cannot be extended.**
 
-## Portfolio (owned plots + payments) — `portfolioService.ts`
-| Method | Path | Request | Response |
-|---|---|---|---|
-| GET | `/api/portfolio/plots?cursor&limit` | — | `Page<OwnedPlot>` |
-| GET | `/api/portfolio/plots/{id}` | — | `OwnedPlot` |
-| PATCH | `/api/portfolio/plots/{id}/status` | `{ status, patch? }` | `OwnedPlot` |
-| GET | `/api/portfolio/plots/{plotId}/installment-schedule` | — | `InstallmentSchedule` |
-| POST | `/api/portfolio/installments/payments` | `SubmitInstallmentPaymentInput` | `PaymentRecord` (status `pending_verification`) |
-| POST | `/api/portfolio/plots/{plotId}/installments/payments/{paymentId}/verify` | — (Finance-role) | `VerifyInstallmentPaymentResult` |
-| POST | `/api/portfolio/plots/{plotId}/restructure` | `{ note }` | `OwnedPlot` |
+## Portfolio (owned plots + payments) — `portfolioService.ts` — **outright purchases built** (changeset 088)
 
-`OwnedPlot.status` is a real lifecycle, not a 3-state enum: `reserved → pending_verification → allocated → installment_active → completed`, plus side states `in_arrears`, `upgrade_pending`, `transferred`, `superseded`. Never collapse these into fewer states server-side either.
+All need `client.portfolio.view` (every buyer has it). Read-only: **ownership only ever comes from finance verifying a sale**.
+
+| Method | Path | Response |
+|---|---|---|
+| GET | `/api/portfolio/plots?sort=urgency&cursor&limit` | `Page<OwnedPlot>`: newest first, or most urgent first with `sort=urgency` (applied before paging). `limit` default 20, max 100. Any other `sort` is 400 `INVALID_PARAMETER`. |
+| GET | `/api/portfolio/plots/{id}` | `OwnedPlot`. Takes an owned-plot id **or a transaction id**; another buyer's is 404 `OWNED_PLOT_NOT_FOUND`. |
+| GET | `/api/portfolio/summary` | `{ byCurrency: [{ currency, totalValue, totalPaid, count }], awaitingVerification }` |
+
+- **What is listed**: every plot the buyer owns, across every company, plus paid purchases finance hasn't verified yet (`pending_verification`, with `id` = the transaction id). An unpaid hold is **not** listed (it's a checkout, not ownership), nor is a rejected or abandoned purchase.
+- **When finance verifies**, the purchase becomes an owned plot with its own `id`; `transactionId` stays the same, and `GET /plots/{transactionId}` keeps working, so the frontend can follow it.
+- **Statuses today**: `pending_verification` and `completed` (an outright sale, verified = paid in full). `allocated` waits for issued documents; the installment, arrears, upgrade and resale statuses wait for those flows. Nothing fakes them.
+- **No money arithmetic in the frontend**: `paidAmount` is what finance verified (**zero while pending** — equity doesn't advance before verification), and `/summary` gives totals per currency, never added across currencies, counting only plots still owned (`transferred`/`superseded` are listed as history but never counted), with pending purchases counted separately. Use it instead of `groupPlotsByCurrency`, which only sees the page loaded.
+- **Title**: `titleType`, plus **`titleStatus`** (`pending` | `verified` | `rejected`, live from HomeTrue's review) and `titleVerified` (true only while verified). The frontend's mock always set `titleVerified: true`; that is no longer true.
+- `basePrice` is always the agreed pre-premium price; `cornerPremiumPct` only when a premium was applied. `sqm` is what it was sold as; `actualSqm` the survey, null when unsurveyed — never reconcile them.
+- `payments`: the purchase's payment, `pending_verification` then `confirmed`. **`receiptId` is the payment reference** until receipts exist (document vault).
+- Installment fields (`nextDueDate`, `nextDueAmount`, `installmentMonths`, `installmentsPaid`, `arrears`, `restructureStatus`) and `supersedes` are null: nothing can be bought on a plan yet.
+
+**Not built, and the frontend's live calls to them will 404/405**: `POST /api/portfolio/plots` and `PUT /api/portfolio/plots/{id}` (**never will be** — a client must not be able to create or change ownership), the schedule, installment payment and verify routes, and `restructure-requests`. They arrive with installment plans.
 
 ## Documents — `documentsService.ts`
 | Method | Path | Response |

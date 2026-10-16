@@ -7,6 +7,8 @@ import com.techcomfort.landvaultbackend.checkout.CheckoutApi;
 import com.techcomfort.landvaultbackend.checkout.FinanceDecision;
 import com.techcomfort.landvaultbackend.checkout.FinanceQueueRow;
 import com.techcomfort.landvaultbackend.checkout.PayableTransaction;
+import com.techcomfort.landvaultbackend.checkout.PendingPurchase;
+import com.techcomfort.landvaultbackend.checkout.PlotAllocated;
 import com.techcomfort.landvaultbackend.checkout.VerifiedSale;
 import com.techcomfort.landvaultbackend.checkout.internal.domain.Reservation;
 import com.techcomfort.landvaultbackend.checkout.internal.domain.Transaction;
@@ -16,6 +18,7 @@ import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.checkout.internal.repository.ReservationRepository;
 import com.techcomfort.landvaultbackend.checkout.internal.repository.TransactionRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,6 +39,7 @@ public class CheckoutApiImpl implements CheckoutApi {
     private final ReservationService reservationService;
     private final PlotLockGateway plotLockGateway;
     private final AuditApi auditApi;
+    private final ApplicationEventPublisher events;
 
     @Override
     @Transactional(readOnly = true)
@@ -129,6 +133,7 @@ public class CheckoutApiImpl implements CheckoutApi {
         auditApi.record(AuditEntryRequest.of(financeUserId, "transaction.verified", "transaction", transactionId,
                 tenantId, "Payment for " + transaction.getReference() + " verified by finance; plot "
                         + transaction.getPlotId() + " allocated (sold) and the reservation converted."));
+        publishAllocated(transaction, financeUserId);
         return FinanceDecision.DONE;
     }
 
@@ -185,7 +190,29 @@ public class CheckoutApiImpl implements CheckoutApi {
         auditApi.record(AuditEntryRequest.of(financeUserId, "transaction.verified", "transaction", transactionId,
                 tenantId, "Late payment for " + transaction.getReference() + " accepted by finance; plot "
                         + transaction.getPlotId() + " allocated (sold). The earlier hold stays expired."));
+        publishAllocated(transaction, financeUserId);
         return FinanceDecision.DONE;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<PendingPurchase> purchasesAwaitingFinance(UUID buyerUserId) {
+        return transactions.findByBuyerUserIdAndStatusOrderByCreatedAtDesc(buyerUserId, TransactionStatus.AWAITING_FINANCE)
+                .stream()
+                .map(t -> new PendingPurchase(t.getId(), t.getPlotId(), t.getEstateId(), t.getPlan().getValue(),
+                        t.getIntent(), t.getBasePrice(), t.getCornerPremiumPct(), t.getTotalPrice(), t.getCurrency(),
+                        t.getCreatedAt()))
+                .toList();
+    }
+
+    /**
+     * Synchronous, inside this transaction: the portfolio's owned-plot record
+     * is written now, and a failure there rolls the sale back with it (FV-3).
+     */
+    private void publishAllocated(Transaction t, UUID financeUserId) {
+        events.publishEvent(new PlotAllocated(t.getId(), t.getBuyerUserId(), t.getPlotId(), t.getEstateId(),
+                t.getSellerTenantId(), t.getPlan().getValue(), t.getIntent(), t.getBasePrice(),
+                t.getCornerPremiumPct(), t.getTotalPrice(), t.getCurrency(), financeUserId));
     }
 
     /**

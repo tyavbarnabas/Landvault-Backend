@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        A buyer's portfolio: what they own. See AGENTS.md, "Portfolio".
+
+        An owned plot is created at the moment finance verifies a sale — in the
+        same database transaction that marks the plot sold — so a plot is never
+        sold with no owner on record, nor owned without being sold. Before that,
+        a paid purchase is still the checkout's, and the portfolio reads it from
+        there as pending verification.
+
+        Buyer-owned like transactions: tenant_id stays null and the selling
+        company is seller_tenant_id. Not RLS-policied, for the same reason — a
+        buyer has no tenant scope, and a portfolio spans companies. Rows are
+        reached only by buyer_user_id. Never deleted: a retired record
+        (transferred, superseded) stays as history.
+    -->
+    <changeSet id="088-create-owned-plots" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE owned_plots (
+                id                  uuid NOT NULL PRIMARY KEY,
+                tenant_id           uuid,
+                branch_id           uuid,
+                created_at          timestamp(6) with time zone NOT NULL,
+                updated_at          timestamp(6) with time zone,
+                created_by          varchar(255),
+                updated_by          varchar(255),
+                deleted             boolean NOT NULL,
+
+                buyer_user_id       uuid NOT NULL REFERENCES users (id),
+                transaction_id      uuid REFERENCES transactions (id),
+                plot_id             uuid NOT NULL REFERENCES plots (id),
+                estate_id           uuid NOT NULL REFERENCES estates (id),
+                seller_tenant_id    uuid NOT NULL REFERENCES organizations (id),
+                status              varchar(24) NOT NULL,
+                plan                varchar(16) NOT NULL,
+                intent              varchar(16) NOT NULL,
+                base_price          numeric(19, 4) NOT NULL,
+                corner_premium_pct  numeric(5, 2),
+                total_price         numeric(19, 4) NOT NULL,
+                currency            varchar(3) NOT NULL,
+                acquired_at         timestamp(6) with time zone NOT NULL,
+                supersedes          uuid REFERENCES owned_plots (id),
+
+                CONSTRAINT chk_owned_plots_status CHECK (status IN (
+                    'RESERVED', 'PENDING_VERIFICATION', 'ALLOCATED', 'INSTALLMENT_ACTIVE', 'COMPLETED',
+                    'IN_ARREARS', 'UPGRADE_PENDING', 'TRANSFERRED', 'SUPERSEDED')),
+                CONSTRAINT chk_owned_plots_prices CHECK (base_price > 0 AND total_price >= base_price)
+            );
+            -- One sale, one owned record.
+            CREATE UNIQUE INDEX uq_owned_plots_transaction ON owned_plots (transaction_id) WHERE transaction_id IS NOT NULL;
+            -- Never two owners of one plot at once: only a retired record may share it.
+            CREATE UNIQUE INDEX uq_owned_plots_one_owner ON owned_plots (plot_id)
+                WHERE deleted = false AND status NOT IN ('TRANSFERRED', 'SUPERSEDED');
+            CREATE INDEX idx_owned_plots_buyer ON owned_plots (buyer_user_id, acquired_at DESC);
+            REVOKE DELETE, TRUNCATE ON owned_plots FROM ${appDbUsername};
+
+            COMMENT ON TABLE owned_plots IS
+                'What a buyer owns, created when finance verifies the sale (same transaction as the plot becoming SOLD). Buyer-owned: tenant_id null, the seller is seller_tenant_id; not RLS-policied, reached by buyer_user_id only. Never deleted. See AGENTS.md, "Portfolio".';
+            COMMENT ON COLUMN owned_plots.status IS
+                'All nine of the frontend''s account statuses are legal; only COMPLETED is written today (an outright sale, verified). RESERVED and PENDING_VERIFICATION are shown from the checkout, never stored here; ALLOCATED needs issued documents; the installment, upgrade and resale statuses need flows that do not exist. TRANSFERRED (to another buyer, by resale) and SUPERSEDED (the same buyer''s equity moved to another plot, by upgrade) are different facts and must never be merged.';
+            COMMENT ON COLUMN owned_plots.base_price IS
+                'Copied from the sale, never recomputed: what was agreed. corner_premium_pct is null for a plot sold without one.';
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE owned_plots;
+        ]]></rollback>
+    </changeSet>
+
+    <!--
+        Sales verified before the portfolio existed. Their owner is the buyer,
+        and they were outright (installments have never been payable). The
+        acquisition time is when finance verified it, from the audit trail;
+        failing that, the purchase's own last change.
+    -->
+    <changeSet id="088-backfill-owned-plots" author="landvault">
+        <sql><![CDATA[
+            INSERT INTO owned_plots (id, created_at, deleted, buyer_user_id, transaction_id, plot_id, estate_id,
+                                     seller_tenant_id, status, plan, intent, base_price, corner_premium_pct,
+                                     total_price, currency, acquired_at)
+            SELECT gen_random_uuid(), now(), false, t.buyer_user_id, t.id, t.plot_id, t.estate_id,
+                   t.seller_tenant_id, 'COMPLETED', t.plan, t.intent, t.base_price, t.corner_premium_pct,
+                   t.total_price, t.currency,
+                   COALESCE((SELECT max(a.created_at) FROM audit_log_entries a
+                             WHERE a.action = 'transaction.verified' AND a.target_id = t.id),
+                            t.updated_at, t.created_at)
+            FROM transactions t
+            WHERE t.status = 'VERIFIED' AND t.deleted = false;
+        ]]></sql>
+        <rollback><![CDATA[
+            DELETE FROM owned_plots WHERE transaction_id IS NOT NULL;
+        ]]></rollback>
+    </changeSet>
+
+    <!--
+        The labels a buyer needs for their own plots — estate, block, number,
+        location, size, surveyed area, title — which live in RLS-policied
+        inventory tables a buyer can't read (no tenant scope). SECURITY DEFINER,
+        hardened like 043/047/054, and narrow: only plots the given buyer has a
+        purchase (awaiting finance or verified) or an owned record for, and
+        only these columns. Read live rather than copied, because none of them
+        can change once a plot is sold except the title's review status, which
+        must be live anyway.
+    -->
+    <changeSet id="088-buyer-plot-details-function" author="landvault">
+        <sql splitStatements="false"><![CDATA[
+            CREATE FUNCTION landvault_buyer_plot_details(p_buyer uuid)
+            RETURNS TABLE (
+                plot_id          uuid,
+                plot_number      varchar,
+                block_name       varchar,
+                is_corner        boolean,
+                nominal_size_sqm numeric,
+                actual_area_sqm  numeric,
+                estate_id        uuid,
+                estate_name      varchar,
+                estate_area      varchar,
+                estate_city      varchar,
+                estate_state     varchar,
+                title_type       varchar,
+                title_status     varchar
+            )
+            LANGUAGE sql
+            STABLE
+            SECURITY DEFINER
+            SET search_path = public, pg_temp
+            AS $$
+                SELECT p.id, p.plot_number, b.name, p.is_corner, p.nominal_size_sqm, p.actual_area_sqm,
+                       e.id, e.name, e.area, e.city, e.state, t.title_type, t.status
+                FROM plots p
+                JOIN estates e ON e.id = p.estate_id
+                LEFT JOIN blocks b ON b.id = p.block_id
+                LEFT JOIN estate_titles t ON t.estate_id = e.id AND t.deleted = false
+                WHERE p.id IN (
+                    SELECT tr.plot_id FROM transactions tr
+                    WHERE tr.buyer_user_id = p_buyer AND tr.status IN ('AWAITING_FINANCE', 'VERIFIED')
+                    UNION
+                    SELECT o.plot_id FROM owned_plots o WHERE o.buyer_user_id = p_buyer AND o.deleted = false
+                )
+            $$;
+            REVOKE EXECUTE ON FUNCTION landvault_buyer_plot_details(uuid) FROM PUBLIC;
+            GRANT EXECUTE ON FUNCTION landvault_buyer_plot_details(uuid) TO ${appDbUsername};
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP FUNCTION landvault_buyer_plot_details(uuid);
+        ]]></rollback>
+    </changeSet>
+
+</databaseChangeLog>
