@@ -24,14 +24,11 @@ import com.techcomfort.landvaultbackend.common.PageResponses;
 import com.techcomfort.landvaultbackend.inventory.dto.BlockDto;
 import com.techcomfort.landvaultbackend.inventory.dto.CreateBlockRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreateEstateRequest;
-import com.techcomfort.landvaultbackend.inventory.dto.CreateEstateTitleRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreatePlotsRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.CreatePriceTierRequest;
-import com.techcomfort.landvaultbackend.inventory.dto.CreateVerificationCheckRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateDetailDto;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateDto;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateSummaryDto;
-import com.techcomfort.landvaultbackend.inventory.dto.EstateTitleDto;
 import com.techcomfort.landvaultbackend.common.geojson.GeoJsonFeatureCollectionDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PlotDetailDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PlotDto;
@@ -41,7 +38,6 @@ import com.techcomfort.landvaultbackend.inventory.dto.PriceTierUpdateDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PublicationDto;
 import com.techcomfort.landvaultbackend.inventory.dto.UpdateBlockRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.UpdatePriceTierRequest;
-import com.techcomfort.landvaultbackend.inventory.dto.VerificationCheckDto;
 import com.techcomfort.landvaultbackend.inventory.internal.service.InventoryEditService;
 import com.techcomfort.landvaultbackend.inventory.internal.service.PortalEstateQueryService;
 import com.techcomfort.landvaultbackend.inventory.internal.service.PortalEstateService;
@@ -750,50 +746,5 @@ public class PortalEstateController {
     public ResponseEntity<List<PlotDto>> createPlots(
             @PathVariable UUID id, @Valid @RequestBody CreatePlotsRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED).body(service.createPlots(id, request));
-    }
-
-    @Operation(summary = "Record the estate's title",
-            description = """
-                    Requires `portal.estates.manage`. The land title instrument — C of O, R of O, \
-                    Governor's Consent, Gazette.
-
-                    **One per estate**, and per *estate*, not per company: a developer can hold \
-                    clean title on one estate and none on the next. Corporate documents (CAC, TIN) \
-                    live on the company instead.""")
-    @ApiResponses({
-            @ApiResponse(responseCode = "201", description = "The recorded title"),
-            @ApiResponse(responseCode = "404", description = "No such estate, or not yours", content = @Content()),
-            @ApiResponse(responseCode = "409", description = "This estate already has a title recorded", content = @Content())
-    })
-    @PostMapping("/{id}/title")
-    @PreAuthorize("hasAuthority('portal.estates.manage')")
-    public ResponseEntity<EstateTitleDto> recordTitle(
-            @PathVariable UUID id, @Valid @RequestBody CreateEstateTitleRequest request) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(service.recordTitle(id, request));
-    }
-
-    @Operation(summary = "Record a due-diligence check",
-            description = """
-                    Requires `portal.estates.manage`. AGIS registration, encroachment status or \
-                    title verification.
-
-                    **`not_checked` is the default and must never render as positive** — the absence \
-                    of a check is not a clean bill of health.
-
-                    A `verified` check **requires a `verificationSource`**: a green badge from a \
-                    registry lookup and one from a person reading a PDF are different claims, and \
-                    collapsing them would make the badge meaningless to a buyer.
-
-                    Recording the same check type again updates it.""")
-    @ApiResponses({
-            @ApiResponse(responseCode = "201", description = "The recorded check"),
-            @ApiResponse(responseCode = "400", description = "A verified check with no source", content = @Content()),
-            @ApiResponse(responseCode = "404", description = "No such estate, or not yours", content = @Content())
-    })
-    @PostMapping("/{id}/verification-checks")
-    @PreAuthorize("hasAuthority('portal.estates.manage')")
-    public ResponseEntity<VerificationCheckDto> recordVerificationCheck(
-            @PathVariable UUID id, @Valid @RequestBody CreateVerificationCheckRequest request) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(service.recordVerificationCheck(id, request));
     }
 }

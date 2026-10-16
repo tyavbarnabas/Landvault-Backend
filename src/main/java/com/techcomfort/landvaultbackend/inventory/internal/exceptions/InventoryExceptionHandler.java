@@ -3,10 +3,12 @@ package com.techcomfort.landvaultbackend.inventory.internal.exceptions;
 import com.techcomfort.landvaultbackend.common.ErrorResponse;
 import com.techcomfort.landvaultbackend.inventory.internal.controllers.AdminBoundaryChangeController;
 import com.techcomfort.landvaultbackend.inventory.internal.controllers.AdminEstateStateController;
+import com.techcomfort.landvaultbackend.inventory.internal.controllers.AdminTitleReviewController;
 import com.techcomfort.landvaultbackend.inventory.internal.controllers.PortalEstateBoundaryController;
 import com.techcomfort.landvaultbackend.inventory.internal.controllers.PortalEstateController;
 import com.techcomfort.landvaultbackend.inventory.internal.controllers.PortalEstateDisclosureController;
 import com.techcomfort.landvaultbackend.inventory.internal.controllers.PortalEstatePhotoController;
+import com.techcomfort.landvaultbackend.inventory.internal.controllers.PortalEstateTitleController;
 import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -24,7 +26,7 @@ import java.util.stream.Collectors;
 /** Turns the estate-creation exceptions into AGENTS.md's {message, code, fieldErrors} shape. */
 @RestControllerAdvice(assignableTypes = {PortalEstateController.class, PortalEstateDisclosureController.class,
         AdminEstateStateController.class, PortalEstateBoundaryController.class, AdminBoundaryChangeController.class,
-        PortalEstatePhotoController.class})
+        PortalEstatePhotoController.class, PortalEstateTitleController.class, AdminTitleReviewController.class})
 public class InventoryExceptionHandler {
 
     @ExceptionHandler(InventoryException.EstateNotFound.class)
@@ -38,6 +40,11 @@ public class InventoryExceptionHandler {
     @ExceptionHandler(InventoryException.PhotoNotFound.class)
     public ResponseEntity<ErrorResponse> handlePhotoNotFound(InventoryException.PhotoNotFound ex) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ErrorResponse.of(ex.getMessage(), "PHOTO_NOT_FOUND"));
+    }
+
+    @ExceptionHandler(InventoryException.NotFound.class)
+    public ResponseEntity<ErrorResponse> handleNotFound(InventoryException.NotFound ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ErrorResponse.of(ex.getMessage(), ex.code()));
     }
 
     @ExceptionHandler(InventoryException.RequestRejected.class)

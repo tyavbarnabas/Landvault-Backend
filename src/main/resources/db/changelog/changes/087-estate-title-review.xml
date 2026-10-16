@@ -1,0 +1,361 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Developers declare a title; HomeTrue verifies it. See AGENTS.md,
+        "Estate titles: declared by developers, verified by HomeTrue".
+
+        A developer's own staff could mark their land VERIFIED through the
+        portal's verification-checks route, and buyers then saw "Land checked".
+        That was the developer vouching for itself. Titles now carry a review
+        status, the evidence lives in private storage, and only a Super Admin
+        decides.
+    -->
+
+    <!--
+        The title evidence a developer has uploaded for an estate: the title
+        page itself, the survey plan, the deed. Private files (owners' names
+        and addresses). A document exists here from confirmation; it belongs
+        to the title only once a submission names it. Never deleted: a
+        replaced submission's files stay as the record of what was shown.
+    -->
+    <changeSet id="087-create-estate-title-documents" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE estate_title_documents (
+                id          uuid NOT NULL PRIMARY KEY,
+                tenant_id   uuid NOT NULL REFERENCES organizations (id),
+                branch_id   uuid REFERENCES branches (id),
+                created_at  timestamp(6) with time zone NOT NULL,
+                updated_at  timestamp(6) with time zone,
+                created_by  varchar(255),
+                updated_by  varchar(255),
+                deleted     boolean NOT NULL,
+
+                estate_id   uuid NOT NULL REFERENCES estates (id),
+                file_id     uuid NOT NULL REFERENCES stored_files (id),
+                kind        varchar(20) NOT NULL,
+
+                CONSTRAINT chk_estate_title_documents_kind CHECK (kind IN ('TITLE_DOCUMENT', 'SURVEY_PLAN', 'DEED'))
+            );
+            CREATE INDEX idx_estate_title_documents_estate ON estate_title_documents (estate_id);
+            CREATE UNIQUE INDEX uq_estate_title_documents_file ON estate_title_documents (file_id);
+            REVOKE DELETE, TRUNCATE ON estate_title_documents FROM ${appDbUsername};
+            COMMENT ON TABLE estate_title_documents IS
+                'Title evidence uploaded for an estate, in private storage. Attached to the title only when a submission names it. Never deleted. See AGENTS.md, "Estate titles".';
+
+            ALTER TABLE estate_title_documents ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE estate_title_documents FORCE ROW LEVEL SECURITY;
+            CREATE POLICY estate_title_documents_platform ON estate_title_documents FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY estate_title_documents_tenant ON estate_title_documents FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                );
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE estate_title_documents;
+        ]]></rollback>
+    </changeSet>
+
+    <!--
+        A title gains a review status and the decision. Existing titles were
+        never checked by anyone but their developer, so they become PENDING —
+        declared, not verified — with their creation as the submission.
+
+        The two document columns were "opaque references into the documents
+        module", which was never built; they now point at stored files. Any
+        value that isn't a stored file referred to nothing and is cleared.
+    -->
+    <changeSet id="087-estate-titles-review" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE estate_titles RENAME COLUMN survey_plan_document_id TO survey_plan_file_id;
+            ALTER TABLE estate_titles RENAME COLUMN deed_document_id TO deed_file_id;
+            UPDATE estate_titles SET survey_plan_file_id = NULL
+                WHERE survey_plan_file_id IS NOT NULL
+                  AND NOT EXISTS (SELECT 1 FROM stored_files f WHERE f.id = survey_plan_file_id);
+            UPDATE estate_titles SET deed_file_id = NULL
+                WHERE deed_file_id IS NOT NULL
+                  AND NOT EXISTS (SELECT 1 FROM stored_files f WHERE f.id = deed_file_id);
+
+            ALTER TABLE estate_titles
+                ADD COLUMN title_document_file_id uuid REFERENCES stored_files (id),
+                ADD COLUMN status                 varchar(20),
+                ADD COLUMN submitted_at           timestamp(6) with time zone,
+                ADD COLUMN submitted_by           uuid REFERENCES users (id),
+                ADD COLUMN decided_at             timestamp(6) with time zone,
+                ADD COLUMN decided_by             uuid REFERENCES users (id),
+                ADD COLUMN verification_source    varchar(32),
+                ADD COLUMN decision_note          text,
+                ADD CONSTRAINT fk_estate_titles_survey_plan_file FOREIGN KEY (survey_plan_file_id) REFERENCES stored_files (id),
+                ADD CONSTRAINT fk_estate_titles_deed_file FOREIGN KEY (deed_file_id) REFERENCES stored_files (id);
+
+            UPDATE estate_titles SET status = 'PENDING', submitted_at = created_at;
+            ALTER TABLE estate_titles ALTER COLUMN status SET NOT NULL;
+            ALTER TABLE estate_titles ALTER COLUMN submitted_at SET NOT NULL;
+
+            ALTER TABLE estate_titles ADD CONSTRAINT chk_estate_titles_status
+                CHECK (status IN ('PENDING', 'VERIFIED', 'REJECTED'));
+            -- Decided exactly when not pending; a verification always says how.
+            ALTER TABLE estate_titles ADD CONSTRAINT chk_estate_titles_decision
+                CHECK ((status = 'PENDING') = (decided_at IS NULL));
+            ALTER TABLE estate_titles ADD CONSTRAINT chk_estate_titles_source
+                CHECK (verification_source IS NULL OR verification_source IN ('MANUAL_REVIEW', 'REGISTRY_SEARCH'));
+            ALTER TABLE estate_titles ADD CONSTRAINT chk_estate_titles_verified_source
+                CHECK (status <> 'VERIFIED' OR verification_source IS NOT NULL);
+
+            CREATE INDEX idx_estate_titles_review_queue ON estate_titles (status, submitted_at) WHERE deleted = false;
+
+            COMMENT ON COLUMN estate_titles.status IS
+                'PENDING: declared by the developer, not yet checked. VERIFIED/REJECTED: decided by HomeTrue (admin.titles.review), never by the developer. Any new submission returns it to PENDING: a verification was of the documents shown then.';
+            COMMENT ON COLUMN estate_titles.verification_source IS
+                'How HomeTrue verified it: MANUAL_REVIEW (a reviewer compared the documents) or REGISTRY_SEARCH (an official search at the land registry). Registry integrations are not built and may not be claimed here.';
+            COMMENT ON COLUMN estate_titles.survey_plan_file_id IS
+                'A private stored file (estate_title_documents, kind SURVEY_PLAN).';
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP INDEX idx_estate_titles_review_queue;
+            ALTER TABLE estate_titles
+                DROP CONSTRAINT chk_estate_titles_verified_source,
+                DROP CONSTRAINT chk_estate_titles_source,
+                DROP CONSTRAINT chk_estate_titles_decision,
+                DROP CONSTRAINT chk_estate_titles_status,
+                DROP CONSTRAINT fk_estate_titles_deed_file,
+                DROP CONSTRAINT fk_estate_titles_survey_plan_file,
+                DROP COLUMN decision_note,
+                DROP COLUMN verification_source,
+                DROP COLUMN decided_by,
+                DROP COLUMN decided_at,
+                DROP COLUMN submitted_by,
+                DROP COLUMN submitted_at,
+                DROP COLUMN status,
+                DROP COLUMN title_document_file_id;
+            ALTER TABLE estate_titles RENAME COLUMN deed_file_id TO deed_document_id;
+            ALTER TABLE estate_titles RENAME COLUMN survey_plan_file_id TO survey_plan_document_id;
+        ]]></rollback>
+    </changeSet>
+
+    <!-- A person who ran an official search at the land registry and holds its report. Not an integration. -->
+    <changeSet id="087-verification-source-registry-search" author="landvault">
+        <sql>
+            ALTER TABLE estate_verification_checks DROP CONSTRAINT chk_evc_source;
+            ALTER TABLE estate_verification_checks ADD CONSTRAINT chk_evc_source
+                CHECK (verification_source IS NULL
+                       OR verification_source IN ('MANUAL_REVIEW', 'REGISTRY_SEARCH', 'AGIS', 'QOREID', 'CAC_REGISTRY'));
+        </sql>
+        <rollback>
+            ALTER TABLE estate_verification_checks DROP CONSTRAINT chk_evc_source;
+            ALTER TABLE estate_verification_checks ADD CONSTRAINT chk_evc_source
+                CHECK (verification_source IS NULL
+                       OR verification_source IN ('MANUAL_REVIEW', 'AGIS', 'QOREID', 'CAC_REGISTRY'));
+        </rollback>
+    </changeSet>
+
+    <changeSet id="087-seed-admin-titles-review" author="landvault">
+        <sql>
+            INSERT INTO permissions (id, created_at, created_by, deleted, code, description) VALUES
+                (gen_random_uuid(), now(), 'system', false, 'admin.titles.review',
+                 'Verify or reject the land titles developers declare, and record an estate''s due-diligence checks.');
+            INSERT INTO role_permissions (id, created_at, created_by, deleted, role_id, permission_id)
+            SELECT gen_random_uuid(), now(), 'system', false, r.id, p.id
+            FROM roles r, permissions p
+            WHERE r.code = 'super_admin' AND p.code = 'admin.titles.review';
+        </sql>
+        <rollback>
+            DELETE FROM role_permissions WHERE permission_id IN
+                (SELECT id FROM permissions WHERE code = 'admin.titles.review');
+            DELETE FROM permissions WHERE code = 'admin.titles.review';
+        </rollback>
+    </changeSet>
+
+    <!--
+        A listing's title now says whether anyone checked it. title_status
+        travels with title_type in the same row, so a buyer never sees a title
+        type without its status. title_verified_at is the verify decision's
+        time, only while VERIFIED. ADDING A COLUMN TO A marketplace_* VIEW IS
+        PUBLISHING IT: the number, documents, reviewer and note stay private.
+    -->
+    <changeSet id="087-marketplace-listings-title-status" author="landvault">
+        <sql splitStatements="false"><![CDATA[
+            DROP VIEW marketplace_listings;
+            CREATE VIEW marketplace_listings WITH (security_barrier = true) AS
+            SELECT
+                e.id                     AS estate_id,
+                e.name                   AS name,
+                e.area                   AS area,
+                e.city                   AS city,
+                e.state                  AS state,
+                e.description            AS description,
+                e.intent                 AS intent,
+                e.corner_premium_pct     AS corner_premium_pct,
+                e.published_at           AS published_at,
+                e.footprint              AS footprint,
+                t.title_type             AS title_type,
+                t.status                 AS title_status,
+                CASE WHEN t.status = 'VERIFIED' THEN t.decided_at END AS title_verified_at,
+                b.name                   AS branch_name,
+                COALESCE(NULLIF(btrim(o.trading_name), ''), o.registered_name) AS company_name,
+                v.last_verified_at       AS last_verified_at,
+                ft.price                 AS from_price,
+                ft.currency              AS from_price_currency,
+                ft.price_per_sqm         AS from_price_per_sqm,
+                sz.min_size_sqm          AS min_size_sqm,
+                sz.max_size_sqm          AS max_size_sqm,
+                COALESCE(pr.plots_remaining, 0) AS plots_remaining,
+                b.street                 AS branch_street,
+                b.city                   AS branch_city,
+                b.state                  AS branch_state,
+                b.phone                  AS branch_phone,
+                b.email                  AS branch_email,
+                cv.file_id               AS cover_file_id
+            FROM marketplace_estate_eligibility el
+            JOIN estates e       ON e.id = el.estate_id
+            JOIN organizations o ON o.id = e.tenant_id
+            LEFT JOIN branches b      ON b.id = e.branch_id AND b.deleted = false
+            LEFT JOIN estate_titles t ON t.estate_id = e.id AND t.deleted = false
+            LEFT JOIN LATERAL (
+                SELECT max(c.last_verified_at) AS last_verified_at
+                FROM estate_verification_checks c
+                WHERE c.estate_id = e.id AND c.deleted = false AND c.status = 'VERIFIED'
+            ) v ON true
+            LEFT JOIN LATERAL (
+                SELECT pt.price, pt.currency,
+                       CASE WHEN pt.tier_type = 'LAND_SIZE' AND pt.size_sqm > 0
+                            THEN round(pt.price / pt.size_sqm, 2) END AS price_per_sqm
+                FROM price_tiers pt
+                WHERE pt.estate_id = e.id AND pt.deleted = false
+                ORDER BY EXISTS (
+                            SELECT 1 FROM plots p
+                            WHERE p.price_tier_id = pt.id AND p.deleted = false
+                              AND p.status IN ('AVAILABLE_DEV', 'AVAILABLE_INV')
+                         ) DESC,
+                         pt.price ASC
+                LIMIT 1
+            ) ft ON true
+            LEFT JOIN LATERAL (
+                SELECT min(pt.size_sqm) AS min_size_sqm, max(pt.size_sqm) AS max_size_sqm
+                FROM price_tiers pt
+                WHERE pt.estate_id = e.id AND pt.deleted = false AND pt.tier_type = 'LAND_SIZE'
+            ) sz ON true
+            LEFT JOIN LATERAL (
+                SELECT count(*) AS plots_remaining
+                FROM plots p
+                WHERE p.estate_id = e.id AND p.deleted = false
+                  AND p.status IN ('AVAILABLE_DEV', 'AVAILABLE_INV')
+            ) pr ON true
+            LEFT JOIN LATERAL (
+                SELECT ph.file_id
+                FROM estate_photos ph
+                JOIN stored_files f ON f.id = ph.file_id
+                WHERE ph.estate_id = e.id AND ph.deleted = false AND ph.cover
+                  AND f.visibility = 'PUBLIC' AND f.status = 'READY'
+            ) cv ON true
+            WHERE el.eligible;
+            REVOKE ALL ON marketplace_listings FROM ${appDbUsername};
+            GRANT SELECT ON marketplace_listings TO ${appDbUsername};
+        ]]></sql>
+        <rollback>
+            <sql splitStatements="false"><![CDATA[
+            -- 086's definition. Runs before the title columns are dropped.
+            DROP VIEW marketplace_listings;
+            CREATE VIEW marketplace_listings WITH (security_barrier = true) AS
+            SELECT
+                e.id                     AS estate_id,
+                e.name                   AS name,
+                e.area                   AS area,
+                e.city                   AS city,
+                e.state                  AS state,
+                e.description            AS description,
+                e.intent                 AS intent,
+                e.corner_premium_pct     AS corner_premium_pct,
+                e.published_at           AS published_at,
+                e.footprint              AS footprint,
+                t.title_type             AS title_type,
+                b.name                   AS branch_name,
+                COALESCE(NULLIF(btrim(o.trading_name), ''), o.registered_name) AS company_name,
+                v.last_verified_at       AS last_verified_at,
+                ft.price                 AS from_price,
+                ft.currency              AS from_price_currency,
+                ft.price_per_sqm         AS from_price_per_sqm,
+                sz.min_size_sqm          AS min_size_sqm,
+                sz.max_size_sqm          AS max_size_sqm,
+                COALESCE(pr.plots_remaining, 0) AS plots_remaining,
+                b.street                 AS branch_street,
+                b.city                   AS branch_city,
+                b.state                  AS branch_state,
+                b.phone                  AS branch_phone,
+                b.email                  AS branch_email,
+                cv.file_id               AS cover_file_id
+            FROM marketplace_estate_eligibility el
+            JOIN estates e       ON e.id = el.estate_id
+            JOIN organizations o ON o.id = e.tenant_id
+            LEFT JOIN branches b      ON b.id = e.branch_id AND b.deleted = false
+            LEFT JOIN estate_titles t ON t.estate_id = e.id AND t.deleted = false
+            LEFT JOIN LATERAL (
+                SELECT max(c.last_verified_at) AS last_verified_at
+                FROM estate_verification_checks c
+                WHERE c.estate_id = e.id AND c.deleted = false AND c.status = 'VERIFIED'
+            ) v ON true
+            LEFT JOIN LATERAL (
+                SELECT pt.price, pt.currency,
+                       CASE WHEN pt.tier_type = 'LAND_SIZE' AND pt.size_sqm > 0
+                            THEN round(pt.price / pt.size_sqm, 2) END AS price_per_sqm
+                FROM price_tiers pt
+                WHERE pt.estate_id = e.id AND pt.deleted = false
+                ORDER BY EXISTS (
+                            SELECT 1 FROM plots p
+                            WHERE p.price_tier_id = pt.id AND p.deleted = false
+                              AND p.status IN ('AVAILABLE_DEV', 'AVAILABLE_INV')
+                         ) DESC,
+                         pt.price ASC
+                LIMIT 1
+            ) ft ON true
+            LEFT JOIN LATERAL (
+                SELECT min(pt.size_sqm) AS min_size_sqm, max(pt.size_sqm) AS max_size_sqm
+                FROM price_tiers pt
+                WHERE pt.estate_id = e.id AND pt.deleted = false AND pt.tier_type = 'LAND_SIZE'
+            ) sz ON true
+            LEFT JOIN LATERAL (
+                SELECT count(*) AS plots_remaining
+                FROM plots p
+                WHERE p.estate_id = e.id AND p.deleted = false
+                  AND p.status IN ('AVAILABLE_DEV', 'AVAILABLE_INV')
+            ) pr ON true
+            LEFT JOIN LATERAL (
+                SELECT ph.file_id
+                FROM estate_photos ph
+                JOIN stored_files f ON f.id = ph.file_id
+                WHERE ph.estate_id = e.id AND ph.deleted = false AND ph.cover
+                  AND f.visibility = 'PUBLIC' AND f.status = 'READY'
+            ) cv ON true
+            WHERE el.eligible;
+            REVOKE ALL ON marketplace_listings FROM ${appDbUsername};
+            GRANT SELECT ON marketplace_listings TO ${appDbUsername};
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

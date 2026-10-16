@@ -416,54 +416,6 @@ class PortalEstateCreationIT {
                 .isZero();
     }
 
-    // --- title and verification ---
-
-    @Test
-    void recordsTitleAndRefusesASecond() {
-        EstateDto estate = createEstate(estateBody("Titled", null)).getBody();
-        String body = """
-                {"titleType":"C of O","titleNumber":"FCT/ABC/123","issuedDate":"2021-03-04"}""";
-
-        assertThat(post("/api/portal/estates/" + estate.id() + "/title", body).getStatusCode())
-                .isEqualTo(HttpStatus.CREATED);
-        assertThat(post("/api/portal/estates/" + estate.id() + "/title", body).getStatusCode())
-                .as("title is 1:1 with an estate")
-                .isEqualTo(HttpStatus.CONFLICT);
-    }
-
-    @Test
-    void aVerifiedCheckMustSayWhereTheVerificationCameFrom() {
-        EstateDto estate = createEstate(estateBody("Checked", null)).getBody();
-
-        ResponseEntity<String> withoutSource = post(
-                "/api/portal/estates/" + estate.id() + "/verification-checks",
-                """
-                {"checkType":"encroachment_status","status":"verified"}""");
-        assertThat(withoutSource.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-
-        ResponseEntity<String> withSource = post(
-                "/api/portal/estates/" + estate.id() + "/verification-checks",
-                """
-                {"checkType":"encroachment_status","status":"verified","verificationSource":"manual_review"}""");
-        assertThat(withSource.getStatusCode()).isEqualTo(HttpStatus.CREATED);
-        assertThat(withSource.getBody()).contains("manual_review");
-    }
-
-    @Test
-    void aCheckDefaultsToNotCheckedRatherThanVerified() {
-        EstateDto estate = createEstate(estateBody("Unchecked", null)).getBody();
-
-        ResponseEntity<String> response = post(
-                "/api/portal/estates/" + estate.id() + "/verification-checks",
-                """
-                {"checkType":"agis_registration"}""");
-
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
-        assertThat(response.getBody())
-                .as("the absence of a check is not a clean bill of health")
-                .contains("not_checked");
-    }
-
     // --- authorization and audit ---
 
     @Test
@@ -480,9 +432,10 @@ class PortalEstateCreationIT {
                 """
                 {"tierType":"land_size","sizeSqm":250,"price":1,"currency":"NGN"}""")
                 .getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
-        assertThat(rawPost(buyerToken, "/api/portal/estates/" + estate.id() + "/title",
+        assertThat(rawPost(buyerToken, "/api/portal/estates/" + estate.id() + "/title/documents/uploads",
                 """
-                {"titleType":"Gazette"}""").getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                {"fileName":"a.pdf","contentType":"application/pdf","sizeBytes":10,"kind":"deed"}""")
+                .getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
     }
 
     @Test

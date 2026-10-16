@@ -70,8 +70,8 @@ Creation lives under `/api/portal/estates` and requires `portal.estates.manage`.
 | POST | `/api/portal/estates/{id}/blocks` | `{ name, label }` |
 | POST | `/api/portal/estates/{id}/price-tiers` | `{ tierType, sizeSqm?, price, currency, label }` |
 | POST | `/api/portal/estates/{id}/plots` | `{ plots: [...] }` — a **batch**, max 500 |
-| POST | `/api/portal/estates/{id}/title` | `{ titleType, titleNumber, issuedDate, ... }` — 1:1 with the estate |
-| POST | `/api/portal/estates/{id}/verification-checks` | `{ checkType, status?, verificationSource?, notes }` |
+
+The title and due-diligence checks have their own sections: see "Estate titles" below. Developers no longer record verification checks.
 
 Four things the frontend must get right:
 
@@ -173,6 +173,58 @@ All under `/api/portal/estates/{estateId}/photos`. Reads need `portal.estates.vi
 - **A photo is a publication condition** (`PUBLICATION_NO_PHOTO`). Estates that were already published when this arrived are exempt and report `hasPhoto: true`. Deleting a listed estate's last photo takes it off the marketplace; it returns, without republishing, when a photo is added.
 - Errors: `ESTATE_NOT_FOUND`, `PHOTO_NOT_FOUND` (404), plus the storage codes below.
 
+### Estate titles: developers declare, HomeTrue verifies — **built**
+
+A developer's own staff used to be able to mark their land verified. Now a title is **declared** by the developer (`pending`) and only HomeTrue moves it to `verified` or `rejected`. Changeset 087.
+
+**Developer side**, under `/api/portal/estates/{estateId}/title`. GET routes need `portal.estates.view`, the rest `portal.estates.manage`; own company only (another's is a 404); branch staff on a company-level estate get `ESTATE_READ_ONLY_FOR_BRANCH` (403).
+
+| Method | Path | Request | Response |
+|---|---|---|---|
+| GET | *(the base path)* | — | `EstateTitle`, or 404 `TITLE_NOT_RECORDED` |
+| POST | `/documents/uploads` | `{ fileName, contentType, sizeBytes, kind }` | 201 upload ticket (same shape as photos) |
+| POST | `/documents/{fileId}/confirm` | — | 201 `TitleDocument` (200 if already confirmed). Not part of the title until submitted. |
+| GET | `/documents/{fileId}/download` | — | `{ url, expiresAt }`, a 5-minute link. Any of this estate's title documents. |
+| PUT | *(the base path)* | see below | 200 `EstateTitle` with `status: "pending"` |
+
+- **Documents**: `kind` is `title_document` (the C of O, R of O, consent or Gazette page), `survey_plan` or `deed`. PDF, JPG or PNG, at most **10,485,760 bytes**. **Private storage**: never a public URL. Kept exactly as uploaded.
+- **Submit** body: `{ titleType, titleNumber, issuedDate?, titleDocumentFileId, surveyPlanFileId, deedFileId? }`. `titleNumber` at most 100; `issuedDate` `YYYY-MM-DD`, not in the future. Each file must be a confirmed title document of **this** estate, of the matching kind.
+- **Create or replace** (the old `POST .../title`, which refused a second call, is gone). Every submission, including one replacing a verified title, comes back `pending` with the decision cleared — the verification was of the old documents. The estate's `title_verification` check goes back to `pending` at the same moment, so buyers stop seeing "Land checked". Resubmitting exactly what is already pending changes nothing.
+- Errors: `TITLE_DOCUMENT_REQUIRED`, `SURVEY_PLAN_REQUIRED`, `TITLE_DOCUMENT_NOT_FOUND` (wrong estate, wrong kind, or not confirmed), `ISSUED_DATE_IN_FUTURE`, `INVALID_ISSUED_DATE` (all 400), `ESTATE_READ_ONLY_FOR_BRANCH` (403), plus the storage codes.
+- `POST /api/portal/estates/{id}/verification-checks` **no longer exists**.
+
+**HomeTrue side**: `admin.titles.review` (Super Admin).
+
+| Method | Path | Request | Response |
+|---|---|---|---|
+| GET | `/api/admin/title-reviews?status=pending\|verified\|rejected` | — (default `pending`) | `TitleReview[]`; pending oldest first, the others newest first |
+| GET | `/api/admin/title-reviews/{titleId}/documents/{fileId}/download` | — | `{ url, expiresAt }`. Only the documents of the submission under review. |
+| POST | `/api/admin/title-reviews/{titleId}/verify` | `{ verificationSource, note?, submittedAt }` | `TitleReview` |
+| POST | `/api/admin/title-reviews/{titleId}/reject` | `{ note, submittedAt }` | `TitleReview` |
+| POST | `/api/admin/estates/{id}/verification-checks` | `{ checkType, status?, verificationSource?, notes? }` | 201 check |
+
+- **`submittedAt` is required on verify and reject** — send back the `submittedAt` of the title you reviewed. **This is an addition to the frontend's brief**: without it, a developer resubmitting while the reviewer reads would get documents nobody opened marked verified. A mismatch is 409 `TITLE_CHANGED`: reload and review again.
+- `verificationSource`: `manual_review` (a reviewer compared the documents) or `registry_search` (an official search at the land registry, report in hand). `agis`, `qoreid` and `cac_registry` are reserved for integrations that don't exist and are refused (400 `VERIFICATION_SOURCE_NOT_ALLOWED`) on both routes.
+- A rejection's `note` is required and **the developer sees it**.
+- Verify sets the estate's `title_verification` check to `verified` with the same source and `lastVerifiedAt` = now; reject sets it to `failed`.
+- Only a `pending` title can be decided (409 `TITLE_NOT_PENDING`). A title recorded before review existed has no documents and can't be verified (409 `TITLE_DOCUMENTS_MISSING`): reject it and ask for them.
+- The checks route records AGIS registration and encroachment only; `title_verification` follows the review (400 `TITLE_CHECK_FOLLOWS_REVIEW`).
+- Audit: `estate.title_submitted`, `estate.title_verified`, `estate.title_rejected`.
+
+Shapes (wire values lowercase):
+
+```ts
+EstateTitle { id, estateId, titleType: "C of O" | "R of O" | "Governor's Consent" | "Gazette",
+  titleNumber, issuedDate: string | null, status: "pending" | "verified" | "rejected",
+  documents: TitleDocument[],            // title page, survey plan, deed — in that order
+  submittedAt, submittedBy: string | null, decidedAt: string | null, decidedBy: string | null,
+  verificationSource: "manual_review" | "registry_search" | null, decisionNote: string | null }
+TitleDocument { fileId, kind: "title_document" | "survey_plan" | "deed", fileName, fileType, sizeBytes, uploadedAt }
+TitleReview = EstateTitle & { estateName, estateState, companyName }
+```
+
+`submittedBy` and `decidedBy` are user ids. `submittedBy` is null for a title recorded before review existed. The portal estate detail's `title` is this same `EstateTitle`.
+
 ### Public marketplace — **built, no authentication**
 
 No `Authorization` header needed (or sent). Rate-limited: 429 with `Retry-After` beyond the limit.
@@ -186,6 +238,7 @@ No `Authorization` header needed (or sent). Rate-limited: 429 with `Retry-After`
 - Only estates passing all five conditions appear. Anything else, including an id that exists but isn't eligible, is a plain **404**, with no hint that it exists.
 - **`imageUrl` is the cover photo's URL**, and `photos: [{ url, caption }]` the gallery, cover first then in the developer's order. An estate exempt from the photo requirement may have `imageUrl: null` and `photos: []`; render a placeholder.
 - `Listing` follows the frontend's shape: `priceTiers` (each with `price`, `pricePerSqm` — null for a unit-type tier — `plotsRemaining`, `availability`), `cornerPremiumPct`, `seller: { branchName, companyName }`, `verified: true`, plus `fromPrice`/`fromPriceCurrency`, `plotsRemaining`, `hasMap`, and `verificationChecks`.
+- **`titleType` comes with `titleStatus`** (`pending` | `verified` | `rejected`, null when no title) and `titleVerifiedAt` (set only while verified). Never show the type without the status: "C of O (declared)", "C of O, verified by HomeTrue", "C of O (declared, not confirmed)".
 - **`verificationChecks` carry their `verificationSource`** — `manual_review` versus a registry is a real difference in front of a buyer. A check type that isn't listed was **never checked**: render it as unchecked, never as verified.
 - **Plot `availability` on the map is only `AVAILABLE` or `UNAVAILABLE`.** Reserved and sold are deliberately indistinguishable. Plots carry `priceTierId` and `isCorner` but no price: compute it from the tier and `cornerPremiumPct`, as `priceForPlot()` already does.
 - **A price filter only matches listings priced in the requested `currency`.**

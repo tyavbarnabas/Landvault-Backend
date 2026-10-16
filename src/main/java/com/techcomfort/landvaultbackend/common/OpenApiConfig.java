@@ -52,6 +52,7 @@ public class OpenApiConfig {
     public static final String TAG_ADMIN_TENANTS = "Admin — Tenants";
     public static final String TAG_ADMIN_KYC = "Admin — Verification";
     public static final String TAG_ADMIN_CONFLICTS = "Admin — Conflicts";
+    public static final String TAG_ADMIN_TITLES = "Admin — Titles";
     public static final String TAG_ADMIN_AUDIT = "Admin — Audit";
     public static final String TAG_ADMIN_PAYOUTS = "Admin — Payouts";
     public static final String TAG_DEV_STORAGE = "Development — Storage";
@@ -177,6 +178,9 @@ public class OpenApiConfig {
                         new Tag().name(TAG_ADMIN_CONFLICTS)
                                 .description("The spatial conflict review queue: overlapping land claims "
                                         + "across companies."),
+                        new Tag().name(TAG_ADMIN_TITLES)
+                                .description("Verifying the land titles developers declare, and an estate's "
+                                        + "other due-diligence checks. Developers declare; HomeTrue verifies."),
                         new Tag().name(TAG_ADMIN_AUDIT)
                                 .description("The append-only audit trail. Read-only by design."),
                         new Tag().name(TAG_ADMIN_PAYOUTS)

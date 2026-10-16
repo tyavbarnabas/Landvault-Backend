@@ -32,6 +32,14 @@ public record MarketplaceListingDto(
         /** The cover photo's URL, or null when the estate has none (one listed before photos were required). */
         String imageUrl,
         String titleType,
+        /**
+         * {@code pending} (declared by the developer, not yet checked),
+         * {@code verified} (by HomeTrue) or {@code rejected}; null when no
+         * title is declared. Never show {@code titleType} without it.
+         */
+        String titleStatus,
+        /** When HomeTrue verified the title; null unless {@code titleStatus} is {@code verified}. */
+        Instant titleVerifiedAt,
         Instant lastVerifiedDate,
         List<MarketplacePriceTierDto> priceTiers,
         BigDecimal cornerPremiumPct,

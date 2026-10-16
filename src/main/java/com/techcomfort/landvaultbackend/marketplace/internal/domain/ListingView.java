@@ -2,6 +2,7 @@ package com.techcomfort.landvaultbackend.marketplace.internal.domain;
 
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.EstateIntent;
+import com.techcomfort.landvaultbackend.common.TitleStatus;
 import com.techcomfort.landvaultbackend.common.TitleType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -69,6 +70,15 @@ public class ListingView {
     @Enumerated(EnumType.STRING)
     @Column(name = "title_type")
     private TitleType titleType;
+
+    /** Read with {@code titleType}, always: a type nobody checked is a declaration (changeset 087). */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "title_status")
+    private TitleStatus titleStatus;
+
+    /** When HomeTrue verified it; null unless verified. */
+    @Column(name = "title_verified_at")
+    private Instant titleVerifiedAt;
 
     @Column(name = "branch_name")
     private String branchName;
