@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Developer document setup, step 1 (DS-1, DS-2): the letterhead, signatory,
+        signature and seal that allocation letters will carry. See AGENTS.md,
+        "Documents: letterheads".
+
+        One row for the company (branch_id null) and at most one per branch,
+        each holding only what it sets itself; what a letter prints is resolved
+        from both (a branch's own, else the company's). version goes up on every
+        change, so an approval can tell that what it saw has since changed.
+        Files live in the PRIVATE bucket; a replaced file is kept, because
+        letters already issued point at it.
+    -->
+    <changeSet id="090-create-letterheads" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE letterheads (
+                id                 uuid NOT NULL PRIMARY KEY,
+                tenant_id          uuid NOT NULL REFERENCES organizations (id),
+                branch_id          uuid REFERENCES branches (id),
+                created_at         timestamp(6) with time zone NOT NULL,
+                updated_at         timestamp(6) with time zone,
+                created_by         varchar(255),
+                updated_by         varchar(255),
+                deleted            boolean NOT NULL,
+
+                logo_file_id       uuid REFERENCES stored_files (id),
+                signatory_name     varchar(120),
+                signatory_title    varchar(120),
+                signature_file_id  uuid REFERENCES stored_files (id),
+                seal_file_id       uuid REFERENCES stored_files (id),
+                version            integer NOT NULL,
+
+                CONSTRAINT chk_letterheads_version CHECK (version >= 1)
+            );
+            CREATE UNIQUE INDEX uq_letterheads_one_per_branch ON letterheads (tenant_id, branch_id) NULLS NOT DISTINCT
+                WHERE deleted = false;
+            REVOKE DELETE, TRUNCATE ON letterheads FROM ${appDbUsername};
+            COMMENT ON TABLE letterheads IS
+                'Letterhead, signatory, signature and seal for generated letters: the company''s (branch_id null) and any branch''s own. Private files. See AGENTS.md, "Documents: letterheads".';
+            COMMENT ON COLUMN letterheads.version IS
+                'Goes up on every change. A letter template''s approval records the versions it saw; a different version means it must be approved again.';
+
+            ALTER TABLE letterheads ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE letterheads FORCE ROW LEVEL SECURITY;
+            CREATE POLICY letterheads_platform ON letterheads FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY letterheads_tenant ON letterheads FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                );
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE letterheads;
+        ]]></rollback>
+    </changeSet>
+
+    <!--
+        portal.documents.view: see the letterheads (and, later, the letters
+        issued for the company's sales). portal.documents.manage: change them —
+        the Executive Director only, company-wide, because a signature and seal
+        let letters go out in the company's name. Decided with the user.
+    -->
+    <changeSet id="090-document-permissions" author="landvault">
+        <sql><![CDATA[
+            INSERT INTO permission_groups (code, label, sort_order) VALUES ('documents', 'Documents', 50);
+
+            INSERT INTO permissions (id, created_at, created_by, deleted, code, description, label, group_code,
+                                     sort_order, requires_company_wide) VALUES
+                (gen_random_uuid(), now(), 'system', false, 'portal.documents.view',
+                 'See your company''s letterheads, signatories and the letters HomeTrue issues for your sales.',
+                 'See letterheads and letters', 'documents', 10, false),
+                (gen_random_uuid(), now(), 'system', false, 'portal.documents.manage',
+                 'Set your company''s and branches'' letterheads, signatories, signatures and seals. Company-wide roles only.',
+                 'Set letterheads, signatures and seals', 'documents', 20, true);
+
+            INSERT INTO role_permissions (id, created_at, created_by, deleted, role_id, permission_id)
+            SELECT gen_random_uuid(), now(), 'system', false, r.id, p.id
+            FROM roles r, permissions p
+            WHERE p.code = 'portal.documents.view'
+              AND r.code IN ('executive_director', 'branch_manager', 'finance_officer', 'legal_officer');
+            INSERT INTO role_permissions (id, created_at, created_by, deleted, role_id, permission_id)
+            SELECT gen_random_uuid(), now(), 'system', false, r.id, p.id
+            FROM roles r, permissions p
+            WHERE p.code = 'portal.documents.manage' AND r.code = 'executive_director';
+        ]]></sql>
+        <rollback><![CDATA[
+            DELETE FROM role_permissions WHERE permission_id IN
+                (SELECT id FROM permissions WHERE code IN ('portal.documents.view', 'portal.documents.manage'));
+            DELETE FROM permissions WHERE code IN ('portal.documents.view', 'portal.documents.manage');
+            DELETE FROM permission_groups WHERE code = 'documents';
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

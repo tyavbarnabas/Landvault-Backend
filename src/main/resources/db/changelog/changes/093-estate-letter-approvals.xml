@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Developer document setup, step 3 (DS-5): the Executive Director approves
+        an estate's allocation letter after previewing it. See AGENTS.md,
+        "Documents: previewing and approving the letter".
+
+        One row per approval or withdrawal, never changed. An approval records
+        every version the letter it saw was drawn from; it stands only while all
+        of them are still current, so any change withdraws it with nothing to
+        remember to clear.
+    -->
+    <changeSet id="093-create-estate-letter-approvals" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE estate_letter_approvals (
+                id                         uuid NOT NULL PRIMARY KEY,
+                created_at                 timestamp(6) with time zone NOT NULL,
+                created_by                 varchar(255),
+                tenant_id                  uuid NOT NULL REFERENCES organizations (id),
+                branch_id                  uuid REFERENCES branches (id),
+
+                estate_id                  uuid NOT NULL REFERENCES estates (id),
+                action                     varchar(20) NOT NULL,
+                actor_user_id              uuid NOT NULL REFERENCES users (id),
+                terms_version              integer,
+                company_letterhead_version integer,
+                branch_letterhead_version  integer,
+                fees_version               integer,
+                refund_terms_version       integer,
+                default_terms_version      integer,
+
+                CONSTRAINT chk_estate_letter_approvals_action CHECK (action IN ('APPROVED', 'WITHDRAWN')),
+                CONSTRAINT chk_estate_letter_approvals_versions
+                    CHECK (action <> 'APPROVED' OR (terms_version IS NOT NULL AND company_letterhead_version IS NOT NULL))
+            );
+            CREATE INDEX idx_estate_letter_approvals_estate ON estate_letter_approvals (estate_id, created_at DESC);
+            REVOKE UPDATE, DELETE, TRUNCATE ON estate_letter_approvals FROM ${appDbUsername};
+            COMMENT ON TABLE estate_letter_approvals IS
+                'The Executive Director''s approvals and withdrawals of an estate''s allocation letter; never changed. An approval stands only while every version it records is still current. See AGENTS.md, "Documents: previewing and approving the letter".';
+
+            ALTER TABLE estate_letter_approvals ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE estate_letter_approvals FORCE ROW LEVEL SECURITY;
+            CREATE POLICY estate_letter_approvals_platform ON estate_letter_approvals FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY estate_letter_approvals_tenant ON estate_letter_approvals FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                );
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE estate_letter_approvals;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

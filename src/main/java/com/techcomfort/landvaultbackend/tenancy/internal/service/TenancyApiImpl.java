@@ -1,6 +1,7 @@
 package com.techcomfort.landvaultbackend.tenancy.internal.service;
 
 import com.techcomfort.landvaultbackend.tenancy.CompanyBankProfile;
+import com.techcomfort.landvaultbackend.tenancy.CompanyLetterheadDetails;
 import com.techcomfort.landvaultbackend.tenancy.TenancyApi;
 import com.techcomfort.landvaultbackend.tenancy.internal.domain.Branch;
 import com.techcomfort.landvaultbackend.tenancy.internal.domain.Organization;
@@ -14,9 +15,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Collection;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.Objects;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import java.util.Optional;
 
 /**
@@ -131,5 +136,33 @@ public class TenancyApiImpl implements TenancyApi {
                     declared.map(OrganizationFinancial::getAccountNumber).orElse(null),
                     declared.map(OrganizationFinancial::getAccountName).orElse(null));
         });
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<CompanyLetterheadDetails> letterheadDetails(UUID tenantId) {
+        return organizationRepository.findById(tenantId).map(organization -> {
+            String operating = joinAddress(organization.getOperatingStreet(), organization.getOperatingCity(),
+                    organization.getOperatingState());
+            String address = operating != null ? operating : joinAddress(organization.getRegisteredStreet(),
+                    organization.getRegisteredCity(), organization.getRegisteredState());
+            List<CompanyLetterheadDetails.BranchOffice> branches = branchRepository.findByOrganizationId(tenantId)
+                    .stream()
+                    .sorted(Comparator.comparing(Branch::getName, String.CASE_INSENSITIVE_ORDER))
+                    .map(branch -> new CompanyLetterheadDetails.BranchOffice(branch.getId(), branch.getName(),
+                            joinAddress(branch.getStreet(), branch.getCity(), branch.getState()),
+                            branch.getPhone(), branch.getEmail()))
+                    .toList();
+            return new CompanyLetterheadDetails(organization.getRegisteredName(), organization.getRcNumber(),
+                    address, organization.getCompanyPhone(), organization.getCompanyEmail(),
+                    organization.getWebsite(), branches);
+        });
+    }
+
+    /** The non-blank parts, comma separated; null when there are none. */
+    private static String joinAddress(String... parts) {
+        String joined = Stream.of(parts).filter(Objects::nonNull).map(String::strip).filter(p -> !p.isEmpty())
+                .collect(Collectors.joining(", "));
+        return joined.isEmpty() ? null : joined;
     }
 }

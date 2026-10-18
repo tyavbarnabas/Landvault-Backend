@@ -32,11 +32,20 @@ final class PdfCanvas {
 
     final PDFont regular;
     final PDFont bold;
-    private final PDPageContentStream content;
+    private PDPageContentStream content;
 
     PdfCanvas(PDDocument document, PDPageContentStream content) throws IOException {
+        this(document);
+        this.content = content;
+    }
+
+    /** Fonts loaded once for the whole document; {@link #use} points the canvas at each page in turn. */
+    PdfCanvas(PDDocument document) throws IOException {
         this.regular = PDType0Font.load(document, new ByteArrayInputStream(REGULAR));
         this.bold = PDType0Font.load(document, new ByteArrayInputStream(BOLD));
+    }
+
+    void use(PDPageContentStream content) {
         this.content = content;
     }
 
@@ -49,7 +58,7 @@ final class PdfCanvas {
         content.setFont(font, size);
         content.setNonStrokingColor(color);
         content.newLineAtOffset(x, y);
-        content.showText(clean(text));
+        content.showText(printable(font, clean(text)));
         content.endText();
     }
 
@@ -82,7 +91,7 @@ final class PdfCanvas {
     }
 
     static float width(PDFont font, float size, String text) throws IOException {
-        return font.getStringWidth(clean(text)) / 1000f * size;
+        return font.getStringWidth(printable(font, clean(text))) / 1000f * size;
     }
 
     static List<String> wrap(PDFont font, float size, float maxWidth, String text) throws IOException {
@@ -101,6 +110,24 @@ final class PdfCanvas {
             lines.add(line.toString());
         }
         return lines;
+    }
+
+    /**
+     * Characters the font has no glyph for (an emoji in a clause or a name)
+     * become "?" rather than failing the whole document.
+     */
+    static String printable(PDFont font, String text) {
+        StringBuilder out = new StringBuilder(text.length());
+        text.codePoints().forEach(cp -> {
+            String ch = new String(Character.toChars(cp));
+            try {
+                font.encode(ch);
+                out.append(ch);
+            } catch (IOException | IllegalArgumentException e) {
+                out.append('?');
+            }
+        });
+        return out.toString();
     }
 
     /** Control characters (a pasted newline or tab in a name) can't be shown; spaces stand in. */

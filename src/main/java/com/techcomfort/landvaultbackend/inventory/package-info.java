@@ -15,10 +15,10 @@
  * preferences, and getting them wrong yields plausible wrong numbers rather
  * than errors.
  * <p>
- * Nothing is exposed yet: this slice is schema and entities only, so there is
- * deliberately no {@code InventoryApi} and no public DTO. Everything lives
- * under {@code inventory.internal} and is invisible to other modules —
- * repositories, services and endpoints arrive in later slices.
+ * The public surface is deliberately narrow: {@code PlotHistoryProbe} (which
+ * checkout implements) and {@code EstateDocumentsApi} (an estate's facts and
+ * cost disclosure for generated letters). Everything else lives under
+ * {@code inventory.internal}.
  */
 @org.springframework.modulith.ApplicationModule(
         displayName = "Inventory"

@@ -10,9 +10,15 @@
  * verification code in a QR code; the public verify route confirms it is
  * genuine without showing amounts or personal details.
  * <p>
+ * Letterheads (the company's and each branch's: signatory, signature, seal,
+ * logo) and each estate's allocation conditions are set here too, for the
+ * letters to come.
+ * <p>
  * Depends on {@code payments} (the event; refunds, through {@code PaymentsApi};
  * and it implements payments' {@code ReceiptLookup}), {@code portfolio} (which
- * purchase a portfolio entry is), {@code audit} and {@code common}.
+ * purchase a portfolio entry is), {@code tenancy} (company and branch offices), {@code inventory} (an estate's
+ * facts and cost disclosure, through {@code EstateDocumentsApi}),
+ * {@code storage} (letterhead images), {@code audit} and {@code common}.
  */
 @org.springframework.modulith.ApplicationModule(
         displayName = "Documents"

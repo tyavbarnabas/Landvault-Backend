@@ -63,4 +63,11 @@ public interface TenancyApi {
      * company, a company sees only itself. Empty when the company isn't visible.
      */
     Optional<CompanyBankProfile> companyBankProfile(UUID tenantId);
+
+    /**
+     * The company's name, RC number and head office, and its branches' offices,
+     * for letterheads. A plain read under the caller's RLS: a branch-scoped
+     * caller gets only their own branch. Empty when the company isn't visible.
+     */
+    Optional<CompanyLetterheadDetails> letterheadDetails(UUID tenantId);
 }

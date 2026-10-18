@@ -95,6 +95,11 @@
     <include file="changes/087-estate-title-review.xml" relativeToChangelogFile="true"/>
     <include file="changes/088-portfolio-owned-plots.xml" relativeToChangelogFile="true"/>
     <include file="changes/089-payment-receipts.xml" relativeToChangelogFile="true"/>
+    <include file="changes/090-letterheads.xml" relativeToChangelogFile="true"/>
+    <include file="changes/091-estate-letter-terms.xml" relativeToChangelogFile="true"/>
+    <include file="changes/092-letter-terms-reviews.xml" relativeToChangelogFile="true"/>
+    <include file="changes/093-estate-letter-approvals.xml" relativeToChangelogFile="true"/>
+    <include file="changes/094-letter-templates.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

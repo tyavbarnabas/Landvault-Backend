@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Developer document setup, step 2 (DS-3, DS-4): each estate's allocation
+        conditions, written by the developer. See AGENTS.md, "Documents:
+        allocation terms".
+
+        One row per version, never changed: a letter will record the version it
+        was issued with, and the record must still say what that version said.
+        The clauses hold no money and no bank accounts (refused by the service);
+        the letter adds the disclosed fees and terms itself.
+    -->
+    <changeSet id="091-create-estate-letter-terms" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE estate_letter_terms (
+                id              uuid NOT NULL PRIMARY KEY,
+                created_at      timestamp(6) with time zone NOT NULL,
+                created_by      varchar(255),
+                tenant_id       uuid NOT NULL REFERENCES organizations (id),
+                branch_id       uuid REFERENCES branches (id),
+
+                estate_id       uuid NOT NULL REFERENCES estates (id),
+                version         integer NOT NULL,
+                clauses         text[] NOT NULL,
+                author_user_id  uuid NOT NULL REFERENCES users (id),
+
+                CONSTRAINT uq_estate_letter_terms_version UNIQUE (estate_id, version),
+                CONSTRAINT chk_estate_letter_terms_version CHECK (version >= 1),
+                CONSTRAINT chk_estate_letter_terms_count CHECK (cardinality(clauses) BETWEEN 1 AND 30)
+            );
+            REVOKE UPDATE, DELETE, TRUNCATE ON estate_letter_terms FROM ${appDbUsername};
+            COMMENT ON TABLE estate_letter_terms IS
+                'An estate''s allocation conditions as the developer wrote them, one row per version, never changed. No money or bank accounts: the letter adds the disclosed fees itself. See AGENTS.md, "Documents: allocation terms".';
+
+            ALTER TABLE estate_letter_terms ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE estate_letter_terms FORCE ROW LEVEL SECURITY;
+            CREATE POLICY estate_letter_terms_platform ON estate_letter_terms FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY estate_letter_terms_tenant ON estate_letter_terms FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                );
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE estate_letter_terms;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>
