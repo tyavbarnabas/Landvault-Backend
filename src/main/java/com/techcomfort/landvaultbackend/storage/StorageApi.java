@@ -54,6 +54,17 @@ public interface StorageApi {
      */
     DownloadLink downloadLink(UUID fileId);
 
+    /**
+     * A ready file's bytes, for the calling module to use server side (a
+     * letter drawing a private signature). The caller decides who may have
+     * what it builds from them. Kept for small files: it is read into memory.
+     *
+     * @throws StorageException.FileNotFound       no such file
+     * @throws StorageException.FileNotReady       not confirmed, or removed
+     * @throws StorageException.StorageUnavailable storage couldn't be reached
+     */
+    byte[] read(UUID fileId);
+
     /** Removes the file from storage. The record stays, marked deleted. A no-op for one already gone. */
     void delete(UUID fileId);
 }

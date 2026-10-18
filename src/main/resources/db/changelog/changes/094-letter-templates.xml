@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Letter templates: a company's (branch_id null) or a branch's own wording
+        for its allocation letters — the opening paragraph, an optional closing
+        paragraph, the sign-off line and the standard conditions printed before
+        each estate's. See AGENTS.md, "Documents: letter templates".
+
+        One row per version, never changed; HomeTrue reviews every version
+        (letter_template_reviews) and letters use the newest approved one. A
+        branch's approved template replaces the company's as a whole.
+    -->
+    <changeSet id="094-create-letter-templates" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE letter_templates (
+                id                uuid NOT NULL PRIMARY KEY,
+                created_at        timestamp(6) with time zone NOT NULL,
+                created_by        varchar(255),
+                tenant_id         uuid NOT NULL REFERENCES organizations (id),
+                branch_id         uuid REFERENCES branches (id),
+
+                version           integer NOT NULL,
+                opening           text NOT NULL,
+                closing           text,
+                sign_off          varchar(80) NOT NULL,
+                standard_clauses  text[] NOT NULL,
+                author_user_id    uuid NOT NULL REFERENCES users (id),
+
+                CONSTRAINT uq_letter_templates_version UNIQUE NULLS NOT DISTINCT (tenant_id, branch_id, version),
+                CONSTRAINT chk_letter_templates_version CHECK (version >= 1),
+                CONSTRAINT chk_letter_templates_clauses CHECK (cardinality(standard_clauses) <= 30),
+                CONSTRAINT chk_letter_templates_opening_names_the_allocation
+                    CHECK (position('{plot}' in opening) > 0 AND position('{estate}' in opening) > 0)
+            );
+            REVOKE UPDATE, DELETE, TRUNCATE ON letter_templates FROM ${appDbUsername};
+            COMMENT ON TABLE letter_templates IS
+                'A company''s or branch''s allocation-letter wording, one row per version, never changed. HomeTrue reviews each; letters use the newest approved. See AGENTS.md, "Documents: letter templates".';
+            COMMENT ON COLUMN letter_templates.opening IS
+                'Must contain {plot} and {estate}, so no letter can leave out what is allocated. Only HomeTrue''s fill-in fields are allowed.';
+
+            ALTER TABLE letter_templates ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE letter_templates FORCE ROW LEVEL SECURITY;
+            CREATE POLICY letter_templates_platform ON letter_templates FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY letter_templates_tenant ON letter_templates FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                );
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE letter_templates;
+        ]]></rollback>
+    </changeSet>
+
+    <!-- HomeTrue's decision on one template version; same shape and rules as estate_letter_terms_reviews (092). -->
+    <changeSet id="094-create-letter-template-reviews" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE letter_template_reviews (
+                id                uuid NOT NULL PRIMARY KEY,
+                created_at        timestamp(6) with time zone NOT NULL,
+                created_by        varchar(255),
+                tenant_id         uuid NOT NULL REFERENCES organizations (id),
+                branch_id         uuid REFERENCES branches (id),
+
+                template_id       uuid NOT NULL REFERENCES letter_templates (id),
+                template_version  integer NOT NULL,
+                decision          varchar(20) NOT NULL,
+                note              text,
+                reviewer_user_id  uuid NOT NULL REFERENCES users (id),
+
+                CONSTRAINT uq_letter_template_reviews_template UNIQUE (template_id),
+                CONSTRAINT chk_letter_template_reviews_decision CHECK (decision IN ('APPROVED', 'REJECTED')),
+                CONSTRAINT chk_letter_template_reviews_reject_note
+                    CHECK (decision <> 'REJECTED' OR (note IS NOT NULL AND btrim(note) <> ''))
+            );
+            CREATE INDEX idx_letter_template_reviews_owner ON letter_template_reviews (tenant_id, branch_id, template_version);
+            REVOKE UPDATE, DELETE, TRUNCATE ON letter_template_reviews FROM ${appDbUsername};
+            COMMENT ON TABLE letter_template_reviews IS
+                'HomeTrue''s decision on one letter-template version; never changed. No row = pending. See AGENTS.md, "Documents: letter templates".';
+
+            ALTER TABLE letter_template_reviews ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE letter_template_reviews FORCE ROW LEVEL SECURITY;
+            CREATE POLICY letter_template_reviews_platform ON letter_template_reviews FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY letter_template_reviews_tenant_read ON letter_template_reviews FOR SELECT
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                );
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE letter_template_reviews;
+        ]]></rollback>
+    </changeSet>
+
+    <!--
+        A letter approval also records which template it saw: its source
+        (default, company or branch) and version. A new changeset rather than an
+        edit to 093, which may already have run somewhere.
+    -->
+    <changeSet id="094-letter-approvals-record-template" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE estate_letter_approvals
+                ADD COLUMN template_source  varchar(10),
+                ADD COLUMN template_version integer,
+                ADD CONSTRAINT chk_estate_letter_approvals_template_source
+                    CHECK (template_source IS NULL OR template_source IN ('default', 'company', 'branch'));
+            COMMENT ON COLUMN estate_letter_approvals.template_source IS
+                'Whose letter template the approved letter used: HomeTrue''s default wording, the company''s or the branch''s. Null on approvals recorded before 094.';
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE estate_letter_approvals
+                DROP CONSTRAINT chk_estate_letter_approvals_template_source,
+                DROP COLUMN template_version,
+                DROP COLUMN template_source;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

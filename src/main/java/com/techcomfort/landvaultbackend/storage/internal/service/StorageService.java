@@ -165,6 +165,16 @@ public class StorageService implements StorageApi {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public byte[] read(UUID fileId) {
+        StoredFile file = files.findById(fileId).orElseThrow(StorageException.FileNotFound::new);
+        if (file.getStatus() != StoredFileStatus.READY) {
+            throw new StorageException.FileNotReady();
+        }
+        return objects.readAll(file.getBucket(), file.getObjectKey());
+    }
+
+    @Override
     @Transactional
     public void delete(UUID fileId) {
         StoredFile file = files.findByIdForUpdate(fileId).orElseThrow(StorageException.FileNotFound::new);

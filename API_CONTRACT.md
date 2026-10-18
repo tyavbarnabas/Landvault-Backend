@@ -419,6 +419,91 @@ All need `client.documents.view` (every buyer has it) except verify, which is pu
 - The frontend's `POST /api/documents` (batch issue), `POST /api/documents/{id}/void` and `/api/documents/by-plot/{plotId}` **don't exist and won't**: documents are issued by the backend at the moment the event happens, and a reissue (letters, later) is a new document pointing at the old one.
 - **Next**: offer and allocation letters (generated from the developer's letterhead, signature, seal and the estate's disclosed terms), then the irrevocable power of attorney.
 
+### Portal: letterheads (changeset 090) — **built**
+
+`{target}` is `company` or a branch id. Reads need `portal.documents.view` (Executive Director, branch manager, finance, legal); changes need `portal.documents.manage` (Executive Director) **and** a company-wide view — a branch-narrowed caller gets 403 `DOCUMENTS_REQUIRE_COMPANY_WIDE_SCOPE`. **Both slugs are new: add them to `authService.ts`.**
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET | `/api/portal/letterheads` | — | `{ company: Letterhead, branches: Letterhead[] }` (a branch manager: their own branch only) |
+| PUT | `/api/portal/letterheads/{target}/signatory` | `{ name, title }` | `Letterhead` |
+| DELETE | `/api/portal/letterheads/{target}/signatory` | — | `Letterhead` (name, title and signature removed together) |
+| POST | `/api/portal/letterheads/{target}/images/uploads` | `{ kind: "logo" \| "signature" \| "seal", fileName, contentType, sizeBytes }` | 201 upload ticket (PNG or JPEG, ≤ 2 MB, private) |
+| POST | `/api/portal/letterheads/{target}/images/{fileId}/confirm` | — | `Letterhead` |
+| DELETE | `/api/portal/letterheads/{target}/images/{kind}` | — | `Letterhead` |
+| GET | `/api/portal/letterheads/files/{fileId}/link` | — | `{ url, expiresAt }` (5 minutes; current images of your company only) |
+
+- `Letterhead`: `{ scope ("company" | "branch"), branchId, branchName, version, updatedAt, signatoryName, signatoryTitle, logo, signature, seal, printed, missing }`. The top-level fields are what this letterhead **sets itself**; `printed` is what a letter would show: `{ companyName, rcNumber, address, phone, email, website, signatoryName, signatoryTitle, signatorySource, logo, signature, seal }`. An image is `{ kind, fileId, fileName, fileType, sizeBytes, source ("company" | "branch") }` — show it through the link route.
+- **A branch inherits** the company's logo, seal and signatory until it sets its own, and prints its own office address/phone/email (entered on the branch), each falling back to head office.
+- **A branch's signer is one unit**: once a branch names its own signer it needs their signature too — the company's signature is never shown under another name.
+- `missing` lists what still blocks letters: `signatory_name`, `signatory_title`, `signature`. Logo and seal are optional.
+- `version` goes up on every real change (0 = nothing set). Letter-template approval (next step) is tied to it.
+- Errors: `BRANCH_NOT_FOUND`, `LETTERHEAD_FILE_NOT_FOUND` (404), `UNKNOWN_IMAGE_KIND`, `INVALID_PARAMETER`, `VALIDATION_ERROR` (400), `LETTERHEAD_CHANGED` (409, retry), plus the storage upload errors below.
+
+### Portal: allocation terms per estate (changeset 091) — **built**
+
+Same permissions as letterheads (view to read; manage + company-wide to save).
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET | `/api/portal/estates/{estateId}/letter-terms` | — | `EstateLetterTerms` |
+| PUT | `/api/portal/estates/{estateId}/letter-terms` | `{ clauses: string[] }` (1–30, each ≤ 600 chars) | `EstateLetterTerms` |
+| GET | `/api/portal/estates/{estateId}/letter-terms/versions` | — | `[{ version, clauses, savedAt, reviewStatus, reviewNote, reviewedAt }]`, newest first |
+
+- `EstateLetterTerms`: `{ estateId, estateName, version (0 = never saved), clauses, updatedAt, generatedClauses, disclosureVersions: { fees, refundTerms, defaultTerms }, missingDisclosure, reviewStatus, reviewNote, reviewedAt, approvedVersion }`.
+- **HomeTrue reviews every saved version** (changeset 092). `reviewStatus` of the current version: `pending` | `approved` | `rejected` (null before the first save); in the versions list an older undecided one is `superseded`. `reviewNote` is HomeTrue's note — always present on a rejection, saying what to change; show it. `approvedVersion` is the version letters use: a new version awaiting review doesn't replace it until approved. Null = nothing approved yet, so the estate can't issue letters — say so.
+- **Show both lists, numbered together**: the developer's `clauses` first, then `generatedClauses` (read-only — written by HomeTrue from the estate's cost disclosure; the last one always says payments go only through HomeTrue). To change a generated clause, change the disclosure.
+- **No amounts and no bank details in a clause**: 400 `CLAUSE_REFUSED` with every problem in `fieldErrors` keyed `clauses[0]`, `clauses[1]`…, nothing saved. Show each message under its clause.
+- `missingDisclosure`: `fees`, `refund_terms`, `default_terms` not declared yet — link to the disclosure screens.
+- Each save is a new version (earlier ones kept); saving identical clauses changes nothing. Errors: `ESTATE_NOT_FOUND` (404, also another branch's estate for branch staff), `LETTER_TERMS_CHANGED` (409, retry).
+
+### Portal: previewing and approving the allocation letter (DS-5, changeset 093) — **built**
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET | `/api/portal/estates/{estateId}/letter-approval` | — | `LetterApproval` (`portal.documents.view`) |
+| GET | `/api/portal/estates/{estateId}/letter-preview/pdf?terms=approved\|latest` | — | PDF (`portal.documents.view`) |
+| GET | `/api/portal/estates/{estateId}/letter-preview/jpeg?terms=approved\|latest` | — | JPEG, every page stacked |
+| POST | `/api/portal/estates/{estateId}/letter-approval` | `{ versions: LetterVersions }` | `LetterApproval` (`portal.documents.manage`, company-wide) |
+| POST | `/api/portal/estates/{estateId}/letter-approval/withdraw` | — | `LetterApproval` (same) |
+
+- `LetterApproval`: `{ estateId, estateName, approved, approvedAt, approvedVersions, currentVersions, changedSinceApproval, blockers, newerTermsAwaitingReview }`. `LetterVersions`: `{ terms, companyLetterhead, branchLetterhead, fees, refundTerms, defaultTerms }` (integers or null).
+- **Flow**: read the status → show the preview (fetch as a blob; it's a watermarked sample with placeholders) → approve by sending back the `currentVersions` you previewed against. If anything changed in between: 409 `LETTER_SETUP_CHANGED` — re-read and preview again.
+- `blockers` (approve refused with 409 `LETTER_NOT_READY`): `no_approved_terms` (HomeTrue hasn't approved the conditions yet), `signatory_name`, `signatory_title`, `signature` — link each to its screen. The preview still works while blocked.
+- `approved` goes back to false by itself when the conditions (once HomeTrue approves a new version), the letterhead (signatory, signature, seal, logo) or the cost disclosure change; `changedSinceApproval` says which: `terms`, `company_letterhead`, `branch_letterhead`, `fees`, `refund_terms`, `default_terms`. Show "needs approving again" with the reason.
+- `newerTermsAwaitingReview`: a newer version of the conditions is with HomeTrue; letters use the approved one meanwhile. `?terms=latest` previews it.
+
+### Portal: letter templates (changeset 094) — **built**
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET | `/api/portal/letter-templates` | — | `{ company: LetterTemplate, branches: LetterTemplate[], fields: string[], defaultWording: { opening, signOff } }` (`portal.documents.view`) |
+| PUT | `/api/portal/letter-templates/{target}` | `{ opening, closing?, signOff, standardClauses?: string[] }` | `LetterTemplate` (`portal.documents.manage`, company-wide; `target` = `company` or a branch id) |
+| GET | `/api/portal/letter-templates/{target}/versions` | — | `LetterTemplateVersion[]`, newest first |
+
+- `LetterTemplate`: `{ source: "company"\|"branch", branchId, branchName, current: LetterTemplateVersion\|null, approved: LetterTemplateVersion\|null, inUse: "branch"\|"company"\|"default" }`. `LetterTemplateVersion`: `{ version, opening, closing, signOff, standardClauses, savedAt, reviewStatus, reviewNote, reviewedAt }`.
+- **Fill-in fields** (offer them as insertable chips): `{buyerName}`, `{plot}`, `{estate}`, `{location}`, `{applicationDate}`, `{allocationDate}`. The opening must contain `{plot}` and `{estate}`.
+- 400 `TEMPLATE_REFUSED`: `fieldErrors` keyed `opening`, `closing`, `signOff`, `standardClauses[0]`… — show each under its field. 409 `LETTER_TEMPLATE_CHANGED`: retry.
+- Every save is reviewed by HomeTrue; letters use `approved` (or the company's / HomeTrue's default — `inUse`). Approving a new version lapses estate letter approvals that used the old one (`changedSinceApproval` includes `template`). `LetterVersions` gains `templateSource` and `template`.
+
+### Admin: reviewing letter templates (changeset 094) — **built**
+
+Same shape and rules as the conditions review below, at `/api/admin/letter-template-reviews` (`?status=`, `/{templateId}`, `/{templateId}/approve` `{ note? }`, `/{templateId}/reject` `{ note }`). `LetterTemplateReview`: `{ templateId, tenantId, companyName, source, branchId, branchName, version, opening, closing, signOff, standardClauses, savedAt, status, note, reviewedAt, approved: LetterTemplateVersion\|null }`. Errors: `LETTER_TEMPLATE_NOT_FOUND` (404), `LETTER_TEMPLATE_ALREADY_DECIDED`, `LETTER_TEMPLATE_SUPERSEDED` (409).
+
+### Admin: reviewing allocation terms (changeset 092) — **built**
+
+Needs `admin.documents.review` (Super Admin, compliance officer) — **new slug for `authService.ts`**.
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET | `/api/admin/letter-terms-reviews?status=pending\|approved\|rejected` | — | `LetterTermsReview[]` (pending, the default: oldest first) |
+| GET | `/api/admin/letter-terms-reviews/{termsId}` | — | `LetterTermsReview` |
+| POST | `/api/admin/letter-terms-reviews/{termsId}/approve` | `{ note? }` (body optional) | `LetterTermsReview` |
+| POST | `/api/admin/letter-terms-reviews/{termsId}/reject` | `{ note }` (required, shown to the developer) | `LetterTermsReview` |
+
+- `LetterTermsReview`: `{ termsId, estateId, estateName, estateState, companyName, version, clauses, savedAt, generatedClauses, status, note, reviewedAt, approvedVersion, approvedClauses }`. Show `clauses` (under review) beside `approvedClauses` (what letters use today); `generatedClauses` are context only.
+- Errors: `LETTER_TERMS_NOT_FOUND` (404), `LETTER_TERMS_ALREADY_DECIDED` (409), `LETTER_TERMS_SUPERSEDED` (409 — the developer saved a newer version; reload the queue), `VALIDATION_ERROR` (400, reject without a note), `INVALID_PARAMETER` (400, unknown status).
+
 File storage: **the storage module is built (step 1)**; estate photos (step 2) are the first feature using it — see "Estate photos" above. Files upload straight from the browser to object storage: the backend returns `{ fileId, uploadUrl, method: "PUT", headers, expiresAt }`; the browser sends the file to `uploadUrl` with exactly `headers` (the size and type are part of the signature); then the feature's own confirm route is called with `fileId`. Errors: `FILE_TYPE_NOT_ALLOWED`, `FILE_TOO_LARGE`, `FILE_EMPTY` (400), `UPLOAD_SIZE_MISMATCH` / `UPLOAD_CONTENT_MISMATCH` (400: what arrived wasn't what was promised; deleted, start again), `UPLOAD_NOT_RECEIVED` / `UPLOAD_EXPIRED` / `FILE_NOT_READY` (409), `FILE_NOT_FOUND` (404), `STORAGE_UNAVAILABLE` (503, retry). Public files come back with a `publicUrl`; private ones only through short-lived links. Accepted: JPG, PNG, WebP, PDF (never SVG). A stored file's `visibility` is `public` | `private` and its `fileType` `jpeg` | `png` | `webp` | `pdf` — lowercase like every other value in this API (`status` already was); requests accept either case. `IMAGE_UNREADABLE` (400) is added for features that ask for metadata removal (estate photos). `Document` downloads come with step 3/4.
 
 ## KYC — `kycService.ts` — **built**

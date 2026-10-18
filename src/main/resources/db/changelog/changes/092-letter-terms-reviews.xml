@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        HomeTrue reviews every version of an estate's allocation conditions
+        before a letter may use it. See AGENTS.md, "Documents: HomeTrue reviews
+        the conditions".
+
+        A decision is its own row, never changed, because estate_letter_terms
+        can't be updated: a version with no row here is pending. One decision per
+        version. A letter uses the newest APPROVED version; a newer one awaiting
+        review changes nothing until it is approved.
+    -->
+    <changeSet id="092-create-estate-letter-terms-reviews" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE estate_letter_terms_reviews (
+                id                uuid NOT NULL PRIMARY KEY,
+                created_at        timestamp(6) with time zone NOT NULL,
+                created_by        varchar(255),
+                tenant_id         uuid NOT NULL REFERENCES organizations (id),
+                branch_id         uuid REFERENCES branches (id),
+
+                estate_id         uuid NOT NULL REFERENCES estates (id),
+                terms_id          uuid NOT NULL REFERENCES estate_letter_terms (id),
+                terms_version     integer NOT NULL,
+                decision          varchar(20) NOT NULL,
+                note              text,
+                reviewer_user_id  uuid NOT NULL REFERENCES users (id),
+
+                CONSTRAINT uq_estate_letter_terms_reviews_terms UNIQUE (terms_id),
+                CONSTRAINT chk_estate_letter_terms_reviews_decision CHECK (decision IN ('APPROVED', 'REJECTED')),
+                CONSTRAINT chk_estate_letter_terms_reviews_reject_note
+                    CHECK (decision <> 'REJECTED' OR (note IS NOT NULL AND btrim(note) <> ''))
+            );
+            CREATE INDEX idx_estate_letter_terms_reviews_estate ON estate_letter_terms_reviews (estate_id, terms_version);
+            REVOKE UPDATE, DELETE, TRUNCATE ON estate_letter_terms_reviews FROM ${appDbUsername};
+            COMMENT ON TABLE estate_letter_terms_reviews IS
+                'HomeTrue''s decision on one version of an estate''s allocation conditions; never changed. No row = pending. Letters use the newest APPROVED version. See AGENTS.md, "Documents: HomeTrue reviews the conditions".';
+
+            ALTER TABLE estate_letter_terms_reviews ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE estate_letter_terms_reviews FORCE ROW LEVEL SECURITY;
+            CREATE POLICY estate_letter_terms_reviews_platform ON estate_letter_terms_reviews FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            -- The developer reads HomeTrue's decisions on their own estates; only HomeTrue writes them.
+            CREATE POLICY estate_letter_terms_reviews_tenant_read ON estate_letter_terms_reviews FOR SELECT
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                );
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE estate_letter_terms_reviews;
+        ]]></rollback>
+    </changeSet>
+
+    <!--
+        admin.documents.review: super_admin and compliance_officer — the people
+        who already review buyers' identity documents. Decided with the user.
+    -->
+    <changeSet id="092-seed-admin-documents-review" author="landvault">
+        <sql><![CDATA[
+            INSERT INTO permissions (id, created_at, created_by, deleted, code, description) VALUES
+                (gen_random_uuid(), now(), 'system', false, 'admin.documents.review',
+                 'Approve or reject the allocation conditions developers write, before a letter may use them.');
+            INSERT INTO role_permissions (id, created_at, created_by, deleted, role_id, permission_id)
+            SELECT gen_random_uuid(), now(), 'system', false, r.id, p.id
+            FROM roles r, permissions p
+            WHERE p.code = 'admin.documents.review' AND r.code IN ('super_admin', 'compliance_officer');
+        ]]></sql>
+        <rollback><![CDATA[
+            DELETE FROM role_permissions WHERE permission_id IN
+                (SELECT id FROM permissions WHERE code = 'admin.documents.review');
+            DELETE FROM permissions WHERE code = 'admin.documents.review';
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>
