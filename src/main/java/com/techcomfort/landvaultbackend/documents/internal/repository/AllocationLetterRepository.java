@@ -12,6 +12,8 @@ public interface AllocationLetterRepository extends JpaRepository<AllocationLett
 
     boolean existsByTransactionId(UUID transactionId);
 
+    Optional<AllocationLetter> findByTransactionId(UUID transactionId);
+
     Optional<AllocationLetter> findByIdAndBuyerUserId(UUID id, UUID buyerUserId);
 
     Optional<AllocationLetter> findByVerificationCode(String verificationCode);

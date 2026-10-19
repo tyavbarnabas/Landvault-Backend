@@ -41,7 +41,7 @@ public class DocumentExceptionHandler {
 
     @ExceptionHandler(DocumentException.PlotNotFound.class)
     public ResponseEntity<ErrorResponse> handlePlotNotFound(DocumentException.PlotNotFound ex) {
-        return error(HttpStatus.NOT_FOUND, ex.getMessage(), "PORTFOLIO_PLOT_NOT_FOUND");
+        return error(HttpStatus.NOT_FOUND, ex.getMessage(), "OWNED_PLOT_NOT_FOUND");
     }
 
     @ExceptionHandler(DocumentException.NotAHomeTrueDocument.class)

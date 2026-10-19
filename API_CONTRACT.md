@@ -407,7 +407,7 @@ All need `client.documents.view` (every buyer has it) except verify, which is pu
 | Method | Path | Response |
 |---|---|---|
 | GET | `/api/documents?cursor&limit` | `Page<Document>`, newest first. `limit` default 20, max 100. |
-| GET | `/api/portfolio/plots/{id}/documents` | `Document[]` for one portfolio entry — the same ids `/api/portfolio/plots/{id}` takes (owned-plot or transaction id). Another buyer's: 404 `PORTFOLIO_PLOT_NOT_FOUND`. |
+| GET | `/api/portfolio/plots/{id}/documents` | `Document[]` for one portfolio entry — the same ids `/api/portfolio/plots/{id}` takes (owned-plot or transaction id). Another buyer's: 404 `OWNED_PLOT_NOT_FOUND`. |
 | GET | `/api/documents/receipts/{id}` | `Document`; another buyer's: 404 `DOCUMENT_NOT_FOUND`. |
 | GET | `/api/documents/receipts/{id}/pdf` | The PDF (A4), as an attachment named `HomeTrue-<number>.pdf`. |
 | GET | `/api/documents/receipts/{id}/jpeg` | The same page as a JPEG (150 dpi), for sharing. |
@@ -813,8 +813,9 @@ contact you", never "you own this plot".
 → `[{ transactionId, transactionReference, estateName, plotLabel, buyerEmail,
 expectedAmount, currency, awaitingSince, payment: { reference, amountPaid,
 channel, paidAt, last4, gatewayResponse } | null, amountsMatch, letterApproved }]`.
-`POST …/{id}/verify` → `{ status: "verified" }` (plot sold, reservation
-`converted`, the buyer's allocation letter issued — only now may the buyer be told the plot is theirs).
+`POST …/{id}/verify` → `{ transactionId, status: "verified", allocationLetterId, allocationLetterNumber }` (plot sold, reservation
+`converted`, the buyer's allocation letter issued — only now may the buyer be told the plot is theirs). The two
+letter fields name the letter just issued; they are null on every other decision.
 `letterApproved: false` means verify will be refused with 409 `LETTER_NOT_APPROVED` until the Executive
 Director approves the estate's letter — show it on the row and disable Verify;
 `POST …/{id}/reject` `{ reason }` → `{ status: "rejected" }`. Errors: 404
@@ -883,8 +884,8 @@ Errors: 404 `REFUND_NOT_DUE`, `REFUND_NOT_FOUND`; 409 `REFUND_IN_PROGRESS`,
 **Late money (developer finance).** `portal.payments.verify`. `GET /api/portal/finance/late-payments`
 → `[{ transactionId, transactionReference, estateName, plotLabel, buyerName, buyerEmail,
 paymentReference, agreedPrice, amountPaid, currency, channel, paidAt, plotAvailable, amountsMatch, letterApproved }]`.
-`POST /api/portal/finance/late-payments/{transactionId}/allocate` → `{ status: "verified" }`, and the buyer's
-allocation letter is issued (409 `PLOT_NO_LONGER_AVAILABLE` / `PAYMENT_NOT_CONFIRMED` / `LETTER_NOT_APPROVED`,
+`POST /api/portal/finance/late-payments/{transactionId}/allocate` → `{ transactionId, status: "verified",
+allocationLetterId, allocationLetterNumber }`, and the buyer's allocation letter is issued (409 `PLOT_NO_LONGER_AVAILABLE` / `PAYMENT_NOT_CONFIRMED` / `LETTER_NOT_APPROVED`,
 nothing changed). `POST …/{transactionId}/refund`
 `{ reason }` → `{ status: "refund_due" }`. Only offer Allocate while `plotAvailable` is true.
 

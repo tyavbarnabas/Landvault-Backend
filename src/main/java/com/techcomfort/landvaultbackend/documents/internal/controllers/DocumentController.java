@@ -59,7 +59,7 @@ public class DocumentController {
                     `/api/portfolio/plots/{id}` accepts. Another buyer's plot is a 404.""")
     @ApiResponses({
             @ApiResponse(responseCode = "200"),
-            @ApiResponse(responseCode = "404", description = "`PORTFOLIO_PLOT_NOT_FOUND`", content = @Content)})
+            @ApiResponse(responseCode = "404", description = "`OWNED_PLOT_NOT_FOUND`", content = @Content)})
     @GetMapping("/api/portfolio/plots/{id}/documents")
     @PreAuthorize("hasAuthority('client.documents.view')")
     public ResponseEntity<List<DocumentDto>> forPlot(@PathVariable UUID id) {
