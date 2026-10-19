@@ -844,9 +844,12 @@ caller's own 2FA to send. `GET /api/admin/payouts/ready` → `[{ transactionId,
 transactionReference, tenantId, companyName, estateName, plotLabel, amount, currency,
 verifiedAt, payoutAccount: { bankName, accountLast4, accountName } | null, blockers[],
 lastAttempt }]`; `GET /api/admin/payouts?status=` → `PayoutDto[]` `{ id,
-transactionId, tenantId, amount, currency, status, reference, gatewayMessage, bankName,
-accountLast4, createdAt, transferredAt }` (`status`: sending | awaiting_otp | pending |
-success | failed | reversed | cancelled). `POST /api/admin/payouts` `{ transactionId }`
+transactionId, tenantId, companyName, amount, currency, status, reference, gatewayMessage, bankName,
+accountLast4, createdAt, transferredAt }`; `companyName` is the selling company's
+name (the ready list's), null only when none is on record. Every route that returns a
+`PayoutDto` (the list, send, OTP, resend, cancel, the ready list's `lastAttempt` and
+`GET /api/portal/payouts`) fills it. `status`: sending | awaiting_otp | pending |
+success | failed | reversed | cancelled. `POST /api/admin/payouts` `{ transactionId }`
 → usually `awaiting_otp`: prompt for the code Paystack sent the account owner, then
 `POST /api/admin/payouts/{id}/otp` `{ otp }`; `…/resend-otp`; `…/cancel`. Errors: 403
 `TWO_FACTOR_REQUIRED`; 404 `SALE_NOT_PAYABLE`; 409 `PAYOUT_IN_PROGRESS`,

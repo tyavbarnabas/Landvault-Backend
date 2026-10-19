@@ -30,6 +30,8 @@ import com.techcomfort.landvaultbackend.inventory.dto.CreatePriceTierRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.EstateDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PriceTierDto;
 import com.techcomfort.landvaultbackend.kyc.dto.KycRecordDto;
+import com.techcomfort.landvaultbackend.payments.dto.PayoutDto;
+import com.techcomfort.landvaultbackend.tenancy.TenancyApi;
 import com.techcomfort.landvaultbackend.tenancy.dto.AddressDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.CompanyIdentityDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.CompanyPresenceDto;
@@ -42,6 +44,7 @@ import com.techcomfort.landvaultbackend.payments.internal.exceptions.PaymentExce
 import com.techcomfort.landvaultbackend.payments.internal.paystack.PaystackClient;
 import org.mockito.ArgumentCaptor;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import com.techcomfort.landvaultbackend.payments.internal.paystack.PaystackSignature;
 import org.springframework.beans.factory.annotation.Value;
 import com.techcomfort.landvaultbackend.payments.internal.service.PaymentSweeper;
@@ -94,6 +97,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -189,6 +193,10 @@ class ReservationCheckoutUnderRlsIT {
     /** Payout alerts, checked rather than sent. */
     @MockitoBean
     private SettlementAlertSender alerts;
+
+    /** Real, watched: payout lists must look company names up in one batch. */
+    @MockitoSpyBean
+    private TenancyApi tenancyApi;
 
     /** Stands in for Paystack: these tests never call the real gateway. */
     @MockitoBean
@@ -1028,6 +1036,8 @@ class ReservationCheckoutUnderRlsIT {
 
         assertThat(started.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(started.getBody()).contains("\"status\":\"awaiting_otp\"");
+        assertThat(started.getBody()).as("a single payout names its company too").contains("\"companyName\":\""
+                + queryString("SELECT registered_name FROM organizations WHERE id = '" + seller.id() + "'") + "\"");
         ArgumentCaptor<String> reference = ArgumentCaptor.forClass(String.class);
         // The ₦20M sale is over the ₦10M cap: part 1 of 2, half the money.
         verify(paystack).initiateTransfer(eq(1_000_000_000L), eq("RCP_seller"), reference.capture(), any());
@@ -1406,6 +1416,44 @@ class ReservationCheckoutUnderRlsIT {
         Tenant other = verifiedTenant();
         String elsewhere = staffWithRole(other.id(), "finance_officer", null);
         assertThat(get("/api/portal/payouts", elsewhere, String.class).getBody()).isEqualTo("[]");
+    }
+
+    /**
+     * The Super Admin's payout history names each payout's company, so a role
+     * without the tenant directory still sees whose money it was — looked up
+     * for the whole list at once, never one company per row.
+     */
+    @Test
+    void payoutsNameTheirCompanyLookedUpInOneBatch() {
+        String mine = pendingPayout("TRF_named");
+        Tenant other = verifiedTenant();
+        String theirs = "lv-payout-" + UUID.randomUUID().toString().replace("-", "");
+        execute("INSERT INTO payouts (id, tenant_id, created_at, deleted, transaction_id, settlement_account_id, "
+                + "recipient_code, amount, currency, amount_kobo, reference, status, gateway_message, initiated_by, "
+                + "part_number, part_count) SELECT gen_random_uuid(), '" + other.id() + "', now(), false, "
+                + "transaction_id, settlement_account_id, recipient_code, amount, currency, amount_kobo, '" + theirs
+                + "', 'FAILED', 'Insufficient balance', initiated_by, part_number, part_count "
+                + "FROM payouts WHERE reference = '" + mine + "'");
+        String sellerName = queryString("SELECT registered_name FROM organizations WHERE id = '" + seller.id() + "'");
+        String otherName = queryString("SELECT registered_name FROM organizations WHERE id = '" + other.id() + "'");
+        String admin = payoutAdmin(false);
+        clearInvocations(tenancyApi);
+
+        List<PayoutDto> all = restTemplate.exchange("/api/admin/payouts", HttpMethod.GET,
+                new HttpEntity<>(bearer(admin)), new ParameterizedTypeReference<List<PayoutDto>>() {
+                }).getBody();
+
+        assertThat(all).filteredOn(p -> p.reference().equals(mine)).singleElement()
+                .extracting(PayoutDto::companyName).isEqualTo(sellerName);
+        assertThat(all).filteredOn(p -> p.reference().equals(theirs)).singleElement()
+                .extracting(PayoutDto::companyName).isEqualTo(otherName);
+        verify(tenancyApi, times(1)).organizationNamesFor(any());
+
+        String finance = staffWithRole(seller.id(), "finance_officer", null);
+        List<PayoutDto> own = restTemplate.exchange("/api/portal/payouts", HttpMethod.GET,
+                new HttpEntity<>(bearer(finance)), new ParameterizedTypeReference<List<PayoutDto>>() {
+                }).getBody();
+        assertThat(own).isNotEmpty().extracting(PayoutDto::companyName).containsOnly(sellerName);
     }
 
     /** A part of a verified sale, accepted by Paystack and not yet finished. */

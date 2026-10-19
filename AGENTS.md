@@ -5030,6 +5030,11 @@ with the row security removed as well it went red.
   `payout.otp_resent`, `payout.cancelled`.
 - `payouts` is RLS-policied (platform staff all; a company may read its own
   for a future portal view), and the app role can't DELETE or TRUNCATE.
+- **Every `PayoutDto` carries `companyName`** (2026-10-19, raised by the
+  frontend): a role with `admin.payouts.manage` but not `admin.tenants.view`
+  couldn't see whose money a payout was. Same name as the ready list
+  (`TenancyApi.organizationNamesFor`), **one batch per list**, never per row
+  (proven red); null only when none is on record, never a made-up default.
 - **Not yet (8c)**: the final outcome — `transfer.success|failed|reversed`
   webhooks, a check with Paystack, and a sweep for payouts stuck `pending`.
 
