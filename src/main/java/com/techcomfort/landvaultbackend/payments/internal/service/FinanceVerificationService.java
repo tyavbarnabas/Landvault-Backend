@@ -8,6 +8,7 @@ import com.techcomfort.landvaultbackend.checkout.FinanceQueueRow;
 import com.techcomfort.landvaultbackend.common.TenantContext;
 import com.techcomfort.landvaultbackend.common.TenantScope;
 import com.techcomfort.landvaultbackend.identity.IdentityApi;
+import com.techcomfort.landvaultbackend.payments.AllocationLetterLookup;
 import com.techcomfort.landvaultbackend.payments.dto.FinanceDecisionDto;
 import com.techcomfort.landvaultbackend.payments.dto.FinanceQueueItemDto;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
@@ -37,6 +38,7 @@ import java.util.UUID;
 public class FinanceVerificationService {
 
     private final CheckoutApi checkoutApi;
+    private final AllocationLetterLookup letterLookup;
     private final IdentityApi identityApi;
     private final PaymentRepository payments;
     private final AuditApi auditApi;
@@ -80,7 +82,7 @@ public class FinanceVerificationService {
         }
         log.info("Transaction {} verified by finance user {}; plot allocated", transactionId, scope.userId());
         tellBuyer(row, payment.get().getAmount(), true, null);
-        return new FinanceDecisionDto(transactionId, "verified");
+        return FinanceDecisionDto.verified(transactionId, letterLookup.letterFor(transactionId));
     }
 
     /** The plot goes back on sale; the money is flagged for refund (decided with the user — refunds are manual for now). */
@@ -111,7 +113,7 @@ public class FinanceVerificationService {
         if (row.isPresent() && returned.signum() > 0) {
             tellBuyer(row.get(), returned, false, reason.trim());
         }
-        return new FinanceDecisionDto(transactionId, "rejected");
+        return FinanceDecisionDto.of(transactionId, "rejected");
     }
 
     /** Sent after this decision commits; a failed email leaves the decision standing. */

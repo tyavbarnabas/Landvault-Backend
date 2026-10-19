@@ -1627,6 +1627,8 @@ class ReservationCheckoutUnderRlsIT {
                 .as("now owed to the developer like any verified sale").contains(transaction.id().toString());
         assertThat(queryString("SELECT count(*) FROM allocation_letters WHERE transaction_id = '" + transaction.id() + "'"))
                 .as("the letter comes with the allocation").isEqualTo("1");
+        assertThat(allocated.getBody()).contains("\"allocationLetterNumber\":\"" + queryString(
+                "SELECT number FROM allocation_letters WHERE transaction_id = '" + transaction.id() + "'") + "\"");
         verify(alerts).latePaymentResolved(any());
     }
 
@@ -2390,7 +2392,7 @@ class ReservationCheckoutUnderRlsIT {
             assertThat(theirs.getBody()).as(download.getKey()).contains("DOCUMENT_NOT_FOUND");
         }
         assertThat(get("/api/portfolio/plots/" + transaction.id() + "/documents", other.token(), String.class)
-                .getBody()).contains("PORTFOLIO_PLOT_NOT_FOUND");
+                .getBody()).contains("OWNED_PLOT_NOT_FOUND");
     }
 
     @Test
@@ -2465,11 +2467,15 @@ class ReservationCheckoutUnderRlsIT {
         assertThat(get("/api/portal/finance/transactions", officer, String.class).getBody())
                 .contains("\"letterApproved\":true");
 
-        assertThat(financeAction(officer, transaction.id(), "verify", null).getStatusCode()).isEqualTo(HttpStatus.OK);
+        ResponseEntity<String> decision = financeAction(officer, transaction.id(), "verify", null);
+        assertThat(decision.getStatusCode()).isEqualTo(HttpStatus.OK);
 
         DocumentDto letter = documents(buyer).items().stream()
                 .filter(d -> d.type().equals("allocation_letter")).findFirst().orElseThrow();
         assertThat(letter.number()).matches("HT-ALC-\\d{4}-\\d{6}");
+        assertThat(decision.getBody()).as("finance is told which letter was issued")
+                .contains("\"allocationLetterId\":\"" + letter.id() + "\"")
+                .contains("\"allocationLetterNumber\":\"" + letter.number() + "\"");
         assertThat(letter.transactionId()).isEqualTo(transaction.id());
         assertThat(letter.plotId()).isEqualTo(plotId);
         assertThat(letter.pdfUrl()).isEqualTo("/api/documents/allocation-letters/" + letter.id() + "/pdf");

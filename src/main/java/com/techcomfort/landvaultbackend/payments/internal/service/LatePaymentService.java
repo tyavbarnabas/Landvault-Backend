@@ -8,6 +8,7 @@ import com.techcomfort.landvaultbackend.checkout.FinanceDecision;
 import com.techcomfort.landvaultbackend.common.TenantContext;
 import com.techcomfort.landvaultbackend.common.TenantScope;
 import com.techcomfort.landvaultbackend.identity.IdentityApi;
+import com.techcomfort.landvaultbackend.payments.AllocationLetterLookup;
 import com.techcomfort.landvaultbackend.payments.dto.FinanceDecisionDto;
 import com.techcomfort.landvaultbackend.payments.dto.LatePaymentDto;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
@@ -40,6 +41,7 @@ public class LatePaymentService {
 
     private final PaymentRepository payments;
     private final CheckoutApi checkoutApi;
+    private final AllocationLetterLookup letterLookup;
     private final IdentityApi identityApi;
     private final SettlementAlertSender alerts;
     private final AuditApi auditApi;
@@ -83,7 +85,7 @@ public class LatePaymentService {
                 tenantId, "Late payment " + payment.getReference() + " accepted; " + sale.plotLabel() + " allocated."));
         tell(payment, sale, true, null);
         log.info("Late payment {} allocated by {}", payment.getReference(), scope.userId());
-        return new FinanceDecisionDto(transactionId, "verified");
+        return FinanceDecisionDto.verified(transactionId, letterLookup.letterFor(transactionId));
     }
 
     /** Refund: the payment becomes owed back and joins LandVault's refunds-due list. Nothing about the plot changes. */
@@ -100,7 +102,7 @@ public class LatePaymentService {
         auditApi.record(AuditEntryRequest.of(scope.userId(), "payment.refund_due", "payment", payment.getId(), tenantId,
                 "Late payment " + payment.getReference() + " to be refunded: " + reason.trim()));
         tell(payment, sale, false, reason.trim());
-        return new FinanceDecisionDto(transactionId, "refund_due");
+        return FinanceDecisionDto.of(transactionId, "refund_due");
     }
 
     // --- helpers ---

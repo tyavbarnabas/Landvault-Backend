@@ -6025,6 +6025,11 @@ commit or roll back together. **Never make it asynchronous or after-commit.**
   for letters too (`documentType: allocation_letter`, company, estate, plot,
   initials — no amount, no name).
 - Audit: `allocation_letter.issued`, actor the finance officer.
+- **Finance is told which letter it issued**: verify and late-money allocate
+  return `allocationLetterId` and `allocationLetterNumber` (null on reject and
+  refund). Payments reads them through `payments.AllocationLetterLookup`,
+  implemented by documents (`PaymentAllocationLetterLookup`) — the **ninth**
+  inverted interface, the `ReceiptLookup` shape. Asked for by the frontend.
 - **Sales verified before 095 have no letter.** Nothing backfills them: their
   estates had no approved setup to build one from.
 
