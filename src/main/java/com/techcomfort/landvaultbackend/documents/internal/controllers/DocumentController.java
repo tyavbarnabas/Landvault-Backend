@@ -40,10 +40,11 @@ public class DocumentController {
     @Operation(summary = "My documents",
             description = """
                     Requires `client.documents.view`. Every document HomeTrue has issued to the caller, newest \
-                    first — receipts today. Paged (`limit` default 20, max 100).
+                    first — receipts and allocation letters. Paged (`limit` default 20, max 100).
 
-                    A receipt is issued the moment Paystack confirms a payment, never earlier. Its PDF and JPEG \
-                    are drawn on demand from the copy kept when it was issued, so they never change.""")
+                    A receipt is issued the moment Paystack confirms a payment; an allocation letter the moment \
+                    the developer's finance verifies the sale. Their PDF and JPEG are drawn on demand from the copy \
+                    kept when they were issued, so they never change.""")
     @GetMapping("/api/documents")
     @PreAuthorize("hasAuthority('client.documents.view')")
     public ResponseEntity<PageResponse<DocumentDto>> list(@RequestParam(required = false) String cursor,
@@ -102,12 +103,50 @@ public class DocumentController {
         return file(service.receiptJpeg(currentUserId(), id), MediaType.IMAGE_JPEG);
     }
 
+    @Operation(summary = "One of my allocation letters",
+            description = "Requires `client.documents.view`. Own letters only (404 otherwise).")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200"),
+            @ApiResponse(responseCode = "404", description = "`DOCUMENT_NOT_FOUND`", content = @Content)})
+    @GetMapping("/api/documents/allocation-letters/{id}")
+    @PreAuthorize("hasAuthority('client.documents.view')")
+    public ResponseEntity<DocumentDto> allocationLetter(@PathVariable UUID id) {
+        return ResponseEntity.ok(service.allocationLetter(currentUserId(), id));
+    }
+
+    @Operation(summary = "Download an allocation letter as PDF",
+            description = """
+                    Requires `client.documents.view`. The official copy: the developer's letterhead, wording and \
+                    signature, HomeTrue's disclosure clauses, and a QR code anyone can scan to check it is genuine. \
+                    Sent as an attachment named `HomeTrue-<number>.pdf`.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", content = @Content(mediaType = MediaType.APPLICATION_PDF_VALUE)),
+            @ApiResponse(responseCode = "404", description = "`DOCUMENT_NOT_FOUND`", content = @Content)})
+    @GetMapping(value = "/api/documents/allocation-letters/{id}/pdf", produces = MediaType.APPLICATION_PDF_VALUE)
+    @PreAuthorize("hasAuthority('client.documents.view')")
+    public ResponseEntity<byte[]> allocationLetterPdf(@PathVariable UUID id) {
+        return file(service.allocationLetterPdf(currentUserId(), id), MediaType.APPLICATION_PDF);
+    }
+
+    @Operation(summary = "Download an allocation letter as JPEG",
+            description = """
+                    Requires `client.documents.view`. Every page of the letter stacked into one image (150 dpi), \
+                    for apps that share pictures more easily than files.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", content = @Content(mediaType = MediaType.IMAGE_JPEG_VALUE)),
+            @ApiResponse(responseCode = "404", description = "`DOCUMENT_NOT_FOUND`", content = @Content)})
+    @GetMapping(value = "/api/documents/allocation-letters/{id}/jpeg", produces = MediaType.IMAGE_JPEG_VALUE)
+    @PreAuthorize("hasAuthority('client.documents.view')")
+    public ResponseEntity<byte[]> allocationLetterJpeg(@PathVariable UUID id) {
+        return file(service.allocationLetterJpeg(currentUserId(), id), MediaType.IMAGE_JPEG);
+    }
+
     private static ResponseEntity<byte[]> file(DocumentService.RenderedDocument document, MediaType type) {
         return ResponseEntity.ok()
                 .contentType(type)
                 .header(HttpHeaders.CONTENT_DISPOSITION,
                         ContentDisposition.attachment().filename(document.fileName()).build().toString())
-                // A receipt names a person and an amount: never kept by a shared cache.
+                // A document names a person: never kept by a shared cache.
                 .header(HttpHeaders.CACHE_CONTROL, "private, no-store")
                 .body(document.bytes());
     }

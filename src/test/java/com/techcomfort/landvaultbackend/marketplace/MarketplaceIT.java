@@ -1,6 +1,7 @@
 package com.techcomfort.landvaultbackend.marketplace;
 
 import com.techcomfort.landvaultbackend.testsupport.EstatePhotoFixture;
+import com.techcomfort.landvaultbackend.testsupport.LetterApprovalFixture;
 import com.techcomfort.landvaultbackend.testsupport.EstateTitleFixture;
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.PageResponse;
@@ -290,6 +291,48 @@ class MarketplaceIT {
         execute("UPDATE estates SET footprint = ST_GeomFromText('" + boundary + "', 4326) WHERE id = '"
                 + listing.estateId() + "'");
         assertThat(feedIds()).as("back without republishing").contains(listing.estateId());
+    }
+
+    // --- an approved allocation letter (changeset 095) ---
+
+    /**
+     * Decided with the user: finance can't verify a sale without an approved
+     * letter, so an estate can't be listed without one either.
+     */
+    @Test
+    void anEstateWithoutAnApprovedLetterCannotBePublishedAndSaysWhy() {
+        Listing listing = publishedListing("Letterless Gardens");
+        withdrawLetterApproval(listing.estateId());
+        execute("UPDATE estates SET published = false WHERE id = '" + listing.estateId() + "'");
+
+        ResponseEntity<String> refusal = publish(listing.tenant(), listing.estateId());
+
+        assertThat(refusal.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(refusal.getBody()).contains("PUBLICATION_LETTER_NOT_APPROVED").contains("allocation letter");
+        assertThat(restTemplate.exchange("/api/portal/estates/" + listing.estateId(), HttpMethod.GET,
+                entity(listing.tenant().token(), null), String.class).getBody())
+                .contains("\"letterApproved\":false").contains("\"eligible\":false");
+        assertThat(feedIds()).doesNotContain(listing.estateId());
+    }
+
+    /** No exemption for live estates: a lapsed approval takes the listing off; approving again brings it back. */
+    @Test
+    void aLiveEstateWhoseLetterLapsesLeavesTheFeedAndReturnsWhenApprovedAgain() {
+        Listing listing = publishedListing("Lapsing Gardens");
+        assertThat(feedIds()).contains(listing.estateId());
+
+        withdrawLetterApproval(listing.estateId());
+        assertThat(feedIds()).doesNotContain(listing.estateId());
+        assertThat(publishedFlag(listing.estateId())).as("the developer's intent is untouched").isTrue();
+
+        execute(LetterApprovalFixture.approvedLetterSql(listing.estateId()));
+        assertThat(feedIds()).as("back without republishing").contains(listing.estateId());
+    }
+
+    private void withdrawLetterApproval(UUID estateId) {
+        execute("INSERT INTO estate_letter_approvals (id, created_at, tenant_id, branch_id, estate_id, action, actor_user_id) "
+                + "SELECT gen_random_uuid(), clock_timestamp(), tenant_id, branch_id, id, 'WITHDRAWN', "
+                + "(SELECT id FROM users ORDER BY created_at LIMIT 1) FROM estates WHERE id = '" + estateId + "'");
     }
 
     // --- adding a boundary later: the way back from BG-1 ---
@@ -651,6 +694,8 @@ class MarketplaceIT {
                         {"deductionPct":20.00,"processingDays":90,"appliesTo":"total_price"}
                         """), String.class).getStatusCode())
                 .isEqualTo(HttpStatus.OK);
+        // Changeset 095: an approved allocation letter, after the disclosure it records.
+        execute(LetterApprovalFixture.approvedLetterSql(estateId));
     }
 
     private Listing publishedListing(String name) {

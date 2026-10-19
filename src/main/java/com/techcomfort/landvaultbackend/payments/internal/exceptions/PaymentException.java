@@ -289,6 +289,18 @@ public abstract class PaymentException extends RuntimeException {
         }
     }
 
+    /**
+     * AL: the allocation letter is issued in the same step as the sale, so a
+     * sale on an estate whose letter isn't approved can't be allocated yet.
+     */
+    public static class LetterNotApproved extends PaymentException {
+        public LetterNotApproved() {
+            super("This estate's allocation letter isn't approved, so the sale can't be allocated yet — every "
+                    + "buyer receives their letter at this step. Ask your Executive Director to preview and approve "
+                    + "it, then try again. Nothing was changed.");
+        }
+    }
+
     /** Separation of duties: nobody decides on a purchase they made themselves. */
     public static class OwnPurchase extends PaymentException {
         public OwnPurchase() {

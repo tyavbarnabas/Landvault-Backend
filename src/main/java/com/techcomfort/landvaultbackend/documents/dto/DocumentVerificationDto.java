@@ -13,11 +13,11 @@ import java.time.Instant;
 public record DocumentVerificationDto(
         @Schema(description = "`valid` or `refunded` (the payment was later returned). Unknown codes are a 404.")
         String status,
-        @Schema(description = "receipt") String documentType,
+        @Schema(description = "`receipt` or `allocation_letter`") String documentType,
         String number,
         Instant issuedAt,
         @Schema(description = "Always `HomeTrue` for a generated document.") String issuedBy,
-        @Schema(description = "The developer the payment was for.") String developer,
+        @Schema(description = "The developer the payment or allocation was for.") String developer,
         String estate,
         @Schema(nullable = true) String location,
         @Schema(description = "e.g. `Block A, Plot 7`") String plot,

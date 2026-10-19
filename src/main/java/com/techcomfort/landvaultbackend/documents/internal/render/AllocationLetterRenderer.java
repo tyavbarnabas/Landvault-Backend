@@ -99,7 +99,7 @@ public class AllocationLetterRenderer {
             }
             y = c.paragraph(left, y, textWidth, c.bold, 15, 18, INK, upper(co.name()));
             if (present(co.rcNumber())) {
-                c.text(left, y, c.regular, 9, MUTED, "RC " + co.rcNumber());
+                c.text(left, y, c.regular, 9, MUTED, DocumentFormats.rcNumber(co.rcNumber()));
                 y -= 12;
             }
             if (present(co.address())) {

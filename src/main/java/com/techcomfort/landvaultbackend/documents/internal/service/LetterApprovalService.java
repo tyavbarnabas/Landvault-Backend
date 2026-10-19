@@ -15,8 +15,8 @@ import com.techcomfort.landvaultbackend.documents.internal.enums.ReviewDecision;
 import com.techcomfort.landvaultbackend.documents.internal.exceptions.DocumentException;
 import com.techcomfort.landvaultbackend.documents.internal.render.AllocationLetterContent;
 import com.techcomfort.landvaultbackend.documents.internal.render.AllocationLetterRenderer;
-import com.techcomfort.landvaultbackend.documents.internal.render.DisclosureClauses;
 import com.techcomfort.landvaultbackend.documents.internal.render.DocumentFormats;
+import com.techcomfort.landvaultbackend.documents.internal.render.LetterClauses;
 import com.techcomfort.landvaultbackend.documents.internal.render.LetterPlaceholders;
 import com.techcomfort.landvaultbackend.documents.internal.render.PdfImages;
 import com.techcomfort.landvaultbackend.documents.internal.repository.EstateLetterApprovalRepository;
@@ -69,6 +69,12 @@ public class LetterApprovalService {
     public record Sample(byte[] bytes, String fileName) {
     }
 
+    /** What an issued letter is drawn from: an approved, current setup with nothing missing. */
+    public record IssuableLetter(UUID approvalId, EstateDocumentFacts facts, PrintedLetterheadDto letterhead,
+                                 LetterTemplateService.ResolvedTemplate template, EstateLetterTerms terms,
+                                 LetterVersionsDto versions) {
+    }
+
     @Transactional(readOnly = true)
     public LetterApprovalDto status(UUID estateId) {
         return toDto(state(estateId, PortalScopes.company(PortalScopes.current())));
@@ -91,9 +97,8 @@ public class LetterApprovalService {
         boolean shownApproved = shown.isPresent() && s.approvedTerms().isPresent()
                 && shown.get().getId().equals(s.approvedTerms().get().getId()) && template.approved();
 
-        List<String> clauses = new ArrayList<>(template.standardClauses());
-        shown.ifPresent(t -> clauses.addAll(List.of(t.getClauses())));
-        clauses.addAll(DisclosureClauses.of(s.facts()));
+        List<String> clauses = LetterClauses.of(template.standardClauses(),
+                shown.map(t -> List.of(t.getClauses())).orElse(List.of()), s.facts());
         Instant now = Instant.now();
         Map<String, String> fields = Map.of(
                 "buyerName", "[Buyer's full name]",
@@ -109,7 +114,7 @@ public class LetterApprovalService {
                         p.website()),
                 bytes(p.logo()), bytes(p.signature()), bytes(p.seal()),
                 now,
-                List.of("[Buyer's full name]", "[Buyer's address]", "[Buyer's phone number]"),
+                List.of("[Buyer's full name]", "[Buyer's phone number]"),
                 "Dear [Buyer's name],",
                 s.facts().name(),
                 location(s.facts()),
@@ -191,6 +196,26 @@ public class LetterApprovalService {
                 tenantId, "Allocation letter approval for '" + s.facts().name() + "' withdrawn."));
         log.info("Allocation letter approval withdrawn for estate {} by actor {}", estateId, scope.userId());
         return toDto(state(estateId, tenantId));
+    }
+
+    /**
+     * AL: the setup a letter for this estate is issued from, read under the
+     * caller's own scope (finance at verification) — present only while the
+     * approval stands and nothing the letter needs is missing. Empty for an
+     * estate the caller can't see.
+     */
+    @Transactional(readOnly = true)
+    public Optional<IssuableLetter> issuable(UUID estateId) {
+        UUID tenantId = PortalScopes.company(PortalScopes.current());
+        if (estates.forDocuments(estateId).filter(f -> tenantId.equals(f.tenantId())).isEmpty()) {
+            return Optional.empty();
+        }
+        State s = state(estateId, tenantId);
+        if (!s.approved() || !s.blockers().isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(new IssuableLetter(s.latest().orElseThrow().getId(), s.facts(), s.letterhead().printed(),
+                s.template(), s.approvedTerms().orElseThrow(), s.current()));
     }
 
     // ------------------------------------------------------------- state

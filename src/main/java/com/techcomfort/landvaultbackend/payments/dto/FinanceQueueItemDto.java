@@ -24,7 +24,11 @@ public record FinanceQueueItemDto(
         @Schema(description = "Paystack's record of the confirmed payment; null if none is on file.")
         GatewayRecord payment,
         @Schema(description = "True when Paystack's confirmed amount and currency equal the agreed price.")
-        boolean amountsMatch
+        boolean amountsMatch,
+        @Schema(description = """
+                The estate's allocation letter is approved, so verifying issues the buyer's letter. When false, \
+                verifying is refused (`LETTER_NOT_APPROVED`) until the Executive Director approves it.""")
+        boolean letterApproved
 ) {
 
     /**

@@ -1,0 +1,317 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        The issued allocation letter (AL), and approval of the letter as a
+        condition of sale. See AGENTS.md, "Documents: the allocation letter".
+    -->
+
+    <changeSet id="095-estate-letter-approved-function" author="landvault">
+        <comment>
+            Whether an estate's allocation-letter approval (093/094) still stands:
+            its newest approval or withdrawal is an approval, and every version it
+            recorded is still the current one. The same rule LetterApprovalService
+            derives in Java; ReservationCheckoutUnderRlsIT keeps the two in step.
+            SECURITY DEFINER because the public marketplace views call it with no
+            tenant scope, and every table it reads is RLS-policied. Boolean only,
+            hardened like 043/047/054.
+        </comment>
+        <sql splitStatements="false"><![CDATA[
+            CREATE FUNCTION landvault_estate_letter_approved(p_estate uuid)
+            RETURNS boolean
+            LANGUAGE sql
+            STABLE
+            SECURITY DEFINER
+            SET search_path = public, pg_temp
+            AS $$
+                WITH e AS (
+                    SELECT id, tenant_id, branch_id, fees_declared_at, fees_version
+                    FROM estates WHERE id = p_estate AND deleted = false
+                ),
+                branch_template AS (
+                    SELECT max(r.template_version) AS version
+                    FROM letter_template_reviews r, e
+                    WHERE e.branch_id IS NOT NULL AND r.tenant_id = e.tenant_id AND r.branch_id = e.branch_id
+                      AND r.decision = 'APPROVED'
+                ),
+                company_template AS (
+                    SELECT max(r.template_version) AS version
+                    FROM letter_template_reviews r, e
+                    WHERE r.tenant_id = e.tenant_id AND r.branch_id IS NULL AND r.decision = 'APPROVED'
+                ),
+                cur AS (
+                    SELECT
+                        (SELECT max(r.terms_version) FROM estate_letter_terms_reviews r
+                          WHERE r.estate_id = e.id AND r.decision = 'APPROVED') AS terms_version,
+                        coalesce((SELECT l.version FROM letterheads l
+                                   WHERE l.tenant_id = e.tenant_id AND l.branch_id IS NULL AND l.deleted = false), 0)
+                            AS company_letterhead_version,
+                        CASE WHEN e.branch_id IS NULL THEN NULL
+                             ELSE coalesce((SELECT l.version FROM letterheads l
+                                             WHERE l.tenant_id = e.tenant_id AND l.branch_id = e.branch_id
+                                               AND l.deleted = false), 0)
+                        END AS branch_letterhead_version,
+                        CASE WHEN e.fees_declared_at IS NULL THEN NULL ELSE e.fees_version END AS fees_version,
+                        (SELECT max(rt.version) FROM estate_refund_terms rt
+                          WHERE rt.estate_id = e.id AND rt.deleted = false) AS refund_terms_version,
+                        (SELECT max(dt.version) FROM estate_default_terms dt
+                          WHERE dt.estate_id = e.id AND dt.deleted = false) AS default_terms_version,
+                        CASE WHEN (SELECT version FROM branch_template) IS NOT NULL THEN 'branch'
+                             WHEN (SELECT version FROM company_template) IS NOT NULL THEN 'company'
+                             ELSE 'default'
+                        END AS template_source,
+                        coalesce((SELECT version FROM branch_template), (SELECT version FROM company_template))
+                            AS template_version
+                    FROM e
+                ),
+                latest AS (
+                    SELECT * FROM estate_letter_approvals WHERE estate_id = p_estate
+                    ORDER BY created_at DESC LIMIT 1
+                )
+                SELECT coalesce((
+                    SELECT a.action = 'APPROVED'
+                       AND a.terms_version IS NOT DISTINCT FROM c.terms_version
+                       AND a.company_letterhead_version IS NOT DISTINCT FROM c.company_letterhead_version
+                       AND a.branch_letterhead_version IS NOT DISTINCT FROM c.branch_letterhead_version
+                       AND a.fees_version IS NOT DISTINCT FROM c.fees_version
+                       AND a.refund_terms_version IS NOT DISTINCT FROM c.refund_terms_version
+                       AND a.default_terms_version IS NOT DISTINCT FROM c.default_terms_version
+                       AND a.template_source IS NOT DISTINCT FROM c.template_source
+                       AND a.template_version IS NOT DISTINCT FROM c.template_version
+                    FROM latest a, cur c), false)
+            $$;
+            REVOKE EXECUTE ON FUNCTION landvault_estate_letter_approved(uuid) FROM PUBLIC;
+            GRANT EXECUTE ON FUNCTION landvault_estate_letter_approved(uuid) TO ${appDbUsername};
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP FUNCTION landvault_estate_letter_approved(uuid);
+        ]]></rollback>
+    </changeSet>
+
+    <!--
+        The eleventh condition: an approved allocation letter. letter_approved
+        appended at the end, so CREATE OR REPLACE is permitted (as 059/061/063/
+        086). Everything else is 086's definition, unchanged. The reservation
+        function reads this view, so a lapsed approval also stops new holds.
+    -->
+    <changeSet id="095-eligibility-requires-an-approved-letter" author="landvault">
+        <sql><![CDATA[
+            CREATE OR REPLACE VIEW marketplace_estate_eligibility WITH (security_barrier = true) AS
+            SELECT
+                e.id                                   AS estate_id,
+                e.published                            AS published,
+                (o.verification_state = 'VERIFIED')    AS tenant_verified,
+                o.marketplace_publishing               AS tenant_entitled,
+                (o.status = 'ACTIVE')                  AS tenant_active,
+                -- CASE short-circuits, so the conflict function — the only
+                -- expensive term — runs last, and only for estates that
+                -- already pass every cheap condition.
+                CASE
+                    WHEN e.published
+                     AND o.verification_state = 'VERIFIED'
+                     AND o.marketplace_publishing
+                     AND o.status = 'ACTIVE'
+                     AND (e.fees_declared_at IS NOT NULL OR e.fees_declaration_exempt)
+                     AND (e.fees_declaration_exempt OR EXISTS (
+                            SELECT 1 FROM estate_refund_terms rt
+                             WHERE rt.estate_id = e.id AND rt.deleted = false))
+                     AND e.footprint IS NOT NULL
+                     AND EXISTS (SELECT 1 FROM plots p WHERE p.estate_id = e.id AND p.deleted = false)
+                     AND (e.photo_requirement_exempt OR EXISTS (
+                            SELECT 1 FROM estate_photos ph
+                             WHERE ph.estate_id = e.id AND ph.deleted = false))
+                     AND landvault_estate_letter_approved(e.id)
+                    THEN (SELECT s.blocking_count FROM landvault_estate_conflict_summary(e.id) s) = 0
+                    ELSE false
+                END                                    AS eligible,
+                -- Declaring an EMPTY schedule counts: an estate with no
+                -- extra charges may list, but by saying so. Silence does
+                -- not, and the two are different facts.
+                (e.fees_declared_at IS NOT NULL OR e.fees_declaration_exempt) AS fees_declared,
+                -- RF-4: a developer who will not state what a buyer gets
+                -- back does not get a listing. Its own boolean beside the
+                -- others so the publish endpoint can name which one failed.
+                (e.fees_declaration_exempt OR EXISTS (
+                        SELECT 1 FROM estate_refund_terms rt
+                         WHERE rt.estate_id = e.id AND rt.deleted = false)) AS refund_terms_declared,
+                -- BG-1: an estate with no boundary is invisible to conflict
+                -- detection, so listing without one would be a way around
+                -- it. No exemption for estates already published: an
+                -- exempt boundary-less listing is exactly the hole.
+                (e.footprint IS NOT NULL)              AS has_boundary,
+                -- An estate with nothing to sell is not a listing. ANY live
+                -- plot counts, whatever its status: requiring an AVAILABLE
+                -- one would pull a sold-out estate off the marketplace and
+                -- make one flicker during checkout holds, revealing exactly
+                -- the sales velocity marketplace_plots collapses statuses to
+                -- hide.
+                EXISTS (SELECT 1 FROM plots p WHERE p.estate_id = e.id AND p.deleted = false) AS has_plots,
+                -- A buyer should see what they are buying into. Estates
+                -- already published when this shipped are exempt and report
+                -- true, like fees_declared.
+                (e.photo_requirement_exempt OR EXISTS (
+                        SELECT 1 FROM estate_photos ph
+                         WHERE ph.estate_id = e.id AND ph.deleted = false)) AS has_photo,
+                -- No sale without its allocation letter: finance can't verify a
+                -- purchase on an estate whose letter isn't approved, so it must
+                -- not be for sale either. No exemption for live estates — a
+                -- buyer could otherwise pay for a plot nobody can allocate.
+                landvault_estate_letter_approved(e.id) AS letter_approved
+            FROM estates e
+            JOIN organizations o ON o.id = e.tenant_id AND o.deleted = false
+            WHERE e.deleted = false;
+        ]]></sql>
+        <rollback>
+            <!-- 086's condition, restored. A view's column can't be removed by
+                 CREATE OR REPLACE, and dropping the view would take every
+                 marketplace_* view with it, so letter_approved stays as a
+                 constant true and no longer calls the function the next
+                 rollback drops. -->
+            <![CDATA[
+            CREATE OR REPLACE VIEW marketplace_estate_eligibility WITH (security_barrier = true) AS
+            SELECT
+                e.id                                   AS estate_id,
+                e.published                            AS published,
+                (o.verification_state = 'VERIFIED')    AS tenant_verified,
+                o.marketplace_publishing               AS tenant_entitled,
+                (o.status = 'ACTIVE')                  AS tenant_active,
+                -- CASE short-circuits, so the conflict function — the only
+                -- expensive term — runs last, and only for estates that
+                -- already pass every cheap condition.
+                CASE
+                    WHEN e.published
+                     AND o.verification_state = 'VERIFIED'
+                     AND o.marketplace_publishing
+                     AND o.status = 'ACTIVE'
+                     AND (e.fees_declared_at IS NOT NULL OR e.fees_declaration_exempt)
+                     AND (e.fees_declaration_exempt OR EXISTS (
+                            SELECT 1 FROM estate_refund_terms rt
+                             WHERE rt.estate_id = e.id AND rt.deleted = false))
+                     AND e.footprint IS NOT NULL
+                     AND EXISTS (SELECT 1 FROM plots p WHERE p.estate_id = e.id AND p.deleted = false)
+                     AND (e.photo_requirement_exempt OR EXISTS (
+                            SELECT 1 FROM estate_photos ph
+                             WHERE ph.estate_id = e.id AND ph.deleted = false))
+                    THEN (SELECT s.blocking_count FROM landvault_estate_conflict_summary(e.id) s) = 0
+                    ELSE false
+                END                                    AS eligible,
+                -- Declaring an EMPTY schedule counts: an estate with no
+                -- extra charges may list, but by saying so. Silence does
+                -- not, and the two are different facts.
+                (e.fees_declared_at IS NOT NULL OR e.fees_declaration_exempt) AS fees_declared,
+                -- RF-4: a developer who will not state what a buyer gets
+                -- back does not get a listing. Its own boolean beside the
+                -- others so the publish endpoint can name which one failed.
+                (e.fees_declaration_exempt OR EXISTS (
+                        SELECT 1 FROM estate_refund_terms rt
+                         WHERE rt.estate_id = e.id AND rt.deleted = false)) AS refund_terms_declared,
+                -- BG-1: an estate with no boundary is invisible to conflict
+                -- detection, so listing without one would be a way around
+                -- it. No exemption for estates already published: an
+                -- exempt boundary-less listing is exactly the hole.
+                (e.footprint IS NOT NULL)              AS has_boundary,
+                -- An estate with nothing to sell is not a listing. ANY live
+                -- plot counts, whatever its status: requiring an AVAILABLE
+                -- one would pull a sold-out estate off the marketplace and
+                -- make one flicker during checkout holds, revealing exactly
+                -- the sales velocity marketplace_plots collapses statuses to
+                -- hide.
+                EXISTS (SELECT 1 FROM plots p WHERE p.estate_id = e.id AND p.deleted = false) AS has_plots,
+                -- A buyer should see what they are buying into. Estates
+                -- already published when this shipped are exempt and report
+                -- true, like fees_declared.
+                (e.photo_requirement_exempt OR EXISTS (
+                        SELECT 1 FROM estate_photos ph
+                         WHERE ph.estate_id = e.id AND ph.deleted = false)) AS has_photo,
+                true                                   AS letter_approved
+            FROM estates e
+            JOIN organizations o ON o.id = e.tenant_id AND o.deleted = false
+            WHERE e.deleted = false;
+            ]]>
+        </rollback>
+    </changeSet>
+
+    <!--
+        The issued letter: a copy of everything it prints, so the PDF is drawn
+        from this row on demand and never drifts (the receipts' rule, 089), plus
+        the setup versions it was issued under. One per sale. Buyer-owned like
+        receipts: not RLS-policied, reached by buyer_user_id or verification
+        code. Never changed, never deleted.
+    -->
+    <changeSet id="095-create-allocation-letters" author="landvault">
+        <sql><![CDATA[
+            CREATE SEQUENCE allocation_letter_number_seq;
+            GRANT USAGE ON SEQUENCE allocation_letter_number_seq TO ${appDbUsername};
+
+            CREATE TABLE allocation_letters (
+                id                          uuid NOT NULL PRIMARY KEY,
+                created_at                  timestamp(6) with time zone NOT NULL,
+                created_by                  varchar(255),
+
+                number                      varchar(32) NOT NULL,
+                verification_code           varchar(16) NOT NULL,
+                transaction_id              uuid NOT NULL REFERENCES transactions (id),
+                buyer_user_id               uuid NOT NULL REFERENCES users (id),
+                seller_tenant_id            uuid NOT NULL REFERENCES organizations (id),
+                branch_id                   uuid REFERENCES branches (id),
+                estate_id                   uuid NOT NULL REFERENCES estates (id),
+                plot_id                     uuid NOT NULL REFERENCES plots (id),
+                issued_at                   timestamp(6) with time zone NOT NULL,
+                issued_by                   uuid NOT NULL REFERENCES users (id),
+
+                company_name                varchar(255) NOT NULL,
+                company_rc_number           varchar(64),
+                company_address             varchar(512),
+                company_phone               varchar(64),
+                company_email               varchar(255),
+                company_website             varchar(255),
+                logo_file_id                uuid REFERENCES stored_files (id),
+                signature_file_id           uuid NOT NULL REFERENCES stored_files (id),
+                seal_file_id                uuid REFERENCES stored_files (id),
+                signatory_name              varchar(120) NOT NULL,
+                signatory_title             varchar(120) NOT NULL,
+
+                buyer_name                  varchar(255) NOT NULL,
+                buyer_lines                 text[] NOT NULL,
+                salutation                  varchar(300) NOT NULL,
+                estate_name                 varchar(255) NOT NULL,
+                estate_location             varchar(512),
+                plot_label                  varchar(255) NOT NULL,
+                opening                     text NOT NULL,
+                clauses                     text[] NOT NULL,
+                closing                     text,
+                sign_off                    varchar(80) NOT NULL,
+
+                approval_id                 uuid NOT NULL REFERENCES estate_letter_approvals (id),
+                terms_id                    uuid NOT NULL REFERENCES estate_letter_terms (id),
+                terms_version               integer NOT NULL,
+                template_source             varchar(10) NOT NULL,
+                template_version            integer,
+                company_letterhead_version  integer NOT NULL,
+                branch_letterhead_version   integer,
+                fees_version                integer,
+                refund_terms_version        integer,
+                default_terms_version       integer,
+
+                CONSTRAINT uq_allocation_letters_number UNIQUE (number),
+                CONSTRAINT uq_allocation_letters_verification_code UNIQUE (verification_code),
+                CONSTRAINT uq_allocation_letters_transaction UNIQUE (transaction_id),
+                CONSTRAINT chk_allocation_letters_verification_code CHECK (verification_code ~ '^[0-9A-F]{16}$'),
+                CONSTRAINT chk_allocation_letters_template_source
+                    CHECK (template_source IN ('default', 'company', 'branch'))
+            );
+            CREATE INDEX idx_allocation_letters_buyer ON allocation_letters (buyer_user_id, issued_at DESC);
+            REVOKE UPDATE, DELETE, TRUNCATE ON allocation_letters FROM ${appDbUsername};
+            COMMENT ON TABLE allocation_letters IS
+                'Allocation letters HomeTrue issued when finance verified a sale: a copy of everything printed, never changed. See AGENTS.md, "Documents: the allocation letter".';
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE allocation_letters;
+            DROP SEQUENCE allocation_letter_number_seq;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

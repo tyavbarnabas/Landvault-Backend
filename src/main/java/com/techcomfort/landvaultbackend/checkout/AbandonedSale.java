@@ -9,6 +9,8 @@ import java.util.UUID;
  * An abandoned purchase whose money arrived late, as the selling company's
  * finance sees it. {@code plotAvailable}: the plot is still for sale, so it
  * can still be allocated to this buyer; otherwise the only ending is a refund.
+ * {@code letterApproved}: the estate's allocation letter can be issued —
+ * allocating is refused until it can.
  */
 public record AbandonedSale(
         UUID transactionId,
@@ -17,6 +19,7 @@ public record AbandonedSale(
         String plotLabel,
         BigDecimal totalPrice,
         Currency currency,
-        boolean plotAvailable
+        boolean plotAvailable,
+        boolean letterApproved
 ) {
 }

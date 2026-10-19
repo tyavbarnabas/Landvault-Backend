@@ -47,12 +47,14 @@ public class PortalFinanceController {
     @Operation(summary = "Verify a payment and allocate the plot",
             description = """
                     Requires `portal.payments.verify`. Needs a payment confirmed by Paystack for exactly the agreed \\
-                    amount. Then, **together or not at all**: the plot becomes sold, the transaction `verified`, the \\
-                    reservation `converted`. If any part can't happen, nothing changes.""")
+                    amount, and the estate's allocation letter approved (`letterApproved` in the queue). Then, \\
+                    **together or not at all**: the plot becomes sold, the transaction `verified`, the reservation \\
+                    `converted`, and the buyer's allocation letter is issued. If any part can't happen, nothing \\
+                    changes.""")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Verified; the plot is sold"),
             @ApiResponse(responseCode = "404", description = "`TRANSACTION_NOT_FOUND` (another company's, or another branch's)", content = @Content()),
-            @ApiResponse(responseCode = "409", description = "`TRANSACTION_NOT_AWAITING_FINANCE`, `PAYMENT_NOT_CONFIRMED`, `PLOT_NOT_RESERVED` — nothing was changed", content = @Content())
+            @ApiResponse(responseCode = "409", description = "`TRANSACTION_NOT_AWAITING_FINANCE`, `PAYMENT_NOT_CONFIRMED`, `PLOT_NOT_RESERVED`, `LETTER_NOT_APPROVED` — nothing was changed", content = @Content())
     })
     @PostMapping("/{transactionId}/verify")
     @PreAuthorize("hasAuthority('portal.payments.verify')")

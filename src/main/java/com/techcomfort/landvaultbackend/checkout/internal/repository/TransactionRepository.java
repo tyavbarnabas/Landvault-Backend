@@ -86,11 +86,11 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
 
     /**
      * Late money. Rows: transaction id, reference, estate name, block name,
-     * plot number, total price, currency, plot status — joined under the
-     * caller's row-level security.
+     * plot number, total price, currency, plot status, estate id — joined
+     * under the caller's row-level security.
      */
     @Query(value = "SELECT t.id, t.reference, e.name, b.name AS block_name, p.plot_number, t.total_price, t.currency, "
-            + "p.status FROM transactions t JOIN plots p ON p.id = t.plot_id JOIN estates e ON e.id = t.estate_id "
+            + "p.status, e.id AS estate_id FROM transactions t JOIN plots p ON p.id = t.plot_id JOIN estates e ON e.id = t.estate_id "
             + "LEFT JOIN blocks b ON b.id = p.block_id "
             + "WHERE t.status = 'ABANDONED' AND t.seller_tenant_id = :tenantId AND t.id IN (:ids) "
             + "ORDER BY t.updated_at", nativeQuery = true)

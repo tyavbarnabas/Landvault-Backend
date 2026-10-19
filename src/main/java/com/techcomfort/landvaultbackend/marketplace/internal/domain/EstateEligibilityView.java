@@ -60,4 +60,8 @@ public class EstateEligibilityView {
     /** Changeset 086. Estates published before it are exempt and report true. */
     @Column(name = "has_photo")
     private boolean hasPhoto;
+
+    /** Changeset 095. Approved and still current — see landvault_estate_letter_approved. */
+    @Column(name = "letter_approved")
+    private boolean letterApproved;
 }

@@ -66,4 +66,7 @@ public interface IdentityApi {
 
     /** A user's name as registered ("First Last") — what a refund account's bank name is compared with. */
     Optional<String> fullNameOf(UUID userId);
+
+    /** The phone number on the account, if one was given — printed on the buyer's allocation letter. */
+    Optional<String> phoneOf(UUID userId);
 }

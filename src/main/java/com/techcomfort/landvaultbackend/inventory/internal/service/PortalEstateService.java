@@ -687,6 +687,14 @@ public class PortalEstateService {
             reasons.add("Add at least one photo of this estate before listing it — buyers want to see "
                     + "what they're buying into.");
         }
+        if (!eligibility.letterApproved()) {
+            // Finance can't verify a sale without an approved letter (the
+            // letter is issued in the same step), so nothing is sold first.
+            codes.add("PUBLICATION_LETTER_NOT_APPROVED");
+            reasons.add("Approve this estate's allocation letter before listing it — every buyer receives one "
+                    + "when their payment is verified. If it was approved before, something on it has changed "
+                    + "since: preview it and approve it again.");
+        }
         if (conflicts.blocked()) {
             codes.add("PUBLICATION_CONFLICT_OUTSTANDING");
             reasons.add(conflicts.blockReason());

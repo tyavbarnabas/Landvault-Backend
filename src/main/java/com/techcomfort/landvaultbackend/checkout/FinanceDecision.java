@@ -12,5 +12,7 @@ public enum FinanceDecision {
     /** A late payment: the purchase isn't abandoned (any more), so there is nothing to allocate. */
     NOT_ABANDONED,
     /** A late payment: someone else reserved or bought the plot meanwhile — only a refund is left. */
-    PLOT_NOT_AVAILABLE
+    PLOT_NOT_AVAILABLE,
+    /** The estate's allocation letter isn't approved (or lapsed), so the sale can't be allocated yet. */
+    LETTER_NOT_APPROVED
 }

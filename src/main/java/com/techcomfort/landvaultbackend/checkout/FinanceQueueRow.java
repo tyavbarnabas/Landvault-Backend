@@ -17,6 +17,8 @@ public record FinanceQueueRow(
         UUID buyerUserId,
         BigDecimal totalPrice,
         Currency currency,
-        Instant awaitingSince
+        Instant awaitingSince,
+        /** The estate's allocation letter can be issued; when false, verifying is refused until it's approved. */
+        boolean letterApproved
 ) {
 }

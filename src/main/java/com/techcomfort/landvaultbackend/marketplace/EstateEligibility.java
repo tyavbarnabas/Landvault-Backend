@@ -40,6 +40,12 @@ public record EstateEligibility(
          * the requirement shipped are exempt and report true.
          */
         boolean hasPhoto,
+        /**
+         * The estate's allocation letter is approved and still current
+         * (changeset 095): finance can't verify a sale without it, so nothing
+         * is sold before it. No exemption for live estates.
+         */
+        boolean letterApproved,
         boolean eligible
 ) {
 }

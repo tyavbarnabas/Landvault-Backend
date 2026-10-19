@@ -131,7 +131,7 @@ public class FinanceVerificationService {
         return new FinanceQueueItemDto(row.transactionId(), row.transactionReference(), row.estateId(),
                 row.estateName(), row.plotId(), row.plotLabel(), identityApi.emailOf(row.buyerUserId()).orElse(null),
                 row.totalPrice(), row.currency().name(), row.awaitingSince(), record,
-                payment.isPresent() && matches(payment.get(), row));
+                payment.isPresent() && matches(payment.get(), row), row.letterApproved());
     }
 
     private Optional<Payment> confirmedPaymentFor(UUID transactionId) {
@@ -161,6 +161,7 @@ public class FinanceVerificationService {
             case PLOT_NOT_RESERVED -> new PaymentException.PlotNotReserved();
             case NOT_ABANDONED -> new PaymentException.LatePaymentNotFound();
             case PLOT_NOT_AVAILABLE -> new PaymentException.PlotNoLongerAvailable();
+            case LETTER_NOT_APPROVED -> new PaymentException.LetterNotApproved();
             case DONE -> new IllegalStateException("DONE is not a failure");
         };
     }
