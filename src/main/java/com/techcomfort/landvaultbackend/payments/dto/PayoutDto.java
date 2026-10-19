@@ -12,8 +12,10 @@ import java.util.UUID;
  * A sale above Paystack's per-transfer cap is paid in equal parts: this is
  * part {@code partNumber} of {@code partCount}, and {@code amount} is the part.
  * {@code reviewReason} is set when a person must look at it (TR-3).
+ * {@code companyName} is the selling company's name, the same one the ready
+ * list shows; null only when none is on record, never made up.
  */
-public record PayoutDto(UUID id, UUID transactionId, UUID tenantId, BigDecimal amount, String currency,
+public record PayoutDto(UUID id, UUID transactionId, UUID tenantId, String companyName, BigDecimal amount, String currency,
                         int partNumber, int partCount, String status, String reference, String gatewayMessage,
                         String bankName,
                         String accountLast4, Instant createdAt, Instant transferredAt, String reviewReason) {

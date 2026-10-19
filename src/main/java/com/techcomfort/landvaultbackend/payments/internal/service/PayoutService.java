@@ -103,7 +103,8 @@ public class PayoutService {
                 blockers.add(COMPANY_NOT_ACTIVE);
             }
             PayoutDto lastAttempt = attempts.stream().findFirst()
-                    .map(p -> toDto(p, byId.get(p.getSettlementAccountId()))).orElse(null);
+                    .map(p -> toDto(p, byId.get(p.getSettlementAccountId()), names.get(p.getTenantId())))
+                    .orElse(null);
             ready.add(new ReadyPayoutDto(sale.transactionId(), sale.transactionReference(), sale.sellerTenantId(),
                     names.get(sale.sellerTenantId()), sale.estateName(), sale.plotLabel(), sale.totalPrice(),
                     sale.currency().name(),
@@ -133,16 +134,14 @@ public class PayoutService {
             throw new PaymentException.CompanyWideScopeRequired();
         }
         List<Payout> rows = payouts.findAllByTenantIdOrderByCreatedAtDesc(scope.tenantId());
-        Map<UUID, SettlementAccount> byId = accountsById(rows);
-        return rows.stream().map(p -> toDto(p, byId.get(p.getSettlementAccountId()))).toList();
+        return toDtos(rows);
     }
 
     @Transactional(readOnly = true)
     public List<PayoutDto> list(PayoutStatus status) {
         List<Payout> rows = status == null ? payouts.findAllByOrderByCreatedAtDesc()
                 : payouts.findAllByStatusOrderByCreatedAtDesc(status);
-        Map<UUID, SettlementAccount> byId = accountsById(rows);
-        return rows.stream().map(p -> toDto(p, byId.get(p.getSettlementAccountId()))).toList();
+        return toDtos(rows);
     }
 
     /**
@@ -248,7 +247,18 @@ public class PayoutService {
     }
 
     private PayoutDto dto(Payout payout) {
-        return toDto(payout, accounts.findById(payout.getSettlementAccountId()).orElse(null));
+        return toDto(payout, accounts.findById(payout.getSettlementAccountId()).orElse(null),
+                tenancyApi.organizationNamesFor(Set.of(payout.getTenantId())).get(payout.getTenantId()));
+    }
+
+    /** Accounts and company names for the whole list in one query each, never one per row. */
+    private List<PayoutDto> toDtos(List<Payout> rows) {
+        Map<UUID, SettlementAccount> byId = accountsById(rows);
+        Map<UUID, String> names = tenancyApi.organizationNamesFor(
+                rows.stream().map(Payout::getTenantId).collect(Collectors.toSet()));
+        return rows.stream()
+                .map(p -> toDto(p, byId.get(p.getSettlementAccountId()), names.get(p.getTenantId())))
+                .toList();
     }
 
     private Map<UUID, SettlementAccount> accountsById(List<Payout> rows) {
@@ -256,8 +266,8 @@ public class PayoutService {
         return accounts.findAllById(ids).stream().collect(Collectors.toMap(SettlementAccount::getId, Function.identity()));
     }
 
-    private static PayoutDto toDto(Payout p, SettlementAccount account) {
-        return new PayoutDto(p.getId(), p.getTransactionId(), p.getTenantId(), p.getAmount(), p.getCurrency().name(),
+    private static PayoutDto toDto(Payout p, SettlementAccount account, String companyName) {
+        return new PayoutDto(p.getId(), p.getTransactionId(), p.getTenantId(), companyName, p.getAmount(), p.getCurrency().name(),
                 p.getPartNumber(), p.getPartCount(), p.getStatus().wire(), p.getReference(), p.getGatewayMessage(),
                 account == null ? null : account.getBankName(),
                 account == null ? null : PayoutRecorder.last4(account.getAccountNumber()),
