@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        A buyer's saved listings. See AGENTS.md, "The buyer's wishlist".
+
+        Buyer-owned like kyc_records: tenant_id null, not RLS-policied (a buyer
+        has no tenant scope), reached only by buyer_user_id. A saved listing is
+        a preference, not history: removing one hard-deletes the row.
+
+        listing_type allows PRIMARY only; widen the CHECK when resale exists.
+        listing_id has no foreign key, because a resale listing will live in
+        another table. name_at_save, price_at_save and currency are copied from
+        marketplace_listings when saved — the name is what a buyer sees once the
+        listing has left the marketplace; the price only marks a change since.
+    -->
+    <changeSet id="096-create-wishlist-items" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE wishlist_items (
+                id              uuid NOT NULL PRIMARY KEY,
+                tenant_id       uuid,
+                branch_id       uuid,
+                created_at      timestamp(6) with time zone NOT NULL,
+                updated_at      timestamp(6) with time zone,
+                created_by      varchar(255),
+                updated_by      varchar(255),
+                deleted         boolean NOT NULL,
+
+                buyer_user_id   uuid NOT NULL REFERENCES users (id),
+                listing_type    varchar(16) NOT NULL,
+                listing_id      uuid NOT NULL,
+                name_at_save    varchar(255) NOT NULL,
+                price_at_save   numeric(19, 4),
+                currency        varchar(3),
+                saved_at        timestamp(6) with time zone NOT NULL,
+
+                CONSTRAINT chk_wishlist_items_listing_type CHECK (listing_type IN ('PRIMARY')),
+                CONSTRAINT chk_wishlist_items_price_currency CHECK ((price_at_save IS NULL) = (currency IS NULL))
+            );
+            CREATE UNIQUE INDEX uq_wishlist_items_buyer_listing ON wishlist_items (buyer_user_id, listing_type, listing_id);
+            CREATE INDEX idx_wishlist_items_buyer ON wishlist_items (buyer_user_id, saved_at DESC);
+
+            COMMENT ON TABLE wishlist_items IS
+                'A buyer''s saved listings, at most 200 each (enforced by the service under a per-buyer lock). Buyer-owned: not RLS-policied, reached by buyer_user_id only. Hard-deleted on removal: a preference, not history. See AGENTS.md, "The buyer''s wishlist".';
+            COMMENT ON COLUMN wishlist_items.price_at_save IS
+                'The listing''s from-price when saved, from marketplace_listings, never from the request. Only marks a change since; never shown as the price.';
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE wishlist_items;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

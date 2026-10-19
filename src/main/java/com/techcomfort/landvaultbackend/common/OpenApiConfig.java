@@ -38,6 +38,7 @@ public class OpenApiConfig {
     public static final String TAG_TWO_FACTOR = "Two-Factor";
     public static final String TAG_SESSION = "Session";
     public static final String TAG_MARKETPLACE = "Marketplace (public)";
+    public static final String TAG_WISHLIST = "Wishlist";
     public static final String TAG_ONBOARDING = "Onboarding (public)";
     public static final String TAG_KYC = "Verification";
     public static final String TAG_RESERVATIONS = "Reservations";
@@ -138,6 +139,9 @@ public class OpenApiConfig {
                         new Tag().name(TAG_MARKETPLACE)
                                 .description("The public buyer surface. No authentication; rate-limited. "
                                         + "Only estates meeting every publication condition appear."),
+                        new Tag().name(TAG_WISHLIST)
+                                .description("A buyer's saved listings. Needs a login, unlike the rest of "
+                                        + "/api/marketplace/."),
                         new Tag().name(TAG_ONBOARDING)
                                 .description("A developer company asking to join HomeTrue. No authentication; "
                                         + "rate-limited. Creates nothing until a HomeTrue admin converts it."),

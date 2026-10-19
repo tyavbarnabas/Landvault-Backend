@@ -22,6 +22,7 @@ import com.techcomfort.landvaultbackend.inventory.dto.EstateDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PriceTierDto;
 import com.techcomfort.landvaultbackend.inventory.dto.PublicationDto;
 import com.techcomfort.landvaultbackend.marketplace.dto.MarketplaceListingDto;
+import com.techcomfort.landvaultbackend.marketplace.dto.WishlistItemDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.AddressDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.CompanyIdentityDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.CompanyPresenceDto;
@@ -58,9 +59,15 @@ import java.sql.Statement;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The public marketplace and the publication gate, against a database where
@@ -686,6 +693,180 @@ class MarketplaceIT {
         assertThat(first).contains("\"hasMore\":true").contains("\"cursor\":\"1\"").contains("\"plotNumber\":\"1\"");
         String second = anonymous(base + "?priceTierId=" + standard + "&limit=2&cursor=1").getBody();
         assertThat(second).contains("\"hasMore\":false").contains("\"plotNumber\":\"3\"").doesNotContain("\"plotNumber\":\"1\"");
+    }
+
+    // --- the buyer's wishlist ---
+
+    @Test
+    void aBuyerSavesListsAndRemovesListingsAndSavingAgainChangesNothing() {
+        Listing first = publishedListing("Saved Gardens", 0);
+        Listing second = publishedListing("Saved Heights", 1);
+        String buyer = buyerToken();
+
+        ResponseEntity<WishlistItemDto> saved = wishlistPut(buyer, "primary", first.estateId());
+        assertThat(saved.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        WishlistItemDto item = saved.getBody();
+        assertThat(item.listingType()).isEqualTo("primary");
+        assertThat(item.name()).isEqualTo("Saved Gardens");
+        assertThat(item.available()).isTrue();
+        assertThat(item.priceAtSave()).isEqualByComparingTo("20000000");
+        assertThat(item.currency()).isEqualTo(Currency.NGN);
+        assertThat(item.plotsRemaining()).isEqualTo(1L);
+
+        execute("UPDATE price_tiers SET price = 18000000 WHERE estate_id = '" + first.estateId() + "'");
+        ResponseEntity<WishlistItemDto> again = wishlistPut(buyer, "primary", first.estateId());
+        assertThat(again.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(again.getBody().savedAt()).isEqualTo(item.savedAt());
+        assertThat(again.getBody().priceAtSave()).as("what it cost when saved").isEqualByComparingTo("20000000");
+        assertThat(again.getBody().currentPrice()).isEqualByComparingTo("18000000");
+
+        assertThat(wishlistPut(buyer, "primary", second.estateId()).getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(wishlist(buyer)).extracting(WishlistItemDto::listingId)
+                .as("newest first").containsExactly(second.estateId(), first.estateId());
+
+        assertThat(wishlistDelete(buyer, "primary", first.estateId()).getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        assertThat(wishlistDelete(buyer, "primary", first.estateId()).getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        assertThat(wishlist(buyer)).extracting(WishlistItemDto::listingId).containsExactly(second.estateId());
+    }
+
+    @Test
+    void aBuyerSeesAndChangesOnlyTheirOwnWishlist() {
+        Listing listing = publishedListing("Private Gardens");
+        String alice = buyerToken();
+        String bob = buyerToken();
+        wishlistPut(alice, "primary", listing.estateId());
+
+        assertThat(wishlist(bob)).isEmpty();
+        assertThat(wishlistDelete(bob, "primary", listing.estateId()).getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        assertThat(wishlist(alice)).extracting(WishlistItemDto::listingId).containsExactly(listing.estateId());
+    }
+
+    @Test
+    void aListingThatLeavesTheMarketplaceStaysSavedAsUnavailableAndCannotBeNewlySaved() {
+        Listing listing = publishedListing("Leaving Gardens");
+        String buyer = buyerToken();
+        wishlistPut(buyer, "primary", listing.estateId());
+
+        restTemplate.exchange("/api/portal/estates/" + listing.estateId() + "/unpublish", HttpMethod.POST,
+                entity(listing.tenant().token(), null), String.class);
+
+        WishlistItemDto gone = wishlist(buyer).getFirst();
+        assertThat(gone.available()).isFalse();
+        assertThat(gone.name()).as("its name when saved").isEqualTo("Leaving Gardens");
+        assertThat(gone.priceAtSave()).isEqualByComparingTo("20000000");
+        assertThat(gone.currentPrice()).isNull();
+        assertThat(gone.currentCurrency()).isNull();
+        assertThat(gone.plotsRemaining()).isNull();
+        assertThat(wishlistPut(buyer, "primary", listing.estateId()).getStatusCode())
+                .as("already saved stays idempotent").isEqualTo(HttpStatus.OK);
+
+        ResponseEntity<String> refused = restTemplate.exchange(
+                "/api/marketplace/wishlist/primary/" + listing.estateId(), HttpMethod.PUT,
+                entity(buyerToken(), null), String.class);
+        assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(refused.getBody()).contains("LISTING_NOT_FOUND").doesNotContainIgnoringCase("publish");
+    }
+
+    @Test
+    void theWishlistRefusesResaleUnknownTypesBadIdsAndAnonymousCallers() {
+        String buyer = buyerToken();
+        UUID id = UUID.randomUUID();
+
+        assertError(raw(buyer, HttpMethod.PUT, "/resale/" + id), HttpStatus.BAD_REQUEST, "WISHLIST_TYPE_NOT_SUPPORTED");
+        assertError(raw(buyer, HttpMethod.DELETE, "/resale/" + id), HttpStatus.BAD_REQUEST, "WISHLIST_TYPE_NOT_SUPPORTED");
+        assertError(raw(buyer, HttpMethod.PUT, "/auction/" + id), HttpStatus.BAD_REQUEST, "WISHLIST_TYPE_UNKNOWN");
+        assertError(raw(buyer, HttpMethod.PUT, "/primary/not-a-uuid"), HttpStatus.BAD_REQUEST, "INVALID_PARAMETER");
+        assertError(raw(buyer, HttpMethod.PUT, "/primary/" + id), HttpStatus.NOT_FOUND, "LISTING_NOT_FOUND");
+        assertThat(anonymous("/api/marketplace/wishlist").getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    @Test
+    void the201stSaveIsRefused() {
+        Listing listing = publishedListing("Full Gardens");
+        String email = "buyer+" + UUID.randomUUID() + "@example.com";
+        String buyer = buyerToken(email);
+        fillWishlist(email, 200);
+
+        assertError(raw(buyer, HttpMethod.PUT, "/primary/" + listing.estateId()), HttpStatus.CONFLICT, "WISHLIST_FULL");
+        assertThat(wishlist(buyer)).hasSize(200);
+    }
+
+    /**
+     * Saves for one buyer are serialised by a per-buyer lock, so two at item
+     * 200 can't both pass the size check. Proven by holding that lock here: a
+     * save must wait for it, and finish once it's released. (Racing two real
+     * requests almost never overlaps closely enough to fail without the lock.)
+     */
+    @Test
+    void aSaveWaitsForTheBuyersLockSoTheLimitCannotBeRaced() throws Exception {
+        Listing listing = publishedListing("Locked Gardens");
+        String email = "buyer+" + UUID.randomUUID() + "@example.com";
+        String buyer = buyerToken(email);
+        String buyerId = queryString("SELECT id FROM users WHERE lower(email) = lower('" + email + "')");
+
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try (Connection holder = DriverManager.getConnection(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(),
+                POSTGRES.getPassword());
+             Statement s = holder.createStatement()) {
+            s.execute("SELECT pg_advisory_lock(hashtext('wishlist'), hashtext('" + buyerId + "'))");
+            Future<ResponseEntity<String>> save = pool.submit(() ->
+                    raw(buyer, HttpMethod.PUT, "/primary/" + listing.estateId()));
+
+            assertThatThrownBy(() -> save.get(2, TimeUnit.SECONDS))
+                    .as("the save waits while another save for this buyer holds the lock")
+                    .isInstanceOf(TimeoutException.class);
+
+            s.execute("SELECT pg_advisory_unlock(hashtext('wishlist'), hashtext('" + buyerId + "'))");
+            assertThat(save.get(30, TimeUnit.SECONDS).getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    private void fillWishlist(String email, int count) {
+        execute("INSERT INTO wishlist_items (id, created_at, deleted, buyer_user_id, listing_type, listing_id, "
+                + "name_at_save, saved_at) SELECT gen_random_uuid(), now(), false, u.id, 'PRIMARY', "
+                + "gen_random_uuid(), 'Filler ' || n, now() - make_interval(secs => n) "
+                + "FROM users u, generate_series(1, " + count + ") n WHERE lower(u.email) = lower('" + email + "')");
+    }
+
+    private String buyerToken() {
+        return buyerToken("buyer+" + UUID.randomUUID() + "@example.com");
+    }
+
+    private String buyerToken(String email) {
+        RegisterRequest register = new RegisterRequest(
+                "Wish", "Buyer", email, "+2348000000003", PASSWORD, "NG", Currency.NGN);
+        assertThat(restTemplate.postForEntity("/api/auth/register", register, AuthResponse.class)
+                .getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        return login(email);
+    }
+
+    private ResponseEntity<WishlistItemDto> wishlistPut(String token, String type, UUID listingId) {
+        return restTemplate.exchange("/api/marketplace/wishlist/" + type + "/" + listingId, HttpMethod.PUT,
+                entity(token, null), WishlistItemDto.class);
+    }
+
+    private ResponseEntity<Void> wishlistDelete(String token, String type, UUID listingId) {
+        return restTemplate.exchange("/api/marketplace/wishlist/" + type + "/" + listingId, HttpMethod.DELETE,
+                entity(token, null), Void.class);
+    }
+
+    private List<WishlistItemDto> wishlist(String token) {
+        ResponseEntity<List<WishlistItemDto>> response = restTemplate.exchange("/api/marketplace/wishlist",
+                HttpMethod.GET, entity(token, null), new ParameterizedTypeReference<List<WishlistItemDto>>() {
+                });
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        return response.getBody();
+    }
+
+    private ResponseEntity<String> raw(String token, HttpMethod method, String suffix) {
+        return restTemplate.exchange("/api/marketplace/wishlist" + suffix, method, entity(token, null), String.class);
+    }
+
+    private static void assertError(ResponseEntity<String> response, HttpStatus status, String code) {
+        assertThat(response.getStatusCode()).as(response.getBody()).isEqualTo(status);
+        assertThat(response.getBody()).contains("\"code\":\"" + code + "\"");
     }
 
     private record Tenant(UUID id, String name, String rcNumber, UUID branchId, String token) {

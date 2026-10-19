@@ -323,6 +323,43 @@ today reads them.
 
 `MarketplaceListing = PrimaryMarketplaceListing | ResaleMarketplaceListing` (discriminated union — server should tag which).
 
+## Wishlist — `marketplaceService.ts` (`WishlistItem`) — **built** (changeset 096)
+A buyer's saved listings, kept on the account. **Needs a login** (`client.marketplace.view`), unlike the
+rest of `/api/marketplace/`; anonymous → 401. A buyer only ever sees and changes their own list.
+
+| Method | Path | Response |
+|---|---|---|
+| GET | `/api/marketplace/wishlist` | `WishlistItem[]`, newest first (at most 200, so a plain array) |
+| PUT | `/api/marketplace/wishlist/{listingType}/{listingId}` | `WishlistItem` — 201 saved, 200 already saved (unchanged). No body |
+| DELETE | `/api/marketplace/wishlist/{listingType}/{listingId}` | 204, whether or not it was saved |
+
+```
+WishlistItem {
+  listingType: "primary"            // "resale" is refused until resale exists
+  listingId: string                 // primary: the estate id
+  name: string                      // current name while listed; the name when saved once it isn't
+  savedAt: string
+  priceAtSave: number | null        // the from-price when saved, worked out by the backend
+  currency: "NGN" | "USD" | null
+  available: boolean                // on the marketplace now; false never says why
+  currentPrice: number | null       // from-price now; null when not available
+  currentCurrency: "NGN" | "USD" | null
+  plotsRemaining: number | null     // 0 = listed but sold out; null when not available
+}
+```
+
+- **`priceAtSave` is only a marker** for "↓ ₦1.0M since saved" — never show it as the price. Compare it with
+  `currentPrice` **only when `currency` equals `currentCurrency`**; a listing whose cheapest price moved to
+  another currency has no meaningful change to show.
+- **`available: false`** — the estate left the marketplace (unpublished, company suspended, a blocking
+  conflict, …). The item stays so the buyer sees "No longer available"; nothing says why.
+- Errors: `WISHLIST_TYPE_NOT_SUPPORTED` (400, `resale`, on PUT and DELETE), `WISHLIST_TYPE_UNKNOWN` (400),
+  `INVALID_PARAMETER` (400, an id that isn't a UUID), `LISTING_NOT_FOUND` (404, PUT on a listing not on the
+  marketplace now), `WISHLIST_FULL` (409, 200 already saved).
+- Removing hard-deletes: saving the same listing again starts fresh (`savedAt`, `priceAtSave`).
+- Frontend: `WishlistItem` gains `name`, `currency`, `available`, `currentPrice`, `currentCurrency`,
+  `plotsRemaining`; `priceAtSave` becomes nullable. No need to re-fetch each listing for the page.
+
 ## Checkout / transactions — `marketplaceCheckoutService.ts`
 | Method | Path | Request | Response |
 |---|---|---|---|
