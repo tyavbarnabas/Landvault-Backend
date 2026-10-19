@@ -10,7 +10,7 @@ import java.util.UUID;
 @Schema(name = "Document")
 public record DocumentDto(
         UUID id,
-        @Schema(description = "receipt (offer_letter and allocation_letter later)") String type,
+        @Schema(description = "`receipt` or `allocation_letter` (`offer_letter` later)") String type,
         @Schema(description = "e.g. `Receipt HT-RCT-2026-000123 — Block A, Plot 7, Double King Deluxe Estate`")
         String title,
         @Schema(description = "The printed number, e.g. `HT-RCT-2026-000123`.") String number,

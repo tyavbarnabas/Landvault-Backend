@@ -100,6 +100,7 @@
     <include file="changes/092-letter-terms-reviews.xml" relativeToChangelogFile="true"/>
     <include file="changes/093-estate-letter-approvals.xml" relativeToChangelogFile="true"/>
     <include file="changes/094-letter-templates.xml" relativeToChangelogFile="true"/>
+    <include file="changes/095-allocation-letters.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

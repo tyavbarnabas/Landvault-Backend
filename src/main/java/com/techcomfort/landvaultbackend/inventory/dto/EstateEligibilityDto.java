@@ -58,6 +58,11 @@ public record EstateEligibilityDto(
                 + "requirement arrived are exempt and report true.")
         boolean hasPhoto,
 
+        @Schema(description = "The estate's allocation letter is approved by the Executive Director and still "
+                + "current. Changing the conditions, template, letterhead or fees after approving lapses it until "
+                + "it's approved again. Finance can't verify a sale without it, so it can't be listed without it.")
+        boolean letterApproved,
+
         /**
          * Explicit rather than inferable. Without it a client has to reason
          * "every named condition passes but {@code eligible} is false, so it

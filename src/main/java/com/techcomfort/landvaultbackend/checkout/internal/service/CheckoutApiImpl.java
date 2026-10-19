@@ -3,6 +3,7 @@ package com.techcomfort.landvaultbackend.checkout.internal.service;
 import com.techcomfort.landvaultbackend.audit.AuditApi;
 import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
 import com.techcomfort.landvaultbackend.checkout.AbandonedSale;
+import com.techcomfort.landvaultbackend.checkout.AllocationLetterGate;
 import com.techcomfort.landvaultbackend.checkout.CheckoutApi;
 import com.techcomfort.landvaultbackend.checkout.FinanceDecision;
 import com.techcomfort.landvaultbackend.checkout.FinanceQueueRow;
@@ -25,7 +26,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -40,6 +43,7 @@ public class CheckoutApiImpl implements CheckoutApi {
     private final PlotLockGateway plotLockGateway;
     private final AuditApi auditApi;
     private final ApplicationEventPublisher events;
+    private final AllocationLetterGate letterGate;
 
     @Override
     @Transactional(readOnly = true)
@@ -92,10 +96,12 @@ public class CheckoutApiImpl implements CheckoutApi {
     @Override
     @Transactional(readOnly = true)
     public List<FinanceQueueRow> awaitingFinance(UUID tenantId) {
+        Map<UUID, Boolean> letters = new HashMap<>();
         return transactions.findAwaitingFinance(tenantId).stream().map(r -> new FinanceQueueRow(
                 (UUID) r[0], (String) r[1], (UUID) r[2], (String) r[3], (UUID) r[4],
                 r[5] == null ? "Plot " + r[6] : "Block " + r[5] + ", Plot " + r[6],
-                (UUID) r[7], (BigDecimal) r[8], Currency.valueOf((String) r[9]), (Instant) r[10])).toList();
+                (UUID) r[7], (BigDecimal) r[8], Currency.valueOf((String) r[9]), (Instant) r[10],
+                letters.computeIfAbsent((UUID) r[2], letterGate::letterReady))).toList();
     }
 
     @Override
@@ -119,6 +125,9 @@ public class CheckoutApiImpl implements CheckoutApi {
             return FinanceDecision.NOT_AWAITING_FINANCE;
         }
         // Checked before anything is written, so a refusal leaves everything as it was.
+        if (!letterGate.letterReady(transaction.getEstateId())) {
+            return FinanceDecision.LETTER_NOT_APPROVED;
+        }
         if (!plotLockGateway.sell(transaction.getPlotId())) {
             return FinanceDecision.PLOT_NOT_RESERVED;
         }
@@ -127,13 +136,14 @@ public class CheckoutApiImpl implements CheckoutApi {
             throw new IllegalStateException("Transaction " + transactionId + " left awaiting_finance while locked");
         }
         Reservation reservation = locked.get();
+        Instant reservedAt = reservation.getCreatedAt();
         reservation.setStatus(ReservationStatus.CONVERTED);
         reservation.setEndedAt(Instant.now());
         reservations.save(reservation);
         auditApi.record(AuditEntryRequest.of(financeUserId, "transaction.verified", "transaction", transactionId,
                 tenantId, "Payment for " + transaction.getReference() + " verified by finance; plot "
                         + transaction.getPlotId() + " allocated (sold) and the reservation converted."));
-        publishAllocated(transaction, financeUserId);
+        publishAllocated(transaction, reservedAt, financeUserId);
         return FinanceDecision.DONE;
     }
 
@@ -161,11 +171,13 @@ public class CheckoutApiImpl implements CheckoutApi {
         if (transactionIds.isEmpty()) {
             return List.of();
         }
+        Map<UUID, Boolean> letters = new HashMap<>();
         return transactions.findAbandonedSales(tenantId, transactionIds).stream().map(r -> new AbandonedSale(
                 (UUID) r[0], (String) r[1], (String) r[2],
                 r[3] == null ? "Plot " + r[4] : "Block " + r[3] + ", Plot " + r[4],
                 (BigDecimal) r[5], Currency.valueOf((String) r[6]),
-                "AVAILABLE_DEV".equals(r[7]) || "AVAILABLE_INV".equals(r[7]))).toList();
+                "AVAILABLE_DEV".equals(r[7]) || "AVAILABLE_INV".equals(r[7]),
+                letters.computeIfAbsent((UUID) r[8], letterGate::letterReady))).toList();
     }
 
     @Override
@@ -180,6 +192,9 @@ public class CheckoutApiImpl implements CheckoutApi {
             return FinanceDecision.NOT_ABANDONED;
         }
         // Checked before anything is written: if the plot is taken, nothing changes.
+        if (!letterGate.letterReady(transaction.getEstateId())) {
+            return FinanceDecision.LETTER_NOT_APPROVED;
+        }
         if (!plotLockGateway.sellAvailable(transaction.getPlotId())) {
             return FinanceDecision.PLOT_NOT_AVAILABLE;
         }
@@ -190,7 +205,7 @@ public class CheckoutApiImpl implements CheckoutApi {
         auditApi.record(AuditEntryRequest.of(financeUserId, "transaction.verified", "transaction", transactionId,
                 tenantId, "Late payment for " + transaction.getReference() + " accepted by finance; plot "
                         + transaction.getPlotId() + " allocated (sold). The earlier hold stays expired."));
-        publishAllocated(transaction, financeUserId);
+        publishAllocated(transaction, locked.get().getCreatedAt(), financeUserId);
         return FinanceDecision.DONE;
     }
 
@@ -207,12 +222,13 @@ public class CheckoutApiImpl implements CheckoutApi {
 
     /**
      * Synchronous, inside this transaction: the portfolio's owned-plot record
-     * is written now, and a failure there rolls the sale back with it (FV-3).
+     * and the allocation letter are written now, and a failure in either rolls
+     * the sale back with it (FV-3).
      */
-    private void publishAllocated(Transaction t, UUID financeUserId) {
+    private void publishAllocated(Transaction t, Instant reservedAt, UUID financeUserId) {
         events.publishEvent(new PlotAllocated(t.getId(), t.getBuyerUserId(), t.getPlotId(), t.getEstateId(),
                 t.getSellerTenantId(), t.getPlan().getValue(), t.getIntent(), t.getBasePrice(),
-                t.getCornerPremiumPct(), t.getTotalPrice(), t.getCurrency(), financeUserId));
+                t.getCornerPremiumPct(), t.getTotalPrice(), t.getCurrency(), reservedAt, financeUserId));
     }
 
     /**

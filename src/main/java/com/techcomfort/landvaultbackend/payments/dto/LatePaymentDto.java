@@ -8,10 +8,11 @@ import java.util.UUID;
  * Money that arrived after its purchase was abandoned. {@code plotAvailable}:
  * the plot can still be allocated; when false, refund is the only choice.
  * {@code amountsMatch}: Paystack confirmed exactly the agreed price — required
- * to allocate.
+ * to allocate. {@code letterApproved}: the estate's allocation letter can be
+ * issued — allocating is refused ({@code LETTER_NOT_APPROVED}) until it can.
  */
 public record LatePaymentDto(UUID transactionId, String transactionReference, String estateName, String plotLabel,
                              String buyerName, String buyerEmail, String paymentReference, BigDecimal agreedPrice,
                              BigDecimal amountPaid, String currency, String channel, Instant paidAt,
-                             boolean plotAvailable, boolean amountsMatch) {
+                             boolean plotAvailable, boolean amountsMatch, boolean letterApproved) {
 }

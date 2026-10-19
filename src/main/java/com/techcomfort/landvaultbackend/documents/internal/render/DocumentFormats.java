@@ -60,6 +60,15 @@ public final class DocumentFormats {
         return method + " (via Paystack)";
     }
 
+    /** "RC 1234567", whether the company entered "1234567", "RC 1234567" or "RC-1234567"; null if blank. */
+    public static String rcNumber(String rc) {
+        if (rc == null || rc.isBlank()) {
+            return null;
+        }
+        String digits = rc.trim().replaceFirst("(?i)^RC[\\s.:\\-]*", "");
+        return "RC " + (digits.isEmpty() ? rc.trim() : digits);
+    }
+
     public static String size(BigDecimal sqm) {
         return sqm == null ? null : sqm.stripTrailingZeros().toPlainString() + " sqm";
     }

@@ -4,6 +4,7 @@ import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.PlotIntent;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.UUID;
 
 /**
@@ -15,6 +16,7 @@ import java.util.UUID;
  * would create a cycle"). Never handle it asynchronously.
  *
  * @param plan        the wire value: outright, installment or milestone
+ * @param reservedAt  when the buyer reserved the plot — the letter's "application" date
  * @param actorUserId the finance officer who allocated it
  */
 public record PlotAllocated(
@@ -29,6 +31,7 @@ public record PlotAllocated(
         BigDecimal cornerPremiumPct,
         BigDecimal totalPrice,
         Currency currency,
+        Instant reservedAt,
         UUID actorUserId
 ) {
 }

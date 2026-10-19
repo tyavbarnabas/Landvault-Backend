@@ -1,6 +1,7 @@
 package com.techcomfort.landvaultbackend.checkout;
 
 import com.techcomfort.landvaultbackend.testsupport.EstatePhotoFixture;
+import com.techcomfort.landvaultbackend.testsupport.LetterApprovalFixture;
 import com.techcomfort.landvaultbackend.documents.dto.DocumentDto;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -16,6 +17,7 @@ import com.techcomfort.landvaultbackend.checkout.dto.TransactionDto;
 import com.techcomfort.landvaultbackend.checkout.internal.service.ReservationExpirySweeper;
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.geojson.GeoJsonPolygonDto;
+import com.techcomfort.landvaultbackend.documents.internal.render.DisclosureClauses;
 import com.techcomfort.landvaultbackend.identity.dto.AuthResponse;
 import com.techcomfort.landvaultbackend.identity.dto.LoginRequest;
 import com.techcomfort.landvaultbackend.identity.dto.RegisterRequest;
@@ -1623,6 +1625,8 @@ class ReservationCheckoutUnderRlsIT {
                 .doesNotContain(transaction.id().toString());
         assertThat(get("/api/admin/payouts/ready", payoutAdmin(true), String.class).getBody())
                 .as("now owed to the developer like any verified sale").contains(transaction.id().toString());
+        assertThat(queryString("SELECT count(*) FROM allocation_letters WHERE transaction_id = '" + transaction.id() + "'"))
+                .as("the letter comes with the allocation").isEqualTo("1");
         verify(alerts).latePaymentResolved(any());
     }
 
@@ -2451,6 +2455,134 @@ class ReservationCheckoutUnderRlsIT {
         assertThat(appRoleCan("DELETE FROM receipts WHERE id = '" + receiptId + "'")).isFalse();
     }
 
+    // --- documents: the allocation letter (changeset 095) ---
+
+    /** AL: finance's verify issues the buyer's letter in the same step, from the approved setup. */
+    @Test
+    void verifyingIssuesTheBuyersAllocationLetter() {
+        TransactionDto transaction = paidPurchase();
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        assertThat(get("/api/portal/finance/transactions", officer, String.class).getBody())
+                .contains("\"letterApproved\":true");
+
+        assertThat(financeAction(officer, transaction.id(), "verify", null).getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        DocumentDto letter = documents(buyer).items().stream()
+                .filter(d -> d.type().equals("allocation_letter")).findFirst().orElseThrow();
+        assertThat(letter.number()).matches("HT-ALC-\\d{4}-\\d{6}");
+        assertThat(letter.transactionId()).isEqualTo(transaction.id());
+        assertThat(letter.plotId()).isEqualTo(plotId);
+        assertThat(letter.pdfUrl()).isEqualTo("/api/documents/allocation-letters/" + letter.id() + "/pdf");
+        assertThat(documents(buyer).total()).as("the receipt and the letter").isEqualTo(2);
+        assertThat(get("/api/documents/allocation-letters/" + letter.id(), buyer.token(), String.class).getBody())
+                .contains(letter.number());
+
+        String row = "FROM allocation_letters WHERE id = '" + letter.id() + "'";
+        String plotNumber = queryString("SELECT plot_number FROM plots WHERE id = '" + plotId + "'");
+        String estateName = queryString("SELECT name FROM estates WHERE id = '" + estateId + "'");
+        assertThat(queryString("SELECT opening " + row)).contains("Plot " + plotNumber, estateName)
+                .doesNotContain("{");
+        assertThat(queryString("SELECT array_to_string(clauses, '|') " + row))
+                .as("the approved conditions, then HomeTrue's").contains("The plot is for residential use only.")
+                .endsWith(DisclosureClauses.PAY_ONLY_THROUGH_HOMETRUE);
+        assertThat(queryString("SELECT buyer_name || '/' || signatory_name || '/' || template_source " + row))
+                .isEqualTo("Ada Buyer/Fixture Signatory/default");
+        assertThat(queryString("SELECT issued_by IS NOT NULL AND approval_id IS NOT NULL " + row)).isEqualTo("t");
+        assertThat(queryString("SELECT actor_user_id IS NOT NULL FROM audit_log_entries WHERE action = "
+                + "'allocation_letter.issued' AND target_id = '" + letter.id() + "'")).as("finance issued it").isEqualTo("t");
+        assertThat(restTemplate.exchange("/api/portfolio/plots/" + transaction.id() + "/documents", HttpMethod.GET,
+                new HttpEntity<>(bearer(buyer.token())), new ParameterizedTypeReference<List<DocumentDto>>() {
+                }).getBody()).extracting(DocumentDto::type).containsExactly("allocation_letter", "receipt");
+
+        ResponseEntity<String> verified = restTemplate.getForEntity("/api/documents/verify/" + letter.qrCode(), String.class);
+        assertThat(verified.getBody()).contains("\"documentType\":\"allocation_letter\"", letter.number(),
+                "\"holderInitials\":\"A. B.\"", "\"status\":\"valid\"").doesNotContain("Ada", "20000000");
+
+        Buyer other = verifiedBuyer();
+        for (String path : List.of("/api/documents/allocation-letters/" + letter.id(), letter.pdfUrl(), letter.jpegUrl())) {
+            assertThat(get(path, other.token(), String.class).getStatusCode()).as(path).isEqualTo(HttpStatus.NOT_FOUND);
+        }
+        assertThat(appRoleCan("UPDATE allocation_letters SET buyer_name = 'x' WHERE id = '" + letter.id() + "'")).isFalse();
+        assertThat(appRoleCan("DELETE FROM allocation_letters WHERE id = '" + letter.id() + "'")).isFalse();
+    }
+
+    /** Decided with the user: no approved letter, no allocation — refused before anything is written. */
+    @Test
+    void aSaleIsNotAllocatedWhileTheEstatesLetterIsNotApproved() {
+        TransactionDto transaction = paidPurchase();
+        withdrawLetterApproval();
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        assertThat(get("/api/portal/finance/transactions", officer, String.class).getBody())
+                .contains("\"letterApproved\":false");
+
+        ResponseEntity<String> refused = financeAction(officer, transaction.id(), "verify", null);
+
+        assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(refused.getBody()).contains("LETTER_NOT_APPROVED");
+        assertThat(queryString("SELECT status FROM transactions WHERE id = '" + transaction.id() + "'")).isEqualTo("AWAITING_FINANCE");
+        assertThat(queryString("SELECT status FROM plots WHERE id = '" + plotId + "'")).isEqualTo("RESERVED");
+        assertThat(queryString("SELECT count(*) FROM allocation_letters WHERE transaction_id = '" + transaction.id() + "'")).isEqualTo("0");
+        assertThat(queryString("SELECT count(*) FROM owned_plots WHERE transaction_id = '" + transaction.id() + "'")).isEqualTo("0");
+
+        execute(LetterApprovalFixture.approvedLetterSql(estateId));
+        assertThat(financeAction(officer, transaction.id(), "verify", null).getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(queryString("SELECT count(*) FROM allocation_letters WHERE transaction_id = '" + transaction.id() + "'")).isEqualTo("1");
+    }
+
+    @Test
+    void lateMoneyIsNotAllocatedWhileTheEstatesLetterIsNotApproved() {
+        TransactionDto transaction = latePayment();
+        withdrawLetterApproval();
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        assertThat(get("/api/portal/finance/late-payments", officer, String.class).getBody())
+                .contains("\"letterApproved\":false");
+
+        ResponseEntity<String> refused = restTemplate.exchange("/api/portal/finance/late-payments/"
+                + transaction.id() + "/allocate", HttpMethod.POST, entity(officer, null), String.class);
+
+        assertThat(refused.getBody()).contains("LETTER_NOT_APPROVED");
+        assertThat(queryString("SELECT status FROM transactions WHERE id = '" + transaction.id() + "'")).isEqualTo("ABANDONED");
+        assertThat(queryString("SELECT status FROM plots WHERE id = '" + plotId + "'")).isEqualTo("AVAILABLE_DEV");
+    }
+
+    /**
+     * The marketplace (SQL, changeset 095) and the portal (Java) decide
+     * "approved" separately; they must agree, including when a change lapses it.
+     */
+    @Test
+    void theMarketplaceAndThePortalAgreeWhetherTheLetterIsApproved() {
+        assertThat(letterApprovedBothWays()).containsExactly(true, true);
+
+        assertThat(restTemplate.exchange("/api/portal/estates/" + estateId + "/fees", HttpMethod.PUT,
+                entity(seller.token(), "{\"fees\":[{\"feeType\":\"application\",\"amount\":10000,\"currency\":\"NGN\","
+                        + "\"isFixed\":true,\"dueTrigger\":\"at_application\",\"refundable\":false,"
+                        + "\"isMandatory\":true}]}"), String.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(letterApprovedBothWays()).as("a fee change lapses it").containsExactly(false, false);
+        assertThat(get("/api/portal/estates/" + estateId + "/letter-approval", seller.token(), String.class).getBody())
+                .contains("\"changedSinceApproval\":[\"fees\"]");
+        assertThat(restTemplate.exchange("/api/reservations", HttpMethod.POST,
+                entity(buyer.token(), "{\"plotId\":\"" + plotId + "\"}"), String.class).getBody())
+                .as("off the market, so nothing can be reserved").contains("PLOT_NOT_AVAILABLE");
+
+        execute(LetterApprovalFixture.approvedLetterSql(estateId));
+        assertThat(letterApprovedBothWays()).containsExactly(true, true);
+    }
+
+    /** [the marketplace's view, the portal's letter-approval read]. */
+    private List<Boolean> letterApprovedBothWays() {
+        boolean sql = "t".equals(queryString(
+                "SELECT letter_approved FROM marketplace_estate_eligibility WHERE estate_id = '" + estateId + "'"));
+        String portal = get("/api/portal/estates/" + estateId + "/letter-approval", seller.token(), String.class).getBody();
+        assertThat(portal).contains("\"approved\":");
+        return List.of(sql, portal.contains("\"approved\":true"));
+    }
+
+    private void withdrawLetterApproval() {
+        execute("INSERT INTO estate_letter_approvals (id, created_at, tenant_id, branch_id, estate_id, action, actor_user_id) "
+                + "SELECT gen_random_uuid(), clock_timestamp(), tenant_id, branch_id, id, 'WITHDRAWN', "
+                + "(SELECT id FROM users ORDER BY created_at LIMIT 1) FROM estates WHERE id = '" + estateId + "'");
+    }
+
     private boolean appRoleCan(String sql) {
         try (Connection connection = DriverManager.getConnection(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(),
                 POSTGRES.getPassword()); Statement statement = connection.createStatement()) {
@@ -2572,6 +2704,7 @@ class ReservationCheckoutUnderRlsIT {
                 .isEqualTo(HttpStatus.OK);
 
         execute(EstatePhotoFixture.coverPhotoSql(estate.id()));
+        execute(LetterApprovalFixture.approvedLetterSql(estate.id()));
         ResponseEntity<String> published = restTemplate.exchange(
                 "/api/portal/estates/" + estate.id() + "/publish", HttpMethod.POST,
                 entity(tenant.token(), ""), String.class);

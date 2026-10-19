@@ -196,6 +196,7 @@ public class PortalEstateQueryService {
                         e.hasBoundary(),
                         e.hasPlots(),
                         e.hasPhoto(),
+                        e.letterApproved(),
                         !conflictDetection.publicationCheckFor(estateId).blocked(),
                         e.eligible()))
                 .orElse(null);

@@ -3,12 +3,16 @@ package com.techcomfort.landvaultbackend.inventory.internal.service;
 import com.techcomfort.landvaultbackend.common.FeeType;
 import com.techcomfort.landvaultbackend.inventory.EstateDocumentFacts;
 import com.techcomfort.landvaultbackend.inventory.EstateDocumentsApi;
+import com.techcomfort.landvaultbackend.inventory.PlotDocumentFacts;
+import com.techcomfort.landvaultbackend.inventory.internal.domain.Block;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.Estate;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.EstateFee;
+import com.techcomfort.landvaultbackend.inventory.internal.repository.BlockRepository;
 import com.techcomfort.landvaultbackend.inventory.internal.repository.EstateDefaultTermsRepository;
 import com.techcomfort.landvaultbackend.inventory.internal.repository.EstateFeeRepository;
 import com.techcomfort.landvaultbackend.inventory.internal.repository.EstateRefundTermsRepository;
 import com.techcomfort.landvaultbackend.inventory.internal.repository.EstateRepository;
+import com.techcomfort.landvaultbackend.inventory.internal.repository.PlotRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,6 +35,8 @@ public class EstateDocumentsApiImpl implements EstateDocumentsApi {
     private final EstateFeeRepository fees;
     private final EstateRefundTermsRepository refundTerms;
     private final EstateDefaultTermsRepository defaultTerms;
+    private final PlotRepository plots;
+    private final BlockRepository blocks;
 
     @Override
     @Transactional(readOnly = true)
@@ -38,6 +44,14 @@ public class EstateDocumentsApiImpl implements EstateDocumentsApi {
         return estates.findById(estateId).map(estate -> new EstateDocumentFacts(
                 estate.getId(), estate.getTenantId(), estate.getBranchId(), estate.getName(), estate.getArea(),
                 estate.getCity(), estate.getState(), fees(estate), refundTerms(estateId), defaultTerms(estateId)));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<PlotDocumentFacts> plotForDocuments(UUID plotId) {
+        return plots.findById(plotId).map(plot -> new PlotDocumentFacts(plot.getId(), plot.getEstateId(),
+                plot.getBlockId() == null ? null : blocks.findById(plot.getBlockId()).map(Block::getName).orElse(null),
+                plot.getPlotNumber(), plot.getNominalSizeSqm(), Boolean.TRUE.equals(plot.getIsCorner())));
     }
 
     /** Null when no schedule was ever declared; "nothing to declare" is an empty list. */

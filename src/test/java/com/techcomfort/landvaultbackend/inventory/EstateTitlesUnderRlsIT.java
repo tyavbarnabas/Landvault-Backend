@@ -19,6 +19,7 @@ import com.techcomfort.landvaultbackend.tenancy.dto.PrimaryContactDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.SocialsDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.TenantDetailDto;
 import com.techcomfort.landvaultbackend.testsupport.EstatePhotoFixture;
+import com.techcomfort.landvaultbackend.testsupport.LetterApprovalFixture;
 import com.techcomfort.landvaultbackend.testsupport.TestImages;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -583,6 +584,7 @@ class EstateTitlesUnderRlsIT {
                 entity(token, "{\"deductionPct\":20.00,\"processingDays\":90,\"appliesTo\":\"total_price\"}"),
                 String.class).getStatusCode()).isEqualTo(HttpStatus.OK);
         execute(EstatePhotoFixture.coverPhotoSql(estate));
+        execute(LetterApprovalFixture.approvedLetterSql(estate));
         return estate;
     }
 

@@ -143,7 +143,7 @@ Requires `portal.estates.manage`.
 | POST | `/api/portal/estates/{id}/publish` | `{ estateId, published, publishedAt, warningConflictCount, warning }` |
 | POST | `/api/portal/estates/{id}/unpublish` | same shape, `published: false` |
 
-- **Refusal is a 409** naming every failing condition in `message`; `code` is the first of, in this order, `PUBLICATION_VERIFICATION_PENDING`, `PUBLICATION_ENTITLEMENT_MISSING`, `PUBLICATION_TENANT_NOT_ACTIVE`, `PUBLICATION_FEES_UNDECLARED`, `PUBLICATION_REFUND_TERMS_UNDECLARED`, `PUBLICATION_BOUNDARY_MISSING`, `PUBLICATION_NO_PLOTS`, `PUBLICATION_NO_PHOTO`, `PUBLICATION_CONFLICT_OUTSTANDING`. A conflict refusal never identifies the other company. The estate detail's `eligibility` carries each condition as its own boolean (`hasPhoto` included), so a readiness screen never has to attempt a publish to find out.
+- **Refusal is a 409** naming every failing condition in `message`; `code` is the first of, in this order, `PUBLICATION_VERIFICATION_PENDING`, `PUBLICATION_ENTITLEMENT_MISSING`, `PUBLICATION_TENANT_NOT_ACTIVE`, `PUBLICATION_FEES_UNDECLARED`, `PUBLICATION_REFUND_TERMS_UNDECLARED`, `PUBLICATION_BOUNDARY_MISSING`, `PUBLICATION_NO_PLOTS`, `PUBLICATION_NO_PHOTO`, `PUBLICATION_LETTER_NOT_APPROVED`, `PUBLICATION_CONFLICT_OUTSTANDING`. A conflict refusal never identifies the other company. The estate detail's `eligibility` carries each condition as its own boolean (`hasPhoto` and `letterApproved` included), so a readiness screen never has to attempt a publish to find out.
 - **A MEDIUM conflict doesn't refuse** — publishing succeeds with `warningConflictCount > 0` and a `warning` to show.
 - Publishing an estate that's already published re-checks everything. That's the way to learn why a published estate isn't on the marketplace (tenant suspended, a conflict arrived since).
 - **`published` is the developer's intent and is never cleared by the platform.** If the company stops qualifying, its listings disappear from the marketplace and return on reinstatement, with no republishing.
@@ -170,6 +170,7 @@ All under `/api/portal/estates/{estateId}/photos`. Reads need `portal.estates.vi
 - **`caption`**: at most 200 characters, shown with the photo on the marketplace — use it as alt text. An empty string clears it.
 - **Delete** removes the file from storage; a copy a CDN or browser already cached may linger for a while.
 - **Photos are public**: while the estate is listed, the photos and captions are on the marketplace. The file's own name and who uploaded it never are.
+- **An approved allocation letter is a publication condition** (`PUBLICATION_LETTER_NOT_APPROVED`, changeset 095), with **no exemption** for live estates: finance can't verify a sale without one. If an approval lapses (fees, conditions, template or letterhead changed), the estate leaves the marketplace and stops taking reservations, `published` untouched, and returns without republishing once the Executive Director approves the letter again. Link `letterApproved: false` to the letter-approval screen.
 - **A photo is a publication condition** (`PUBLICATION_NO_PHOTO`). Estates that were already published when this arrived are exempt and report `hasPhoto: true`. Deleting a listed estate's last photo takes it off the marketplace; it returns, without republishing, when a photo is added.
 - Errors: `ESTATE_NOT_FOUND`, `PHOTO_NOT_FOUND` (404), plus the storage codes below.
 
@@ -399,7 +400,7 @@ All need `client.portfolio.view` (every buyer has it). Read-only: **ownership on
 
 **Not built, and the frontend's live calls to them will 404/405**: `POST /api/portfolio/plots` and `PUT /api/portfolio/plots/{id}` (**never will be** — a client must not be able to create or change ownership), the schedule, installment payment and verify routes, and `restructure-requests`. They arrive with installment plans.
 
-## Documents — `documentsService.ts` — **receipts built** (changeset 089)
+## Documents — `documentsService.ts` — **receipts (089) and allocation letters (095) built**
 
 All need `client.documents.view` (every buyer has it) except verify, which is public. Read-only: documents are issued by events, never by a client.
 
@@ -410,14 +411,19 @@ All need `client.documents.view` (every buyer has it) except verify, which is pu
 | GET | `/api/documents/receipts/{id}` | `Document`; another buyer's: 404 `DOCUMENT_NOT_FOUND`. |
 | GET | `/api/documents/receipts/{id}/pdf` | The PDF (A4), as an attachment named `HomeTrue-<number>.pdf`. |
 | GET | `/api/documents/receipts/{id}/jpeg` | The same page as a JPEG (150 dpi), for sharing. |
+| GET | `/api/documents/allocation-letters/{id}` | `Document`; another buyer's: 404 `DOCUMENT_NOT_FOUND`. |
+| GET | `/api/documents/allocation-letters/{id}/pdf` | The letter (A4, as many pages as it needs), as an attachment named `HomeTrue-<number>.pdf`. |
+| GET | `/api/documents/allocation-letters/{id}/jpeg` | Every page stacked into one JPEG, for sharing. |
 | GET | `/api/documents/verify/{code}` | **Public**, rate limited (30/min per connection). `DocumentVerification`, or 404 `NOT_A_HOMETRUE_DOCUMENT` (unknown or malformed code — one answer for both). |
 
 - **A receipt is issued the moment Paystack confirms a payment** (return page, webhook or sweep), in the same database step, by **HomeTrue** — it received the money — naming the developer as seller. Never for a failed, abandoned or mismatched payment.
-- `Document`: the frontend's shape — `id, type ("receipt"), title, date, status, qrCode, size, plotId, transactionId, supersedes` — plus `number` (`HT-RCT-2026-000123`), `issuedAt`, `verifyUrl`, `refundedAt`, `pdfUrl`, `jpegUrl`. `qrCode` is the printed verification code (`3F9A-1C77-B02E-55D1`). `size` is null (drawn on demand). `plotId` is the **inventory** plot, not a portfolio id. `status` is `valid`; a refunded payment's receipt stays `valid` (the money did arrive) with `refundedAt` set.
+- **An allocation letter is issued the moment the developer's finance verifies the sale** (or allocates late money), in the same database step as the plot becoming sold — never before. It's built from the estate's approved setup: letterhead, signature and seal, the template's wording, the HomeTrue-approved conditions, then HomeTrue's disclosure clauses, with the buyer's name and phone, the plot and its size filled in. Number `HT-ALC-2026-000123`. Sales verified before this shipped have no letter.
+- `Document`: the frontend's shape — `id, type ("receipt" | "allocation_letter"), title, date, status, qrCode, size, plotId, transactionId, supersedes` — plus `number` (`HT-RCT-2026-000123`), `issuedAt`, `verifyUrl`, `refundedAt`, `pdfUrl`, `jpegUrl`. `qrCode` is the printed verification code (`3F9A-1C77-B02E-55D1`). `size` is null (drawn on demand). `plotId` is the **inventory** plot, not a portfolio id. `status` is `valid`; a refunded payment's receipt stays `valid` (the money did arrive) with `refundedAt` set.
 - **Downloads need the bearer token**, so fetch them as a blob (`apiClient` with `responseType: blob`) and hand the `File` to `navigator.share({ files })`; fall back to a download link where sharing files isn't supported. The backend never sends a document anywhere itself.
 - **The QR code opens `{frontend}/verify/{code}`** (`DOCUMENTS_VERIFY_URL`, default `http://localhost:8443/verify`). That frontend page calls the verify route. `DocumentVerification`: `{ status ("valid" | "refunded"), documentType, number, issuedAt, issuedBy ("HomeTrue"), developer, estate, location, plot, holderInitials, refundedAt }` — **never an amount, and never the holder's name, email or phone** (initials only): anyone holding a copy can open it.
 - The frontend's `POST /api/documents` (batch issue), `POST /api/documents/{id}/void` and `/api/documents/by-plot/{plotId}` **don't exist and won't**: documents are issued by the backend at the moment the event happens, and a reissue (letters, later) is a new document pointing at the old one.
-- **Next**: offer and allocation letters (generated from the developer's letterhead, signature, seal and the estate's disclosed terms), then the irrevocable power of attorney.
+- `/api/documents` lists receipts and letters together, newest first; `/api/portfolio/plots/{id}/documents` returns the letter first, then the receipts. The verify page's `documentType` is `receipt` or `allocation_letter`; a letter's `developer` is the company it's from.
+- **Next**: the offer letter, then the irrevocable power of attorney.
 
 ### Portal: letterheads (changeset 090) — **built**
 
@@ -806,12 +812,14 @@ contact you", never "you own this plot".
 (add to the frontend's permission list). `GET /api/portal/finance/transactions`
 → `[{ transactionId, transactionReference, estateName, plotLabel, buyerEmail,
 expectedAmount, currency, awaitingSince, payment: { reference, amountPaid,
-channel, paidAt, last4, gatewayResponse } | null, amountsMatch }]`.
+channel, paidAt, last4, gatewayResponse } | null, amountsMatch, letterApproved }]`.
 `POST …/{id}/verify` → `{ status: "verified" }` (plot sold, reservation
-`converted` — only now may the buyer be told the plot is theirs);
+`converted`, the buyer's allocation letter issued — only now may the buyer be told the plot is theirs).
+`letterApproved: false` means verify will be refused with 409 `LETTER_NOT_APPROVED` until the Executive
+Director approves the estate's letter — show it on the row and disable Verify;
 `POST …/{id}/reject` `{ reason }` → `{ status: "rejected" }`. Errors: 404
 `TRANSACTION_NOT_FOUND`, 409 `TRANSACTION_NOT_AWAITING_FINANCE` /
-`PAYMENT_NOT_CONFIRMED` / `PLOT_NOT_RESERVED`, 403 `COMPANY_SCOPE_REQUIRED`.
+`PAYMENT_NOT_CONFIRMED` / `PLOT_NOT_RESERVED` / `LETTER_NOT_APPROVED`, 403 `COMPANY_SCOPE_REQUIRED`.
 
 **Payments, step 8a — payout account.** New permissions `portal.settlement.manage`
 (Executive Director) and `admin.payouts.manage` (Super Admin) — add both to the
@@ -874,9 +882,10 @@ Errors: 404 `REFUND_NOT_DUE`, `REFUND_NOT_FOUND`; 409 `REFUND_IN_PROGRESS`,
 
 **Late money (developer finance).** `portal.payments.verify`. `GET /api/portal/finance/late-payments`
 → `[{ transactionId, transactionReference, estateName, plotLabel, buyerName, buyerEmail,
-paymentReference, agreedPrice, amountPaid, currency, channel, paidAt, plotAvailable, amountsMatch }]`.
-`POST /api/portal/finance/late-payments/{transactionId}/allocate` → `{ status: "verified" }` (409
-`PLOT_NO_LONGER_AVAILABLE` / `PAYMENT_NOT_CONFIRMED`, nothing changed). `POST …/{transactionId}/refund`
+paymentReference, agreedPrice, amountPaid, currency, channel, paidAt, plotAvailable, amountsMatch, letterApproved }]`.
+`POST /api/portal/finance/late-payments/{transactionId}/allocate` → `{ status: "verified" }`, and the buyer's
+allocation letter is issued (409 `PLOT_NO_LONGER_AVAILABLE` / `PAYMENT_NOT_CONFIRMED` / `LETTER_NOT_APPROVED`,
+nothing changed). `POST …/{transactionId}/refund`
 `{ reason }` → `{ status: "refund_due" }`. Only offer Allocate while `plotAvailable` is true.
 
 **Errors from payments and checkout are always `{ message, code, fieldErrors }`**, including

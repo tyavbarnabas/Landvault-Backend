@@ -114,7 +114,7 @@ class AllocationLetterRendererTest {
                 signature(),
                 png(160, 160, Color.decode("#B23A48")),
                 Instant.parse("2026-10-17T10:00:00Z"),
-                List.of("[Buyer's full name]", "[Buyer's address]", "[Buyer's phone number]"),
+                List.of("[Buyer's full name]", "[Buyer's phone number]"),
                 "Dear [Buyer's name],",
                 "Double King Deluxe",
                 "Jikwoyi, Federal Capital Territory (Abuja)",

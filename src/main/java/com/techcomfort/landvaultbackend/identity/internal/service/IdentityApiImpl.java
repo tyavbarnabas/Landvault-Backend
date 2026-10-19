@@ -79,6 +79,12 @@ public class IdentityApiImpl implements IdentityApi {
         return userRepository.findById(userId).map(u -> (u.getFirstName() + " " + u.getLastName()).trim());
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<String> phoneOf(UUID userId) {
+        return userRepository.findById(userId).map(User::getPhone).filter(p -> !p.isBlank());
+    }
+
     private static UserDto toDto(User user) {
         return new UserDto(
                 user.getId(),

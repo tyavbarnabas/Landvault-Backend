@@ -15,6 +15,7 @@ import com.techcomfort.landvaultbackend.tenancy.dto.CreateTenantRequest;
 import com.techcomfort.landvaultbackend.tenancy.dto.PrimaryContactDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.SocialsDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.TenantDetailDto;
+import com.techcomfort.landvaultbackend.testsupport.LetterApprovalFixture;
 import com.techcomfort.landvaultbackend.testsupport.TestImages;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -481,6 +482,7 @@ class EstatePhotosUnderRlsIT {
         assertThat(restTemplate.exchange("/api/portal/estates/" + estate + "/refund-terms", HttpMethod.PUT,
                 entity(token, "{\"deductionPct\":20.00,\"processingDays\":90,\"appliesTo\":\"total_price\"}"),
                 String.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+        execute(LetterApprovalFixture.approvedLetterSql(estate)); // changeset 095: an approved letter
         return estate;
     }
 

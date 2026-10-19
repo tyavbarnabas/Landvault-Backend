@@ -51,7 +51,7 @@ public class PortalLatePaymentController {
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Allocated"),
             @ApiResponse(responseCode = "404", description = "`LATE_PAYMENT_NOT_FOUND`", content = @Content()),
-            @ApiResponse(responseCode = "409", description = "`PLOT_NO_LONGER_AVAILABLE`, `PAYMENT_NOT_CONFIRMED` — nothing changed", content = @Content())
+            @ApiResponse(responseCode = "409", description = "`PLOT_NO_LONGER_AVAILABLE`, `PAYMENT_NOT_CONFIRMED`, `LETTER_NOT_APPROVED` — nothing changed", content = @Content())
     })
     @PostMapping("/{transactionId}/allocate")
     @PreAuthorize("hasAuthority('portal.payments.verify')")

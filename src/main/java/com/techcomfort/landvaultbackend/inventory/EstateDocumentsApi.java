@@ -12,4 +12,7 @@ public interface EstateDocumentsApi {
      * staff, their branch's or the company's).
      */
     Optional<EstateDocumentFacts> forDocuments(UUID estateId);
+
+    /** One plot as a letter names it, read under the caller's RLS scope like {@link #forDocuments}. */
+    Optional<PlotDocumentFacts> plotForDocuments(UUID plotId);
 }

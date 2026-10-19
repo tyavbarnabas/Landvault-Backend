@@ -132,7 +132,7 @@ public class LatePaymentService {
                 sale.plotLabel(), identityApi.fullNameOf(p.getBuyerUserId()).orElse(null),
                 identityApi.emailOf(p.getBuyerUserId()).orElse(null), p.getReference(), sale.totalPrice(),
                 p.getAmount(), p.getCurrency().name(), p.getChannel(), p.getPaidAt(), sale.plotAvailable(),
-                matches(p, sale));
+                matches(p, sale), sale.letterApproved());
     }
 
     private static boolean matches(Payment payment, AbandonedSale sale) {

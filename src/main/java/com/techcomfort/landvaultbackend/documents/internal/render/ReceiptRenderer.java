@@ -149,7 +149,7 @@ public class ReceiptRenderer {
 
     private static String seller(ReceiptContent r) {
         return r.sellerRcNumber() == null || r.sellerRcNumber().isBlank() ? r.sellerName()
-                : r.sellerName() + " (RC " + r.sellerRcNumber() + ")";
+                : r.sellerName() + " (" + DocumentFormats.rcNumber(r.sellerRcNumber()) + ")";
     }
 
     private static List<String[]> rows(ReceiptContent r) {

@@ -2049,9 +2049,9 @@ integration called the registry itself, and none is built.
 ## The marketplace publication gate: four conditions, recorded here, enforced there
 
 An estate is publicly listable only when **every** condition holds — five
-originally, now ten (fees and refund terms from full cost disclosure, the
-boundary from BG-1, at least one plot from changeset 063, a photo from 086;
-see those sections):
+originally, now eleven (fees and refund terms from full cost disclosure, the
+boundary from BG-1, at least one plot from changeset 063, a photo from 086,
+an approved allocation letter from 095; see those sections):
 
 1. `estates.published` is true (the developer's own opt-in switch)
 2. the owning tenant's `verificationState` is `VERIFIED`
@@ -2068,6 +2068,8 @@ see those sections):
 9. **the estate has at least one plot**, in any status (changeset 063)
 10. **the estate has at least one photo** (changeset 086; estates already
     published then are exempt — see "Estate photos")
+11. **the estate's allocation letter is approved and current** (changeset
+    095, no exemption — see "Documents: the allocation letter")
 
 **Built in the publication slice** as `marketplace_estate_eligibility`
 (changeset 049) — see "The public marketplace" below.
@@ -4902,10 +4904,10 @@ Proven red: the grace period, ask-Paystack-first, and abandoned-is-not-final.
   Replaced by the read-only `CheckoutApi.financeStatusOf`.
 - **The portfolio entry now joins the same transaction** (changeset 088, see
   "Portfolio"); receipts are issued earlier, when Paystack confirms the payment
-  ("Documents"); the deed doesn't exist yet. **When letters are built, they
-  must join `verifyAndAllocate`'s same transaction too** — a plot sold with no
-  deed, or a deed for a plot nobody allocated, is exactly the corruption FV-3
-  exists to prevent.
+  ("Documents"); the deed doesn't exist yet. **The allocation letter joins the
+  same transaction** (changeset 095, "Documents: the allocation letter") — a
+  plot sold with no letter, or a letter for a plot nobody allocated, is exactly
+  the corruption FV-3 exists to prevent.
 - Late-money (`underReview`) payments on abandoned purchases are not in this
   queue yet; resolving them (re-allocate or refund) is its own follow-up.
 
@@ -5705,9 +5707,8 @@ than waiting for developers to upload them; a receipt is issued by **HomeTrue**
   needs its module's handler to do the same.
 - Audit: `receipt.issued` (a system entry — Paystack confirmed, no person did).
 
-**Not built**: offer letter, allocation letter (must join `verifyAndAllocate`'s
-transaction, like the portfolio record), the power of attorney, and an email
-carrying the receipt link.
+**Not built**: the offer letter, the power of attorney, and an email carrying
+the receipt link. (The allocation letter: changeset 095.)
 
 ## Documents: letterheads (changeset 090)
 
@@ -5832,9 +5833,9 @@ Built 2026-10-17, decided with the user. `GET /api/portal/estates/{id}/letter-ap
 - **Executive Director only, company-wide** (decided with the user); branch
   managers read the status and preview their branch's estates. Audit:
   `estate.letter_approved`, `estate.letter_approval_withdrawn`.
-- **Approval gates nothing yet** (decided with the user): what happens when
-  finance verifies a sale on an unapproved estate is the allocation-letter
-  step's decision.
+- **Approval gates the sale** (changeset 095, decided with the user): finance
+  can't allocate without it, and an estate can't be listed without it — see
+  "Documents: the allocation letter".
 - **Known gap**: a branch's office details (address, phone, email) live in
   tenancy and don't raise the letterhead version, so editing them doesn't
   withdraw approval though the letter changes. Same gap as recorded under
@@ -5940,11 +5941,103 @@ id. HomeTrue reviews at `/api/admin/letter-template-reviews`
   `ReviewStatus`, shared by both reviews.
 - **Not built**: removing a branch's template (falling back to the company's)
   — append-only means it needs a "cleared" version; a branch can copy the
-  company's wording meanwhile. Uploading a company's existing letter as a
-  reference for the reviewer — proposed to the user, not yet decided.
+  company's wording meanwhile.
+- **No upload of a company's old letter, decided with the user (2026-10-18).**
+  Not needed: the company supplies everything a letter says through the
+  letterhead, template and conditions; HomeTrue fills in only what it holds
+  (the buyer, the plot, the amounts and fees from the cost disclosure).
 
 Proven red: letters ignoring a branch's own template, and the superseded check
 on template review.
+
+## Documents: the allocation letter (changeset 095)
+
+Built 2026-10-18, decided with the user. **Issued when the developer's finance
+verifies the sale** (`verifyAndAllocate`) or allocates late money
+(`allocateAbandoned`), inside that transaction: `AllocationLetterIssuer` is a
+plain synchronous `@EventListener` on `PlotAllocated` with `MANDATORY`, beside
+the portfolio's — the plot becoming SOLD, the owned-plot record and the letter
+commit or roll back together. **Never make it asynchronous or after-commit.**
+
+- **No approved letter, no allocation (option A).** Checkout asks
+  `AllocationLetterGate.letterReady(estateId)` before writing anything and
+  returns `LETTER_NOT_APPROVED` (409 from finance verify and late-money
+  allocate, nothing changed). The gate is checkout's interface, implemented by
+  documents (`CheckoutAllocationLetterGate`) — the **eighth** inverted
+  interface, since documents depends on checkout. "Ready" is
+  `LetterApprovalService.issuable`: the approval stands (every recorded version
+  current) **and** nothing is missing (signatory name, title, signature) —
+  read under the finance officer's own RLS. The finance queue and late-money
+  list carry `letterApproved` per row (asked once per estate). Rejected options:
+  allocating and issuing later (a sold plot with no letter, waiting on
+  something to remember) and issuing from unapproved setup (defeats both
+  reviews). If the issuer still can't build a letter, it throws and the sale
+  rolls back — a bug, made loud.
+- **And no listing without one** (the eleventh publication condition,
+  `PUBLICATION_LETTER_NOT_APPROVED`, `EstateEligibilityDto.letterApproved`).
+  **No exemption for live estates**, unlike photos: a listed estate without an
+  approved letter would take money finance can't allocate. A lapsed approval
+  (fees, conditions, template, letterhead changed) takes the estate off the
+  marketplace and stops new reservations (the reserve function reads the same
+  view), `published` untouched; approving again brings it back (PB-5's
+  intent/eligibility split). Buyers already holding or paid keep their place
+  but can't be allocated until it's re-approved.
+- **Two implementations of "approved", kept in step by a test.** The view
+  calls `landvault_estate_letter_approved(estate)` (`SECURITY DEFINER`,
+  boolean only, hardened like 043/047/054 — the marketplace reads it with no
+  scope); the portal and the gate use `LetterApprovalService` in Java.
+  `ReservationCheckoutUnderRlsIT.theMarketplaceAndThePortalAgreeWhetherTheLetterIsApproved`
+  compares them before and after a lapse. **Change one, change both.** The
+  SQL doesn't check blockers: approval requires none, and every way to remove
+  a signatory or signature bumps the letterhead version, which lapses it.
+- **`allocation_letters` is a stored copy of everything printed** (the
+  receipts' rule): letterhead text, the logo/signature/seal file ids (those
+  files are never deleted), signatory, buyer lines, salutation, estate, plot,
+  the filled-in opening and closing, every clause (template standard → estate
+  conditions → HomeTrue's disclosure clauses), sign-off — and the approval id
+  and every version it was issued under. The PDF/JPEG are drawn from it on
+  demand. One per sale (unique `transaction_id`); buyer-owned like receipts
+  (not RLS-policied, reached by `buyer_user_id` or verification code);
+  UPDATE/DELETE/TRUNCATE revoked. Number `HT-ALC-{year}-{six digits}` from its
+  own sequence.
+- **Fill-ins**: `{buyerName}` the registered name; `{plot}` "Block A, Plot 7 of
+  about 500 sqm" (size left out for a unit with none); `{applicationDate}` the
+  day the reservation was made (carried on `PlotAllocated.reservedAt`);
+  `{allocationDate}` the day finance verified. Buyer lines: name, then phone
+  if the account has one (`IdentityApi.phoneOf`). **No address** — nothing
+  collects one yet; collecting it at checkout is a separate decision. The
+  preview shows no address placeholder either (removed after the walkthrough,
+  decided with the user), so it matches the letters actually issued.
+- **A condition repeated word for word prints once** (ignoring case, spacing
+  and a final full stop), where it first appears — `LetterClauses`, used by
+  the preview and the issued letter alike, so the two never differ. Found in
+  the live walkthrough: a company put the same condition in its template and
+  in an estate's conditions. Letters issued before this keep their stored
+  copy as issued. **RC numbers** print as "RC 1234567" however they were
+  entered (`DocumentFormats.rcNumber`; receipts too) — the walkthrough's
+  letter read "RC RC-1234567".
+- Plot facts come from `EstateDocumentsApi.plotForDocuments` (plain RLS read:
+  the officer's company owns the plot).
+- **Buyer routes**: `/api/documents` lists receipts and letters together
+  (paged in memory — a buyer has a handful); `/api/documents/allocation-letters/{id}`
+  and `/pdf`, `/jpeg` (every page stacked), own only, 404 otherwise; the
+  portfolio entry's documents list it first. The public verify page answers
+  for letters too (`documentType: allocation_letter`, company, estate, plot,
+  initials — no amount, no name).
+- Audit: `allocation_letter.issued`, actor the finance officer.
+- **Sales verified before 095 have no letter.** Nothing backfills them: their
+  estates had no approved setup to build one from.
+
+Proven red: the verify-time and late-money gate checks (each became a 500 —
+the issuer refusing, the sale rolled back), the listener, the publish check,
+and the view's term. The PDF download isn't covered by an IT (these tests run
+no storage; the renderer has `AllocationLetterRendererTest`) — check it in the
+live walkthrough.
+
+**Not built**: emailing the buyer the letter link (the "your plot is yours"
+email goes out already; it could link the letter), a developer-side view of
+issued letters, and reissuing/voiding a letter (a reissue will be a new row
+pointing at the old one).
 
 ## One password rule, wherever a password is set (`PasswordPolicy`)
 
