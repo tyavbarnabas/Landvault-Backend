@@ -4,6 +4,8 @@ import com.techcomfort.landvaultbackend.marketplace.internal.domain.ListingView;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.repository.Repository;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -15,4 +17,6 @@ import java.util.UUID;
 public interface ListingViewRepository extends Repository<ListingView, UUID>, JpaSpecificationExecutor<ListingView> {
 
     Optional<ListingView> findById(UUID estateId);
+
+    List<ListingView> findByEstateIdIn(Collection<UUID> estateIds);
 }

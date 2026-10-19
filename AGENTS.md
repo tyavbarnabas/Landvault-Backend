@@ -3524,6 +3524,41 @@ Reads are not audited: the audit log records actions, not page views.
 - ~~**An estate with no boundary can be published**~~ — **closed by BG-1**
   (changeset 061, see "No boundary, no listing" below).
 
+### The buyer's wishlist (changeset 096)
+
+Built 2026-10-19 from the frontend's request: saved listings belong to the
+account, not the browser. `GET /api/marketplace/wishlist`, `PUT|DELETE
+.../{listingType}/{listingId}` (`client.marketplace.view`), `WishlistService`.
+The first route under `/api/marketplace/` that **needs a login** — it isn't in
+`PUBLIC_GET_PATHS`, which is exactly why that list was never a wildcard. The
+marketplace rate limit counts these calls too (it covers the prefix); harmless.
+
+- **`wishlist_items` is buyer-owned** like `kyc_records`: no tenant, not
+  RLS-policied, reached only by `buyer_user_id` from `TenantContext`. Removing
+  **hard-deletes** — a preference, not history (the never-delete rule is for
+  records something else relies on).
+- **Everything about the listing comes from `marketplace_listings`**: whether
+  it's `available` (on the marketplace now — never why not), the current name,
+  from-price and `plotsRemaining`, and, when saved, `name_at_save`,
+  `price_at_save` and `currency`. Nothing comes from the request. The saved
+  name is what a buyer sees once the listing has gone (the public listing then
+  404s, so the page can't fetch it); `available` means listed, not "has plots" —
+  a sold-out estate stays listed (`plotsRemaining: 0`).
+- **Idempotent both ways**: PUT is 201 then 200 with nothing changed; DELETE is
+  always 204. A listing not on the marketplace can't be newly saved
+  (`LISTING_NOT_FOUND`), but one already saved stays and PUT still answers 200.
+- **`resale` is refused** (`WISHLIST_TYPE_NOT_SUPPORTED`) on PUT and DELETE,
+  and the CHECK allows `PRIMARY` only; `listing_id` has no foreign key because
+  a resale listing will live elsewhere. Widen both when resale exists.
+- **At most 200 per buyer** (`WISHLIST_FULL`), checked under a transaction-level
+  advisory lock per buyer (`pg_advisory_xact_lock(hashtext('wishlist'),
+  hashtext(buyer))`), so two saves at item 199 can't both pass. The unique index
+  on (buyer, type, listing) backs the duplicate case.
+
+Proven red: the buyer condition on delete, and the lock. The lock's test holds
+the lock itself and checks a save waits — two racing requests almost never
+overlapped closely enough to fail without it, so that version proved nothing.
+
 ## Updating an estate's details: `PUT /api/portal/estates/{id}`
 
 `portal.estates.manage`, `PortalEstateService.updateEstate`. Name,
