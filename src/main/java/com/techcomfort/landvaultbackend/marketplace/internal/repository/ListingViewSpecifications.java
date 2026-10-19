@@ -2,6 +2,7 @@ package com.techcomfort.landvaultbackend.marketplace.internal.repository;
 
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.EstateIntent;
+import com.techcomfort.landvaultbackend.common.TitleStatus;
 import com.techcomfort.landvaultbackend.common.TitleType;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.ListingView;
 import jakarta.persistence.criteria.Predicate;
@@ -66,8 +67,11 @@ public final class ListingViewSpecifications {
             if (f.maxSize() != null) {
                 predicates.add(cb.lessThanOrEqualTo(root.get("minSizeSqm"), f.maxSize()));
             }
+            // "C of O" means a C of O HomeTrue has verified. A declared or
+            // rejected title of that type is a claim, not a match.
             if (f.titleType() != null) {
                 predicates.add(cb.equal(root.get("titleType"), f.titleType()));
+                predicates.add(cb.equal(root.get("titleStatus"), TitleStatus.VERIFIED));
             }
             if (f.intent() != null) {
                 predicates.add(cb.or(

@@ -232,7 +232,7 @@ No `Authorization` header needed (or sent). Rate-limited: 429 with `Retry-After`
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/marketplace/estates` | `Page<Listing>` — filters `q`, `state`, `city`, `minPrice`, `maxPrice`, `currency` (default `NGN`), `minSize`, `maxSize`, `titleType`, `intent`; `sort` = `newest` (default) \| `price_low` \| `price_per_sqm` \| `plots_remaining`; `limit`/`cursor` |
+| GET | `/api/marketplace/estates` | `Page<Listing>` — filters `q`, `state`, `city`, `minPrice`, `maxPrice`, `currency` (default `NGN`), `minSize`, `maxSize`, `titleType` (**verified titles only** — a declared or rejected title of that type doesn't match), `intent`; `sort` = `newest` (default) \| `price_low` \| `price_per_sqm` \| `plots_remaining`; `limit`/`cursor` |
 | GET | `/api/marketplace/estates/{id}` | `Listing` |
 | GET | `/api/marketplace/estates/{id}/geojson` | GeoJSON `FeatureCollection`, same shape as the portal's |
 

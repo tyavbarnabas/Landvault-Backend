@@ -19,6 +19,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import com.techcomfort.landvaultbackend.common.OpenApiConfig;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
@@ -81,7 +82,10 @@ public class MarketplaceController {
                     `sort` is one of `newest` (default), `price_low`, `price_per_sqm`, \
                     `plots_remaining`. **A price filter only matches listings priced in the \
                     requested `currency`** (NGN unless given): comparing ₦20,000,000 against $50,000 \
-                    would rank land by a meaningless number.""")
+                    would rank land by a meaningless number. **`titleType` matches verified titles \
+                    only**: a title of that type HomeTrue has verified, never one only declared \
+                    (`pending`) or not confirmed (`rejected`). Without it, every listing is returned \
+                    whatever its title status.""")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "A page of listings; empty when nothing "
                     + "is currently eligible"),
@@ -101,6 +105,7 @@ public class MarketplaceController {
             @RequestParam(required = false) Currency currency,
             @RequestParam(required = false) BigDecimal minSize,
             @RequestParam(required = false) BigDecimal maxSize,
+            @Parameter(description = "Title type, e.g. `C of O`. Matches titles HomeTrue has verified only.")
             @RequestParam(required = false) String titleType,
             @RequestParam(required = false) String intent,
             @RequestParam(required = false) String sort,
