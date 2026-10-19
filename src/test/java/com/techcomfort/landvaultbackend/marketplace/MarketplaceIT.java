@@ -162,6 +162,32 @@ class MarketplaceIT {
         assertThat(dto.lastVerifiedDate()).isNotNull();
     }
 
+    /** "C of O" on the filter means a C of O HomeTrue verified; a declared or rejected one is a claim. */
+    @Test
+    void theTitleFilterMatchesVerifiedTitlesOnly() {
+        String tag = "Titlefilter" + UUID.randomUUID().toString().substring(0, 8);
+        UUID verified = publishedListing(tag + " Verified", 0).estateId();
+        UUID pending = publishedListing(tag + " Pending", 1).estateId();
+        UUID rejected = publishedListing(tag + " Rejected", 2).estateId();
+        UUID gazette = publishedListing(tag + " Gazette", 3).estateId();
+        execute("UPDATE estate_titles SET status = 'PENDING', decided_at = NULL, verification_source = NULL "
+                + "WHERE estate_id = '" + pending + "'");
+        execute("UPDATE estate_titles SET status = 'REJECTED', verification_source = NULL, "
+                + "decision_note = 'Not confirmed.' WHERE estate_id = '" + rejected + "'");
+        execute("UPDATE estate_titles SET title_type = 'GAZETTE' WHERE estate_id = '" + gazette + "'");
+
+        PageResponse<MarketplaceListingDto> cOfO = search(tag, "C of O");
+        assertThat(cOfO.items()).extracting(MarketplaceListingDto::id).containsExactly(verified);
+        assertThat(cOfO.total()).isEqualTo(1);
+
+        assertThat(search(tag, "Gazette").items()).extracting(MarketplaceListingDto::id).containsExactly(gazette);
+
+        PageResponse<MarketplaceListingDto> all = search(tag, null);
+        assertThat(all.items()).extracting(MarketplaceListingDto::id)
+                .containsExactlyInAnyOrder(verified, pending, rejected, gazette);
+        assertThat(all.total()).isEqualTo(4);
+    }
+
     // --- the five conditions, each on the feed and on publish ---
 
     @Test
@@ -699,8 +725,14 @@ class MarketplaceIT {
     }
 
     private Listing publishedListing(String name) {
+        return publishedListing(name, 0);
+    }
+
+    /** {@code slot} moves the estate along this test's band, so several listings never overlap. */
+    private Listing publishedListing(String name, int slot) {
+        BigDecimal shift = new BigDecimal("0.020").multiply(BigDecimal.valueOf(slot));
         Tenant tenant = verifiedTenant(name + " Ltd");
-        EstateDto estate = createEstate(tenant, name, estateRing());
+        EstateDto estate = createEstate(tenant, name, shifted(estateRing(), shift));
 
         UUID tierId = post(tenant, "/api/portal/estates/" + estate.id() + "/price-tiers",
                 new CreatePriceTierRequest("LAND_SIZE", new BigDecimal("250.00"),
@@ -710,9 +742,9 @@ class MarketplaceIT {
         ResponseEntity<String> plots = restTemplate.exchange(
                 "/api/portal/estates/" + estate.id() + "/plots", HttpMethod.POST,
                 entity(tenant.token(), new CreatePlotsRequest(List.of(
-                        plot("1", blockId, tierId, "available-dev", plotRing(0)),
-                        plot("2", blockId, tierId, "reserved", plotRing(1)),
-                        plot("3", blockId, tierId, "sold", plotRing(2))))),
+                        plot("1", blockId, tierId, "available-dev", shifted(plotRing(0), shift)),
+                        plot("2", blockId, tierId, "reserved", shifted(plotRing(1), shift)),
+                        plot("3", blockId, tierId, "sold", shifted(plotRing(2), shift))))),
                 String.class);
         assertThat(plots.getStatusCode()).as(plots.getBody()).isEqualTo(HttpStatus.CREATED);
         execute(EstateTitleFixture.verifiedTitleSql(estate.id(), "LA-SECRET-TITLE", "SECRET-NOTE internal only"));
@@ -815,6 +847,13 @@ class MarketplaceIT {
                 }).getBody().items().stream().map(MarketplaceListingDto::id).toList();
     }
 
+    private PageResponse<MarketplaceListingDto> search(String q, String titleType) {
+        String path = "/api/marketplace/estates?limit=100&q={q}" + (titleType == null ? "" : "&titleType={t}");
+        return restTemplate.exchange(path, HttpMethod.GET, HttpEntity.EMPTY,
+                new ParameterizedTypeReference<PageResponse<MarketplaceListingDto>>() {
+                }, q, titleType).getBody();
+    }
+
     /** No Authorization header at all, not an empty or invalid one. */
     private ResponseEntity<String> anonymous(String path) {
         return restTemplate.exchange(path, HttpMethod.GET, HttpEntity.EMPTY, String.class);
@@ -844,6 +883,10 @@ class MarketplaceIT {
     private List<List<BigDecimal>> plotRing(int index) {
         BigDecimal x = new BigDecimal("0.001").add(new BigDecimal("0.002").multiply(BigDecimal.valueOf(index)));
         return rect(lng(x.toPlainString()), "9.101", lng(x.add(new BigDecimal("0.001")).toPlainString()), "9.102");
+    }
+
+    private static List<List<BigDecimal>> shifted(List<List<BigDecimal>> ring, BigDecimal lngShift) {
+        return ring.stream().map(p -> List.of(p.get(0).add(lngShift), p.get(1))).toList();
     }
 
     private String lng(String delta) {

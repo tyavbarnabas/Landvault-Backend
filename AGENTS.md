@@ -5501,6 +5501,12 @@ allows the two human values at the database level.
   private. Its rollback restores 086's definition.
 - **A verified title is not a publication condition** — deliberately out of
   scope, per the brief.
+- **The marketplace `titleType` filter matches verified titles only**
+  (decided 2026-10-19, raised by the frontend): "C of O" means a C of O
+  HomeTrue verified, so a declared (`PENDING`) or `REJECTED` title of that
+  type doesn't match. Done in the query (`ListingViewSpecifications`), so
+  pages and `total` stay right. Without the filter every eligible listing is
+  returned whatever its title status. Proven red.
 
 `EstateTitlesUnderRlsIT` (restricted role + RustFS) covers all of it; the
 older ITs read titles through `testsupport.EstateTitleFixture` (SQL). Proven
