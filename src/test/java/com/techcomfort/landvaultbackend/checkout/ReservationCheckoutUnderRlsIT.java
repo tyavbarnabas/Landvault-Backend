@@ -2507,6 +2507,21 @@ class ReservationCheckoutUnderRlsIT {
 
     // --- documents: the allocation letter (changeset 095) ---
 
+    /** Accounts from before the E.164 rule keep their number: they sign in, buy, and it prints as stored. */
+    @Test
+    void aBuyerWithAnOldFormatPhoneCanStillSignInBuyAndHaveItPrinted() {
+        execute("UPDATE users SET phone = '0803 000 0000' WHERE id = '" + buyer.id() + "'");
+        buyer = loginAgain(buyer);
+        assertThat(buyer.token()).isNotBlank();
+
+        TransactionDto transaction = paidPurchase();
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        assertThat(financeAction(officer, transaction.id(), "verify", null).getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        assertThat(queryString("SELECT array_to_string(buyer_lines, '|') FROM allocation_letters WHERE transaction_id = '"
+                + transaction.id() + "'")).isEqualTo("Ada Buyer|0803 000 0000");
+    }
+
     /** AL: finance's verify issues the buyer's letter in the same step, from the approved setup. */
     @Test
     void verifyingIssuesTheBuyersAllocationLetter() {

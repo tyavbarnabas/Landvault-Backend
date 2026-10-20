@@ -6132,6 +6132,22 @@ and accept, `newPassword` for reset and change). No forced symbols or capitals.
 Proven red: the rule removed from reset and from accept, and the
 same-as-current check.
 
+## A person's phone is E.164 at sign-up (2026-10-20)
+
+`RegisterRequest.phone` must match `^\+[1-9]\d{7,14}$` (`PHONE_PATTERN`,
+`PHONE_MESSAGE` on the record): 400 `VALIDATION_ERROR`, `fieldErrors.phone`.
+Raised by the frontend, because the phone prints on allocation letters and
+"0803…", "+234…" and "803…" were all stored as typed. **Stored and printed as
+sent** — no reformatting. **Existing accounts are not migrated or refused**:
+sign-in and checkout never read the format (pinned by
+`aBuyerWithAnOldFormatPhoneCanStillSignInBuyAndHaveItPrinted`).
+
+Register is the only route where a person sets their own phone. **Open**: the
+first Executive Director's phone comes from `POST /api/admin/tenants`'
+`primaryContact.phone`, still only `@NotBlank`; applying the rule there changes
+the admin tenant wizard's contract, so it waits for a frontend change. Branch
+and onboarding phones are business contact numbers with their own looser rule.
+
 ## Change password verifies a password; reset verifies a mailbox
 
 `POST /api/auth/change-password` is authenticated and takes
