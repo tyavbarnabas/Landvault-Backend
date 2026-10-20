@@ -25,6 +25,8 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -178,6 +180,41 @@ class AuthenticationIT {
 
         ResponseEntity<AuthResponse> second = restTemplate.postForEntity("/api/auth/register", register, AuthResponse.class);
         assertThat(second.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+    }
+
+    @Test
+    void anInternationalPhoneNumberIsAcceptedAndStoredAsSent() {
+        for (String phone : List.of("+2348030000000", "+447700900123")) {
+            String email = "phone+" + UUID.randomUUID() + "@example.com";
+            ResponseEntity<AuthResponse> response = restTemplate.postForEntity("/api/auth/register", new RegisterRequest(
+                    "Ada", "Lovelace", email, phone, "correct horse battery staple 9", "NG", Currency.NGN),
+                    AuthResponse.class);
+
+            assertThat(response.getStatusCode()).as(phone).isEqualTo(HttpStatus.CREATED);
+            assertThat(jdbcTemplate.queryForObject("SELECT phone FROM users WHERE lower(email) = lower(?)",
+                    String.class, email)).isEqualTo(phone);
+        }
+    }
+
+    @Test
+    void aPhoneNumberWithoutItsCountryCodeOrWithSpacesIsRefused() {
+        List<String> refused = new ArrayList<>(List.of(
+                "0803 000 0000", "08030000000", "+234 0803 000 0000", "+234 803 000 0000",
+                "+234abc0000000", "+", "+0234803000000", "+23480", ""));
+        refused.add(null);
+        for (String phone : refused) {
+            String email = "phone+" + UUID.randomUUID() + "@example.com";
+            ResponseEntity<String> response = restTemplate.postForEntity("/api/auth/register", new RegisterRequest(
+                    "Ada", "Lovelace", email, phone, "correct horse battery staple 9", "NG", Currency.NGN),
+                    String.class);
+
+            assertThat(response.getStatusCode()).as(String.valueOf(phone)).isEqualTo(HttpStatus.BAD_REQUEST);
+            assertThat(response.getBody()).as(String.valueOf(phone))
+                    .contains("\"code\":\"VALIDATION_ERROR\"")
+                    .contains("\"phone\":\"Enter your number with its country code, e.g. +2348030000000.\"");
+            assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM users WHERE lower(email) = lower(?)",
+                    Long.class, email)).isZero();
+        }
     }
 
     @Test

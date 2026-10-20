@@ -19,6 +19,17 @@ Base path convention below: `/api/...`. Auth: `Authorization: Bearer <token>` on
 | POST | `/api/auth/2fa/disable` | `{ code }` (authenticated) | `{ message }` |
 | POST | `/api/auth/2fa/recovery-codes/regenerate` | `{ code }` (authenticated) | `{ recoveryCodes }` |
 
+### Register: the phone is E.164 (built)
+
+`RegisterInput.phone` must be **E.164** — a plus, the country code, then the
+national number without its domestic 0, no spaces: `+2348030000000`,
+`+447700900123` (`^\+[1-9]\d{7,14}$`). Anything else, or a missing phone, is
+400 `{ code: "VALIDATION_ERROR", fieldErrors: { phone: "Enter your number with
+its country code, e.g. +2348030000000." } }`. Stored exactly as sent and printed
+as stored on allocation letters. Accounts registered earlier keep whatever they
+stored; sign-in and buying are unaffected. Register is the only route where a
+person sets their own phone (no profile update exists; invitations take none).
+
 ### Refresh token: `HttpOnly` cookie only — frontend changes required (built)
 
 The refresh token is set by login, register, `/2fa/verify` and refresh as an `HttpOnly; SameSite=Strict; Path=/api/auth` cookie named `lv_refresh`, and **appears in no response body**. See AGENTS.md for why.
