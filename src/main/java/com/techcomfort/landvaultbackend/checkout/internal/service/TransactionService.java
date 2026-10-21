@@ -17,6 +17,8 @@ import com.techcomfort.landvaultbackend.checkout.internal.repository.Transaction
 import com.techcomfort.landvaultbackend.common.PageResponse;
 import com.techcomfort.landvaultbackend.common.PageResponses;
 import com.techcomfort.landvaultbackend.common.PlotIntent;
+import com.techcomfort.landvaultbackend.common.PostalAddress;
+import com.techcomfort.landvaultbackend.identity.IdentityApi;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -57,6 +59,7 @@ public class TransactionService {
     private final AuditApi auditApi;
     /** Implemented by the payments module; see the interface for why checkout doesn't read payments itself. */
     private final PaymentSummaryProvider paymentSummaries;
+    private final IdentityApi identityApi;
 
     @Transactional
     public TransactionDto create(UUID buyerUserId, CreateTransactionRequest request) {
@@ -83,6 +86,11 @@ public class TransactionService {
             throw new CheckoutException.TransactionAlreadyExists();
         });
 
+        // Copied now and never again: changing the account's address later
+        // doesn't rewrite what this purchase, or its letter, says.
+        PostalAddress address = identityApi.addressOf(buyerUserId)
+                .orElseThrow(CheckoutException.AddressRequired::new);
+
         PaymentPlan plan = PaymentPlan.fromValue(request.plan());
         validateInstallmentMonths(plan, request.installmentMonths());
         PlotIntent intent = PlotIntent.fromValue(request.intent());
@@ -104,6 +112,12 @@ public class TransactionService {
                 .intent(intent)
                 .plan(plan)
                 .installmentMonths(request.installmentMonths())
+                .buyerAddressLine1(address.line1())
+                .buyerAddressLine2(address.line2())
+                .buyerAddressCity(address.city())
+                .buyerAddressState(address.state())
+                .buyerAddressPostalCode(address.postalCode())
+                .buyerAddressCountry(address.country())
                 // The only status this module writes. Reservation does not
                 // allocate, and no payment signal is treated as confirmation
                 // — a finance-role human does that, and finance is not built.
@@ -184,6 +198,7 @@ public class TransactionService {
                 transaction.getInstallmentMonths(),
                 transaction.getStatus().getValue(),
                 transaction.getCreatedAt(),
-                payment);
+                payment,
+                transaction.buyerAddress().orElse(null));
     }
 }

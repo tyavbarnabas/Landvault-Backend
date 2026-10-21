@@ -1333,6 +1333,9 @@ class InventoryEditUnderRlsIT {
         String token = login(email);
         postJson(token, "/api/kyc", "{\"ninNumber\":\"12345678901\",\"ninFile\":{\"fileName\":\"nin.pdf\"}}");
         postJson(adminToken(), "/api/admin/kyc/" + id + "/decision", "{\"decision\":\"approved\"}");
+        assertThat(restTemplate.exchange("/api/me/address", HttpMethod.PUT, entity(token, """
+                {"line1":"1 Marina","city":"Lagos","state":"Lagos","country":"NG"}"""), String.class)
+                .getStatusCode()).isEqualTo(HttpStatus.OK);
         return new Buyer(id, email, login(email));
     }
 

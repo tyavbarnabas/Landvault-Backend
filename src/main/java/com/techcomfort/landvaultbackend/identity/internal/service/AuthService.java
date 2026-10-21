@@ -3,6 +3,7 @@ package com.techcomfort.landvaultbackend.identity.internal.service;
 import com.techcomfort.landvaultbackend.audit.AuditApi;
 import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
 import com.techcomfort.landvaultbackend.identity.BuyerKycStatusProvider;
+import com.techcomfort.landvaultbackend.identity.dto.AddressResponse;
 import com.techcomfort.landvaultbackend.identity.dto.AuthResponse;
 import com.techcomfort.landvaultbackend.identity.dto.AuthUserResponse;
 import com.techcomfort.landvaultbackend.identity.dto.ChangePasswordRequest;
@@ -566,6 +567,7 @@ public class AuthService {
                 // Null means organisation-wide, not "unknown".
                 scope.branchId(),
                 user.getPhone(),
+                user.address().map(a -> AddressResponse.of(a, user.getAddressUpdatedAt())).orElse(null),
                 user.getCountry(),
                 user.getCurrency(),
                 // The buyer's real verification status. No record at all

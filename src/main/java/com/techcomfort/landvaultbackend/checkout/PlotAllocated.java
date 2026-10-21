@@ -2,6 +2,7 @@ package com.techcomfort.landvaultbackend.checkout;
 
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.PlotIntent;
+import com.techcomfort.landvaultbackend.common.PostalAddress;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -18,6 +19,7 @@ import java.util.UUID;
  * @param plan        the wire value: outright, installment or milestone
  * @param reservedAt  when the buyer reserved the plot — the letter's "application" date
  * @param actorUserId the finance officer who allocated it
+ * @param buyerAddress the address copied onto the purchase when it was opened; null before 097
  */
 public record PlotAllocated(
         UUID transactionId,
@@ -32,6 +34,7 @@ public record PlotAllocated(
         BigDecimal totalPrice,
         Currency currency,
         Instant reservedAt,
-        UUID actorUserId
+        UUID actorUserId,
+        PostalAddress buyerAddress
 ) {
 }

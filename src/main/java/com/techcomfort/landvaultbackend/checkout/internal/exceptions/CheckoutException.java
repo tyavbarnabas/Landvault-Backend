@@ -33,6 +33,13 @@ public sealed class CheckoutException extends RuntimeException {
         }
     }
 
+    /** The buyer has no postal address yet; the purchase and its letter need one. */
+    public static final class AddressRequired extends CheckoutException {
+        public AddressRequired() {
+            super("Add your address before buying. It's printed on your allocation letter.");
+        }
+    }
+
     /** No such reservation for this buyer — also what another buyer's hold looks like. */
     public static final class ReservationNotFound extends CheckoutException {
         public ReservationNotFound() {

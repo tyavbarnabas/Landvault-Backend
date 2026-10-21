@@ -38,6 +38,8 @@ public record AuthUserResponse(
          */
         UUID branchId,
         String phone,
+        /** The buyer's postal address, or null when none has been given (see {@code PUT /api/me/address}). */
+        AddressResponse address,
         String country,
         Currency currency,
         String kycStatus,

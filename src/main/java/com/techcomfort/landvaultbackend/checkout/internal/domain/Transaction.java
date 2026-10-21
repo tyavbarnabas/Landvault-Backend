@@ -5,6 +5,7 @@ import com.techcomfort.landvaultbackend.checkout.internal.enums.TransactionStatu
 import com.techcomfort.landvaultbackend.common.AbstractEntity;
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.PlotIntent;
+import com.techcomfort.landvaultbackend.common.PostalAddress;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -18,6 +19,7 @@ import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.SQLRestriction;
 
 import java.math.BigDecimal;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -84,4 +86,34 @@ public class Transaction extends AbstractEntity {
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 24)
     private TransactionStatus status;
+
+    // The buyer's address as it stood when this purchase was opened, copied
+    // from their account and never changed afterwards — the allocation letter
+    // prints it. Null on purchases opened before changeset 097.
+    @Column(name = "buyer_address_line1", updatable = false)
+    private String buyerAddressLine1;
+
+    @Column(name = "buyer_address_line2", updatable = false)
+    private String buyerAddressLine2;
+
+    @Column(name = "buyer_address_city", updatable = false)
+    private String buyerAddressCity;
+
+    @Column(name = "buyer_address_state", updatable = false)
+    private String buyerAddressState;
+
+    @Column(name = "buyer_address_postal_code", updatable = false)
+    private String buyerAddressPostalCode;
+
+    @Column(name = "buyer_address_country", length = 2, updatable = false)
+    private String buyerAddressCountry;
+
+    /** Empty on purchases opened before addresses were collected. */
+    public Optional<PostalAddress> buyerAddress() {
+        if (buyerAddressLine1 == null) {
+            return Optional.empty();
+        }
+        return Optional.of(new PostalAddress(buyerAddressLine1, buyerAddressLine2, buyerAddressCity,
+                buyerAddressState, buyerAddressPostalCode, buyerAddressCountry));
+    }
 }

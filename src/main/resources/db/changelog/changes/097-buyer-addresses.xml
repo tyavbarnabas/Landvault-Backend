@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        A buyer's postal address. See AGENTS.md, "A buyer's address".
+
+        users carries the current one (entered once, edited in Settings);
+        transactions carries a copy taken when the purchase is opened, never
+        changed afterwards — the allocation letter prints that copy. Existing
+        accounts and purchases have none: nothing is backfilled or invented.
+
+        Personal data, treated like the phone: not encrypted, never logged or
+        put in an audit entry. The CHECKs keep an address whole: the required
+        parts are all present or all absent.
+    -->
+    <changeSet id="097-add-user-addresses" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE users
+                ADD COLUMN address_line1       varchar(200),
+                ADD COLUMN address_line2       varchar(200),
+                ADD COLUMN address_city        varchar(100),
+                ADD COLUMN address_state       varchar(100),
+                ADD COLUMN address_postal_code varchar(20),
+                ADD COLUMN address_country     varchar(2),
+                ADD COLUMN address_updated_at  timestamp(6) with time zone,
+                ADD CONSTRAINT chk_users_address_whole CHECK (
+                    (address_line1 IS NULL AND address_city IS NULL AND address_state IS NULL
+                        AND address_country IS NULL AND address_line2 IS NULL AND address_postal_code IS NULL)
+                    OR (address_line1 IS NOT NULL AND address_city IS NOT NULL AND address_state IS NOT NULL
+                        AND address_country IS NOT NULL));
+
+            COMMENT ON COLUMN users.address_line1 IS
+                'The buyer''s current postal address (line1 … country), entered once and edited in Settings. Personal data: never logged or audited. Copied onto each purchase when it is opened. See AGENTS.md, "A buyer''s address".';
+            COMMENT ON COLUMN users.address_state IS
+                'For a Nigerian address (address_country NG), the canonical state name from nigerian_states; free text elsewhere.';
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE users
+                DROP CONSTRAINT chk_users_address_whole,
+                DROP COLUMN address_line1,
+                DROP COLUMN address_line2,
+                DROP COLUMN address_city,
+                DROP COLUMN address_state,
+                DROP COLUMN address_postal_code,
+                DROP COLUMN address_country,
+                DROP COLUMN address_updated_at;
+        ]]></rollback>
+    </changeSet>
+
+    <changeSet id="097-add-transaction-buyer-addresses" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE transactions
+                ADD COLUMN buyer_address_line1       varchar(200),
+                ADD COLUMN buyer_address_line2       varchar(200),
+                ADD COLUMN buyer_address_city        varchar(100),
+                ADD COLUMN buyer_address_state       varchar(100),
+                ADD COLUMN buyer_address_postal_code varchar(20),
+                ADD COLUMN buyer_address_country     varchar(2),
+                ADD CONSTRAINT chk_transactions_buyer_address_whole CHECK (
+                    (buyer_address_line1 IS NULL AND buyer_address_city IS NULL AND buyer_address_state IS NULL
+                        AND buyer_address_country IS NULL AND buyer_address_line2 IS NULL
+                        AND buyer_address_postal_code IS NULL)
+                    OR (buyer_address_line1 IS NOT NULL AND buyer_address_city IS NOT NULL
+                        AND buyer_address_state IS NOT NULL AND buyer_address_country IS NOT NULL));
+
+            COMMENT ON COLUMN transactions.buyer_address_line1 IS
+                'The buyer''s address as it stood when this purchase was opened (line1 … country), never changed afterwards; the allocation letter prints it. Null on purchases opened before changeset 097.';
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE transactions
+                DROP CONSTRAINT chk_transactions_buyer_address_whole,
+                DROP COLUMN buyer_address_line1,
+                DROP COLUMN buyer_address_line2,
+                DROP COLUMN buyer_address_city,
+                DROP COLUMN buyer_address_state,
+                DROP COLUMN buyer_address_postal_code,
+                DROP COLUMN buyer_address_country;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>
