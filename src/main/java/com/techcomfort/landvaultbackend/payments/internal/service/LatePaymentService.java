@@ -23,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -83,9 +84,10 @@ public class LatePaymentService {
         payments.save(payment);
         auditApi.record(AuditEntryRequest.of(scope.userId(), "payment.late_allocated", "payment", payment.getId(),
                 tenantId, "Late payment " + payment.getReference() + " accepted; " + sale.plotLabel() + " allocated."));
-        tell(payment, sale, true, null);
+        Optional<AllocationLetterLookup.LetterRef> letter = letterLookup.letterFor(transactionId);
+        tell(payment, sale, true, null, letter);
         log.info("Late payment {} allocated by {}", payment.getReference(), scope.userId());
-        return FinanceDecisionDto.verified(transactionId, letterLookup.letterFor(transactionId));
+        return FinanceDecisionDto.verified(transactionId, letter);
     }
 
     /** Refund: the payment becomes owed back and joins LandVault's refunds-due list. Nothing about the plot changes. */
@@ -101,7 +103,7 @@ public class LatePaymentService {
         payments.save(payment);
         auditApi.record(AuditEntryRequest.of(scope.userId(), "payment.refund_due", "payment", payment.getId(), tenantId,
                 "Late payment " + payment.getReference() + " to be refunded: " + reason.trim()));
-        tell(payment, sale, false, reason.trim());
+        tell(payment, sale, false, reason.trim(), Optional.empty());
         return FinanceDecisionDto.of(transactionId, "refund_due");
     }
 
@@ -121,12 +123,15 @@ public class LatePaymentService {
                 .orElseThrow(PaymentException.LatePaymentNotFound::new);
     }
 
-    private void tell(Payment payment, AbandonedSale sale, boolean allocated, String reason) {
+    private void tell(Payment payment, AbandonedSale sale, boolean allocated, String reason,
+                      Optional<AllocationLetterLookup.LetterRef> letter) {
         identityApi.emailOf(payment.getBuyerUserId()).ifPresent(to -> buyerNotifier.afterCommit(
                 allocated ? "late payment allocated" : "late payment refunded",
                 () -> alerts.latePaymentResolved(new SettlementAlertSender.LatePaymentAlert(to, sale.plotLabel(),
                         sale.estateName(), payment.getAmount().toPlainString(), allocated, reason,
-                        buyerNotifier.purchaseUrl(sale.transactionId())))));
+                        buyerNotifier.purchaseUrl(sale.transactionId()),
+                        letter.map(AllocationLetterLookup.LetterRef::number).orElse(null),
+                        letter.map(l -> buyerNotifier.letterUrl(l.id())).orElse(null)))));
     }
 
     private LatePaymentDto toDto(AbandonedSale sale, Payment p) {

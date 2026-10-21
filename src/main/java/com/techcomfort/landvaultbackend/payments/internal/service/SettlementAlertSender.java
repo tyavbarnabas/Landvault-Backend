@@ -25,14 +25,20 @@ public interface SettlementAlertSender {
     record RefundProblemAlert(String to, String paymentReference, String amount, String status, String detail) {
     }
 
-    /** Late money resolved: the buyer is told either way (decided with the user). */
+    /**
+     * Late money resolved: the buyer is told either way (decided with the user).
+     * {@code letterNumber}/{@code letterUrl} name the allocation letter when allocated, otherwise null.
+     */
     record LatePaymentAlert(String to, String plotLabel, String estateName, String amount, boolean allocated,
-                            String reason, String purchaseUrl) {
+                            String reason, String purchaseUrl, String letterNumber, String letterUrl) {
     }
 
-    /** The developer's finance verified (plot allocated) or rejected (money returned) a purchase — sent to the buyer. */
+    /**
+     * The developer's finance verified (plot allocated) or rejected (money returned) a purchase — sent to the buyer.
+     * {@code letterNumber}/{@code letterUrl} name the allocation letter when verified, otherwise null.
+     */
     record PurchaseDecisionAlert(String to, String plotLabel, String estateName, String amount, boolean verified,
-                                 String reason, String purchaseUrl) {
+                                 String reason, String purchaseUrl, String letterNumber, String letterUrl) {
     }
 
     void accountSubmitted(AccountSubmittedAlert alert);

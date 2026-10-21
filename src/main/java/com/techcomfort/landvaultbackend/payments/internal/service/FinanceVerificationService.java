@@ -81,8 +81,9 @@ public class FinanceVerificationService {
             throw failure(decision);
         }
         log.info("Transaction {} verified by finance user {}; plot allocated", transactionId, scope.userId());
-        tellBuyer(row, payment.get().getAmount(), true, null);
-        return FinanceDecisionDto.verified(transactionId, letterLookup.letterFor(transactionId));
+        Optional<AllocationLetterLookup.LetterRef> letter = letterLookup.letterFor(transactionId);
+        tellBuyer(row, payment.get().getAmount(), true, null, letter);
+        return FinanceDecisionDto.verified(transactionId, letter);
     }
 
     /** The plot goes back on sale; the money is flagged for refund (decided with the user — refunds are manual for now). */
@@ -111,18 +112,21 @@ public class FinanceVerificationService {
         }
         // Only money that actually arrived is promised back.
         if (row.isPresent() && returned.signum() > 0) {
-            tellBuyer(row.get(), returned, false, reason.trim());
+            tellBuyer(row.get(), returned, false, reason.trim(), Optional.empty());
         }
         return FinanceDecisionDto.of(transactionId, "rejected");
     }
 
     /** Sent after this decision commits; a failed email leaves the decision standing. */
-    private void tellBuyer(FinanceQueueRow row, BigDecimal amount, boolean verified, String reason) {
+    private void tellBuyer(FinanceQueueRow row, BigDecimal amount, boolean verified, String reason,
+                           Optional<AllocationLetterLookup.LetterRef> letter) {
         identityApi.emailOf(row.buyerUserId()).ifPresent(to -> buyerNotifier.afterCommit(
                 verified ? "purchase verified" : "purchase rejected",
                 () -> alerts.purchaseDecided(new SettlementAlertSender.PurchaseDecisionAlert(to, row.plotLabel(),
                         row.estateName(), amount.toPlainString(), verified, reason,
-                        buyerNotifier.purchaseUrl(row.transactionId())))));
+                        buyerNotifier.purchaseUrl(row.transactionId()),
+                        letter.map(AllocationLetterLookup.LetterRef::number).orElse(null),
+                        letter.map(l -> buyerNotifier.letterUrl(l.id())).orElse(null)))));
     }
 
     private FinanceQueueItemDto toItem(FinanceQueueRow row) {
