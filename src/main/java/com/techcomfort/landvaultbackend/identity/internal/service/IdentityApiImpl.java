@@ -1,5 +1,6 @@
 package com.techcomfort.landvaultbackend.identity.internal.service;
 
+import com.techcomfort.landvaultbackend.common.PostalAddress;
 import com.techcomfort.landvaultbackend.identity.IdentityApi;
 import com.techcomfort.landvaultbackend.identity.dto.UserDto;
 import com.techcomfort.landvaultbackend.identity.internal.domain.User;
@@ -83,6 +84,11 @@ public class IdentityApiImpl implements IdentityApi {
     @Transactional(readOnly = true)
     public Optional<String> phoneOf(UUID userId) {
         return userRepository.findById(userId).map(User::getPhone).filter(p -> !p.isBlank());
+    }
+
+    @Override
+    public Optional<PostalAddress> addressOf(UUID userId) {
+        return userRepository.findById(userId).flatMap(User::address);
     }
 
     private static UserDto toDto(User user) {

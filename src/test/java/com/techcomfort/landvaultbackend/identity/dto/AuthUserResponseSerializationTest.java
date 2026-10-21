@@ -24,7 +24,7 @@ class AuthUserResponseSerializationTest {
                 "Emeka Okonkwo", "emeka@example.com",
                 // Tenant staff, organisation-wide: a real tenant, no branch.
                 UUID.fromString("00000000-0000-0000-0000-00000000dead"), null,
-                "+2348000000000", "NG", Currency.NGN,
+                "+2348000000000", null, "NG", Currency.NGN,
                 "unsubmitted", "local", true, false, false, 10L, "client", List.of("client.dashboard.view"));
 
         String json = mapper.writeValueAsString(dto);

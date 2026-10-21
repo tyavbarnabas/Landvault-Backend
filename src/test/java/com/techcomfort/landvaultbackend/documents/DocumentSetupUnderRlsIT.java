@@ -532,10 +532,10 @@ class DocumentSetupUnderRlsIT {
         assertThat(notReady.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(notReady.getBody()).contains("LETTER_NOT_READY");
 
-        // A preview works from the start, placeholders and all — and no address line, which no issued letter has.
+        // A preview works from the start, placeholders and all — the address between name and phone, as issued
+        // letters print it since changeset 097.
         assertThat(previewText(director, estate, "")).contains("SAMPLE", "[Signatory's name]",
-                "[Buyer's phone number]", "That an infrastructure fee of ₦3,500,000.00", "Page 1 of")
-                .doesNotContain("address]");
+                "[Buyer's address]\n[Buyer's phone number]", "That an infrastructure fee of ₦3,500,000.00", "Page 1 of");
 
         readyLetterhead();
         saveTerms(director, estate, List.of("That the land is used for the construction of a terrace duplex."));

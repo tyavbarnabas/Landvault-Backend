@@ -1,6 +1,7 @@
 package com.techcomfort.landvaultbackend.checkout.dto;
 
 import com.techcomfort.landvaultbackend.checkout.PaymentSummary;
+import com.techcomfort.landvaultbackend.common.PostalAddress;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.math.BigDecimal;
@@ -67,6 +68,10 @@ public record TransactionDto(
 
         Instant createdAt,
 
-        @Schema(nullable = true) PaymentSummary payment
+        @Schema(nullable = true) PaymentSummary payment,
+
+        @Schema(description = "The buyer's address as it stood when this purchase was opened; never changes "
+                + "afterwards. Null on purchases opened before addresses were collected.", nullable = true)
+        PostalAddress buyerAddress
 ) {
 }

@@ -228,7 +228,8 @@ public class CheckoutApiImpl implements CheckoutApi {
     private void publishAllocated(Transaction t, Instant reservedAt, UUID financeUserId) {
         events.publishEvent(new PlotAllocated(t.getId(), t.getBuyerUserId(), t.getPlotId(), t.getEstateId(),
                 t.getSellerTenantId(), t.getPlan().getValue(), t.getIntent(), t.getBasePrice(),
-                t.getCornerPremiumPct(), t.getTotalPrice(), t.getCurrency(), reservedAt, financeUserId));
+                t.getCornerPremiumPct(), t.getTotalPrice(), t.getCurrency(), reservedAt, financeUserId,
+                t.buyerAddress().orElse(null)));
     }
 
     /**

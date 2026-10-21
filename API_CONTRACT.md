@@ -30,6 +30,23 @@ as stored on allocation letters. Accounts registered earlier keep whatever they
 stored; sign-in and buying are unaffected. Register is the only route where a
 person sets their own phone (no profile update exists; invitations take none).
 
+### The buyer's address (built, changeset 097)
+
+| Method | Path | Request | Response |
+|---|---|---|---|
+| GET | `/api/me/address` | — | `Address`, or 204 when none yet |
+| PUT | `/api/me/address` | `{ line1, line2?, city, state, postalCode?, country }` | `Address` |
+
+Both need `client.checkout.reserve`. `Address` is `{ line1, line2, city, state,
+postalCode, country, countryName, updatedAt }`; the sign-in, register, 2FA-verify
+and refresh `user` carries it as **`address`** (null when none). For `country:
+"NG"` the state must be one of the 36 states or the FCT ("Lagos State", "FCT" and
+"Abuja" are accepted) and comes back as the canonical name; otherwise 400
+`UNKNOWN_STATE` with `fieldErrors.state`. Other countries' states are free text.
+An unknown two-letter code is 400 `UNKNOWN_COUNTRY`; missing parts are
+`VALIDATION_ERROR` with `fieldErrors`. Sign-up doesn't ask for it: checkout does
+(see `ADDRESS_REQUIRED` under Checkout). It prints on the allocation letter.
+
 ### Refresh token: `HttpOnly` cookie only — frontend changes required (built)
 
 The refresh token is set by login, register, `/2fa/verify` and refresh as an `HttpOnly; SameSite=Strict; Path=/api/auth` cookie named `lv_refresh`, and **appears in no response body**. See AGENTS.md for why.
@@ -377,6 +394,12 @@ WishlistItem {
 | POST | `/api/checkout/transactions` | `{ reservationId, intent, plan, installmentMonths? }` | `Transaction` |
 | GET | `/api/checkout/transactions/mine?cursor&limit` | — | `Page<Transaction>` — the buyer's own, newest first (limit default 20, max 100) |
 | GET | `/api/checkout/transactions/{id}` | — | `Transaction` (another buyer's is 404) |
+
+**Opening a purchase needs an address**: 409 `ADDRESS_REQUIRED` until the buyer has saved one
+(`PUT /api/me/address`) — route them there and back, like `KYC_REQUIRED`. The address is copied
+onto the purchase as **`buyerAddress`** (`{ line1, line2, city, state, postalCode, country }`) and
+never changes afterwards; it's what the allocation letter prints. Null on purchases opened before
+addresses were collected.
 
 Paying, confirming and finance verification are **not** checkout routes — see "Payments" below
 (`POST /api/transactions/{id}/payments`, `POST /api/payments/{reference}/verify`, and the developer

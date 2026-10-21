@@ -1,5 +1,6 @@
 package com.techcomfort.landvaultbackend.identity;
 
+import com.techcomfort.landvaultbackend.common.PostalAddress;
 import com.techcomfort.landvaultbackend.identity.dto.UserDto;
 
 import java.util.List;
@@ -69,4 +70,10 @@ public interface IdentityApi {
 
     /** The phone number on the account, if one was given — printed on the buyer's allocation letter. */
     Optional<String> phoneOf(UUID userId);
+
+    /**
+     * The buyer's current postal address, empty when none has been given.
+     * Checkout copies it onto a purchase when the purchase is opened.
+     */
+    Optional<PostalAddress> addressOf(UUID userId);
 }

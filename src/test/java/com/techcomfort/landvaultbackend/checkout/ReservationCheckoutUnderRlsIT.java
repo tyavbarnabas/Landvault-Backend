@@ -127,6 +127,10 @@ class ReservationCheckoutUnderRlsIT {
     private static final String APP_ROLE_PASSWORD = "checkout-it-password";
     private static final String ADMIN_EMAIL = "admin+" + UUID.randomUUID() + "@example.com";
     private static final String PASSWORD = "correct horse battery staple 9";
+    private static final String LAGOS_ADDRESS = """
+            {"line1":"12 Adeola Odeku Street","city":"Ikeja","state":"Lagos State","country":"NG"}""";
+    /** How {@link #LAGOS_ADDRESS} prints on a letter. */
+    private static final String LAGOS_LINES = "12 Adeola Odeku Street|Ikeja, Lagos|Nigeria";
 
     private static final BigDecimal TIER_PRICE = new BigDecimal("20000000.0000");
     private static final BigDecimal CORNER_PREMIUM_PCT = new BigDecimal("10.00");
@@ -2533,7 +2537,90 @@ class ReservationCheckoutUnderRlsIT {
         assertThat(financeAction(officer, transaction.id(), "verify", null).getStatusCode()).isEqualTo(HttpStatus.OK);
 
         assertThat(queryString("SELECT array_to_string(buyer_lines, '|') FROM allocation_letters WHERE transaction_id = '"
-                + transaction.id() + "'")).isEqualTo("Ada Buyer|0803 000 0000");
+                + transaction.id() + "'")).isEqualTo("Ada Buyer|" + LAGOS_LINES + "|0803 000 0000");
+    }
+
+    // --- the buyer's address (changeset 097) ---
+
+    @Test
+    void aBuyerWithoutAnAddressCannotOpenAPurchase() {
+        execute("UPDATE users SET address_line1 = NULL, address_line2 = NULL, address_city = NULL, "
+                + "address_state = NULL, address_postal_code = NULL, address_country = NULL WHERE id = '"
+                + buyer.id() + "'");
+        ReservationDto reservation = reserve(buyer, plotId);
+
+        ResponseEntity<String> refused = restTemplate.exchange("/api/checkout/transactions", HttpMethod.POST,
+                entity(buyer.token(), body(reservation.id(), "outright", null)), String.class);
+
+        assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(refused.getBody()).contains("ADDRESS_REQUIRED");
+        assertThat(queryString("SELECT count(*) FROM transactions WHERE reservation_id = '" + reservation.id() + "'"))
+                .isEqualTo("0");
+        assertThat(reservationStatus(reservation.id())).as("the hold is untouched").isEqualTo("ACTIVE");
+    }
+
+    @Test
+    void theAddressIsCheckedStoredInItsCanonicalFormAndNeverAudited() {
+        Buyer newBuyer = registerBuyer();
+        assertThat(get("/api/me/address", newBuyer.token(), String.class).getStatusCode())
+                .isEqualTo(HttpStatus.NO_CONTENT);
+
+        ResponseEntity<String> badState = putAddress(newBuyer, """
+                {"line1":"1 Marina","city":"Lagos","state":"Lagoss","country":"NG"}""");
+        assertThat(badState.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(badState.getBody()).contains("UNKNOWN_STATE", "\"state\"");
+        assertThat(putAddress(newBuyer, """
+                {"line1":"1 Marina","city":"Lagos","state":"Lagos","country":"XX"}""").getBody())
+                .contains("UNKNOWN_COUNTRY");
+        assertThat(putAddress(newBuyer, """
+                {"line1":"1 Marina","state":"Lagos","country":"NG"}""").getBody())
+                .contains("VALIDATION_ERROR", "\"city\"");
+
+        ResponseEntity<String> saved = putAddress(newBuyer, """
+                {"line1":" 1 Marina ","line2":"","city":"Lagos Island","state":"lagos state","country":"ng"}""");
+        assertThat(saved.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(saved.getBody()).contains("\"line1\":\"1 Marina\"", "\"line2\":null", "\"state\":\"Lagos\"",
+                "\"country\":\"NG\"", "\"countryName\":\"Nigeria\"");
+        assertThat(putAddress(newBuyer, """
+                {"line1":"1 Marina","city":"Lagos Island","state":"Lagos","country":"NG"}""").getStatusCode())
+                .as("the same address again").isEqualTo(HttpStatus.OK);
+
+        ResponseEntity<String> abroad = putAddress(newBuyer, """
+                {"line1":"10 Downing Street","city":"London","state":"Greater London","postalCode":"SW1A 2AA",\
+                "country":"GB"}""");
+        assertThat(abroad.getBody()).as("free text outside Nigeria")
+                .contains("\"state\":\"Greater London\"", "\"countryName\":\"United Kingdom\"");
+
+        ResponseEntity<String> signIn = restTemplate.postForEntity("/api/auth/login",
+                new LoginRequest(newBuyer.email(), PASSWORD), String.class);
+        assertThat(signIn.getBody()).contains("\"address\":{", "10 Downing Street");
+
+        String audit = "FROM audit_log_entries WHERE action = 'user.address_updated' AND target_id = '"
+                + newBuyer.id() + "'";
+        assertThat(queryString("SELECT count(*) " + audit)).as("added, changed; the repeat records nothing")
+                .isEqualTo("2");
+        assertThat(queryString("SELECT string_agg(detail, '|') " + audit))
+                .doesNotContain("Marina", "Downing", "London");
+    }
+
+    @Test
+    void thePurchaseKeepsTheAddressItWasOpenedWithAndTheLetterPrintsIt() {
+        TransactionDto transaction = outrightTransaction();
+        assertThat(putAddress(buyer, """
+                {"line1":"5 New Road","city":"Abuja","state":"FCT","country":"NG"}""").getStatusCode())
+                .isEqualTo(HttpStatus.OK);
+
+        assertThat(get("/api/checkout/transactions/" + transaction.id(), buyer.token(), String.class).getBody())
+                .as("the copy taken when it was opened").contains("12 Adeola Odeku Street").doesNotContain("New Road");
+
+        String reference = startPayment(transaction);
+        paystackSays(reference, "success", 2_000_000_000L, "NGN", "Approved");
+        assertThat(confirm(buyer, reference).getBody()).contains("\"status\":\"succeeded\"");
+        assertThat(financeAction(seller.token(), transaction.id(), "verify", null).getStatusCode())
+                .isEqualTo(HttpStatus.OK);
+
+        assertThat(queryString("SELECT array_to_string(buyer_lines, '|') FROM allocation_letters WHERE transaction_id = '"
+                + transaction.id() + "'")).isEqualTo("Ada Buyer|" + LAGOS_LINES + "|+2348000000000");
     }
 
     /** AL: finance's verify issues the buyer's letter in the same step, from the approved setup. */
@@ -2699,7 +2786,12 @@ class ReservationCheckoutUnderRlsIT {
                 "{\"ninNumber\":\"12345678901\",\"ninFile\":{\"fileName\":\"nin.pdf\"}}", String.class);
         postJson(adminToken(), "/api/admin/kyc/" + newBuyer.id() + "/decision",
                 "{\"decision\":\"approved\"}", String.class);
+        assertThat(putAddress(newBuyer, LAGOS_ADDRESS).getStatusCode()).isEqualTo(HttpStatus.OK);
         return loginAgain(newBuyer);
+    }
+
+    private ResponseEntity<String> putAddress(Buyer who, String json) {
+        return restTemplate.exchange("/api/me/address", HttpMethod.PUT, entity(who.token(), json), String.class);
     }
 
     private Buyer registerBuyer() {

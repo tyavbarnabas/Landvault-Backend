@@ -47,6 +47,13 @@ public class CheckoutExceptionHandler {
                 .body(ErrorResponse.of(ex.getMessage(), "KYC_REQUIRED"));
     }
 
+    /** Its own code, like KYC_REQUIRED, so the frontend can send the buyer to enter an address. */
+    @ExceptionHandler(CheckoutException.AddressRequired.class)
+    public ResponseEntity<ErrorResponse> handleAddressRequired(CheckoutException.AddressRequired ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of(ex.getMessage(), "ADDRESS_REQUIRED"));
+    }
+
     @ExceptionHandler(CheckoutException.ReservationNotFound.class)
     public ResponseEntity<ErrorResponse> handleReservationNotFound(CheckoutException.ReservationNotFound ex) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)

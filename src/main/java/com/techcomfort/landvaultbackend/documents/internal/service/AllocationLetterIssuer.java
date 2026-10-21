@@ -62,6 +62,11 @@ public class AllocationLetterIssuer {
         String buyerName = identityApi.fullNameOf(event.buyerUserId())
                 .orElseThrow(() -> new IllegalStateException("No buyer " + event.buyerUserId()));
         List<String> buyerLines = new ArrayList<>(List.of(buyerName));
+        // The copy taken when the purchase was opened, never the account's
+        // current address. None on purchases from before addresses existed.
+        if (event.buyerAddress() != null) {
+            buyerLines.addAll(event.buyerAddress().printedLines());
+        }
         identityApi.phoneOf(event.buyerUserId()).ifPresent(buyerLines::add);
 
         Instant issuedAt = Instant.now();

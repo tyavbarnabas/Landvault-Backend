@@ -114,7 +114,7 @@ public class LetterApprovalService {
                         p.website()),
                 bytes(p.logo()), bytes(p.signature()), bytes(p.seal()),
                 now,
-                List.of("[Buyer's full name]", "[Buyer's phone number]"),
+                List.of("[Buyer's full name]", "[Buyer's address]", "[Buyer's phone number]"),
                 "Dear [Buyer's name],",
                 s.facts().name(),
                 location(s.facts()),

@@ -6059,11 +6059,12 @@ commit or roll back together. **Never make it asynchronous or after-commit.**
 - **Fill-ins**: `{buyerName}` the registered name; `{plot}` "Block A, Plot 7 of
   about 500 sqm" (size left out for a unit with none); `{applicationDate}` the
   day the reservation was made (carried on `PlotAllocated.reservedAt`);
-  `{allocationDate}` the day finance verified. Buyer lines: name, then phone
-  if the account has one (`IdentityApi.phoneOf`). **No address** — nothing
-  collects one yet; collecting it at checkout is a separate decision. The
-  preview shows no address placeholder either (removed after the walkthrough,
-  decided with the user), so it matches the letters actually issued.
+  `{allocationDate}` the day finance verified. Buyer lines: name, then the
+  address copied onto the purchase when it was opened (changeset 097, see "A
+  buyer's address"), then phone if the account has one
+  (`IdentityApi.phoneOf`). Purchases opened before 097 have no copy, and their
+  letters print no address rather than a later one. The preview shows
+  `[Buyer's address]` between name and phone.
 - **A condition repeated word for word prints once** (ignoring case, spacing
   and a final full stop), where it first appears — `LetterClauses`, used by
   the preview and the issued letter alike, so the two never differ. Found in
@@ -6156,6 +6157,37 @@ first Executive Director's phone comes from `POST /api/admin/tenants`'
 `primaryContact.phone`, still only `@NotBlank`; applying the rule there changes
 the admin tenant wizard's contract, so it waits for a frontend change. Branch
 and onboarding phones are business contact numbers with their own looser rule.
+
+## A buyer's address (changeset 097)
+
+Built 2026-10-21, decided with the user, so the allocation letter can name
+where the buyer lives. Sign-up still asks only for the country of residence.
+
+- **On the account, copied onto each purchase.** `PUT /api/me/address`
+  (`client.checkout.reserve`) replaces the whole address; `GET` returns it or
+  204; the sign-in/refresh user carries it as `address` (null when none).
+  `POST /api/checkout/transactions` refuses with 409 **`ADDRESS_REQUIRED`**
+  until there is one (like `KYC_REQUIRED`, its own code so the frontend can
+  route), and copies it onto `transactions.buyer_address_*`, never changed
+  afterwards. `PlotAllocated.buyerAddress` carries that copy to the letter, so
+  changing the account's address later never rewrites a purchase or letter.
+  Proven red: a purchase opened with no address, and the letter printing the
+  account's current address instead of the copy.
+- **Structured** (`common.PostalAddress`): `line1`, optional `line2`, `city`,
+  `state`, optional `postalCode`, `country` (ISO alpha-2, may differ from the
+  country of residence). For `NG` the state goes through
+  `common.NigerianStates` and is stored as the canonical name
+  (`UNKNOWN_STATE` otherwise); elsewhere it's free text. An unknown country
+  code is `UNKNOWN_COUNTRY`. Printed as street (+ line2), "town, state
+  [postcode]" (the state once when it equals the town), then the country's
+  English name. A CHECK keeps each address whole.
+- **Treated like the phone** (decided with the user): the buyer, their
+  checkout and their letter only — not the finance queue, the marketplace,
+  the verify page or admin lists. Not encrypted. Never logged; the audit entry
+  `user.address_updated` says only "Address added." / "Address changed." The
+  same address again is a no-op with no audit entry.
+- **Nothing backfilled**: existing accounts have no address and are asked at
+  their next purchase; existing purchases keep none.
 
 ## Change password verifies a password; reset verifies a mailbox
 

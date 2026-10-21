@@ -2,6 +2,7 @@ package com.techcomfort.landvaultbackend.identity.internal.domain;
 
 import com.techcomfort.landvaultbackend.common.AbstractEntity;
 import com.techcomfort.landvaultbackend.common.Currency;
+import com.techcomfort.landvaultbackend.common.PostalAddress;
 import com.techcomfort.landvaultbackend.identity.internal.enums.UserStatus;
 import com.techcomfort.landvaultbackend.identity.internal.security.TwoFaSecretConverter;
 import jakarta.persistence.*;
@@ -14,6 +15,7 @@ import org.hibernate.annotations.SQLRestriction;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * An account, shared by every kind of platform participant (buyer, tenant
@@ -59,6 +61,30 @@ public class User extends AbstractEntity {
 
     @Column(name = "country", nullable = false, length = 2)
     private String country;
+
+    // The buyer's postal address: all of line1/city/state/country or none
+    // (a CHECK). Personal data treated like the phone — never logged or put
+    // in an audit entry. See AGENTS.md, "A buyer's address".
+    @Column(name = "address_line1")
+    private String addressLine1;
+
+    @Column(name = "address_line2")
+    private String addressLine2;
+
+    @Column(name = "address_city")
+    private String addressCity;
+
+    @Column(name = "address_state")
+    private String addressState;
+
+    @Column(name = "address_postal_code")
+    private String addressPostalCode;
+
+    @Column(name = "address_country", length = 2)
+    private String addressCountry;
+
+    @Column(name = "address_updated_at")
+    private Instant addressUpdatedAt;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "currency", nullable = false, length = 3)
@@ -139,5 +165,24 @@ public class User extends AbstractEntity {
         if (email != null) {
             email = email.trim().toLowerCase();
         }
+    }
+
+    /** Empty when the account has no address yet. */
+    public Optional<PostalAddress> address() {
+        if (addressLine1 == null) {
+            return Optional.empty();
+        }
+        return Optional.of(new PostalAddress(addressLine1, addressLine2, addressCity, addressState,
+                addressPostalCode, addressCountry));
+    }
+
+    public void replaceAddress(PostalAddress address, Instant at) {
+        addressLine1 = address.line1();
+        addressLine2 = address.line2();
+        addressCity = address.city();
+        addressState = address.state();
+        addressPostalCode = address.postalCode();
+        addressCountry = address.country();
+        addressUpdatedAt = at;
     }
 }
