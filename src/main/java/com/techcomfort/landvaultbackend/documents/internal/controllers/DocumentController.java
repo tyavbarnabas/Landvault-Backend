@@ -20,6 +20,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -139,6 +141,64 @@ public class DocumentController {
     @PreAuthorize("hasAuthority('client.documents.view')")
     public ResponseEntity<byte[]> allocationLetterJpeg(@PathVariable UUID id) {
         return file(service.allocationLetterJpeg(currentUserId(), id), MediaType.IMAGE_JPEG);
+    }
+
+    @Operation(summary = "One of my offer letters",
+            description = """
+                    Requires `client.documents.view`. Own letters only (404 otherwise). `status` is `issued`, \
+                    `accepted` or `lapsed`; `acceptedAt` says when it was accepted.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200"),
+            @ApiResponse(responseCode = "404", description = "`DOCUMENT_NOT_FOUND`", content = @Content)})
+    @GetMapping("/api/documents/offer-letters/{id}")
+    @PreAuthorize("hasAuthority('client.documents.view')")
+    public ResponseEntity<DocumentDto> offerLetter(@PathVariable UUID id) {
+        return ResponseEntity.ok(service.offerLetter(currentUserId(), id));
+    }
+
+    @Operation(summary = "Accept an offer letter",
+            description = """
+                    Requires `client.checkout.reserve`. Accepts the offer letter named in the path — the buyer's own, \
+                    while its purchase is waiting for payment. Payment is refused (`OFFER_NOT_ACCEPTED`) until \
+                    this is done. Who and when come from the session, with the browser string; accepting again \
+                    returns the same answer. Accepting gives no right to the plot and doesn't extend the hold.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "The offer letter, now `accepted`"),
+            @ApiResponse(responseCode = "404", description = "`DOCUMENT_NOT_FOUND`", content = @Content),
+            @ApiResponse(responseCode = "409", description = "`OFFER_NOT_OPEN`: the purchase is no longer waiting "
+                    + "for payment", content = @Content)})
+    @PostMapping("/api/documents/offer-letters/{id}/accept")
+    @PreAuthorize("hasAuthority('client.checkout.reserve')")
+    public ResponseEntity<DocumentDto> acceptOffer(@PathVariable UUID id,
+                                                   @RequestHeader(value = HttpHeaders.USER_AGENT, required = false)
+                                                   String userAgent) {
+        return ResponseEntity.ok(service.acceptOffer(currentUserId(), id, userAgent));
+    }
+
+    @Operation(summary = "Download an offer letter as PDF",
+            description = """
+                    Requires `client.documents.view`. The developer's letterhead and signature, HomeTrue's wording: \
+                    the price, the total commitment, every declared fee and term, and a QR code anyone can scan to \
+                    check it is genuine. Once accepted it says when. Sent as an attachment named \
+                    `HomeTrue-<number>.pdf`.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", content = @Content(mediaType = MediaType.APPLICATION_PDF_VALUE)),
+            @ApiResponse(responseCode = "404", description = "`DOCUMENT_NOT_FOUND`", content = @Content)})
+    @GetMapping(value = "/api/documents/offer-letters/{id}/pdf", produces = MediaType.APPLICATION_PDF_VALUE)
+    @PreAuthorize("hasAuthority('client.documents.view')")
+    public ResponseEntity<byte[]> offerLetterPdf(@PathVariable UUID id) {
+        return file(service.offerLetterPdf(currentUserId(), id), MediaType.APPLICATION_PDF);
+    }
+
+    @Operation(summary = "Download an offer letter as JPEG",
+            description = "Requires `client.documents.view`. Every page stacked into one image, for sharing.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", content = @Content(mediaType = MediaType.IMAGE_JPEG_VALUE)),
+            @ApiResponse(responseCode = "404", description = "`DOCUMENT_NOT_FOUND`", content = @Content)})
+    @GetMapping(value = "/api/documents/offer-letters/{id}/jpeg", produces = MediaType.IMAGE_JPEG_VALUE)
+    @PreAuthorize("hasAuthority('client.documents.view')")
+    public ResponseEntity<byte[]> offerLetterJpeg(@PathVariable UUID id) {
+        return file(service.offerLetterJpeg(currentUserId(), id), MediaType.IMAGE_JPEG);
     }
 
     private static ResponseEntity<byte[]> file(DocumentService.RenderedDocument document, MediaType type) {

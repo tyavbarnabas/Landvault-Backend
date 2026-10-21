@@ -10,15 +10,17 @@ import java.util.UUID;
 @Schema(name = "Document")
 public record DocumentDto(
         UUID id,
-        @Schema(description = "`receipt` or `allocation_letter` (`offer_letter` later)") String type,
+        @Schema(description = "`receipt`, `allocation_letter` or `offer_letter`") String type,
         @Schema(description = "e.g. `Receipt HT-RCT-2026-000123 — Block A, Plot 7, Double King Deluxe Estate`")
         String title,
         @Schema(description = "The printed number, e.g. `HT-RCT-2026-000123`.") String number,
         @Schema(description = "The day it was issued, in Nigerian time.") LocalDate date,
         Instant issuedAt,
         @Schema(description = """
-                `valid`. (`void` and `superseded` are for reissued letters.) A refunded payment's receipt stays \
-                valid — the money did arrive — and carries `refundedAt`.""") String status,
+                Receipts and allocation letters: `valid`. (`void` and `superseded` are for reissued letters.) A \
+                refunded payment's receipt stays valid — the money did arrive — and carries `refundedAt`. Offer \
+                letters: `issued` (waiting for the buyer), `accepted`, or `lapsed` (the purchase was rejected or \
+                abandoned).""") String status,
         @Schema(description = "The verification code as printed, e.g. `3F9A-1C77-B02E-55D1`.") String qrCode,
         @Schema(description = "What the QR code opens: the public verify page for this document.") String verifyUrl,
         @Schema(description = """
@@ -30,6 +32,8 @@ public record DocumentDto(
         @Schema(description = "When the payment was returned to the buyer; null if it wasn't.", nullable = true)
         Instant refundedAt,
         @Schema(description = "Download the PDF (the official copy).") String pdfUrl,
-        @Schema(description = "Download the same page as a JPEG, for sharing.") String jpegUrl
+        @Schema(description = "Download the same page as a JPEG, for sharing.") String jpegUrl,
+        @Schema(description = "Offer letters: when the buyer accepted it; null otherwise.", nullable = true)
+        Instant acceptedAt
 ) {
 }

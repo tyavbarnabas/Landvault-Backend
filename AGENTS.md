@@ -6082,6 +6082,8 @@ commit or roll back together. **Never make it asynchronous or after-commit.**
   for letters too (`documentType: allocation_letter`, company, estate, plot,
   initials — no amount, no name).
 - Audit: `allocation_letter.issued`, actor the finance officer.
+- **Its conditions come from the accepted offer** when there is one (changeset
+  098, see "Documents: the offer letter"), not the estate's current ones.
 - **Finance is told which letter it issued**: verify and late-money allocate
   return `allocationLetterId` and `allocationLetterNumber` (null on reject and
   refund). Payments reads them through `payments.AllocationLetterLookup`,
@@ -6099,6 +6101,59 @@ live walkthrough.
 **Not built**: a developer-side view of issued letters (the buyer's "is yours"
 email now links the letter — see "Buyers are emailed about every decision"), and reissuing/voiding a letter (a reissue will be a new row
 pointing at the old one).
+
+## Documents: the offer letter (changeset 098)
+
+Built 2026-10-21, decided with the user (A, A, A, A). The FD-5 acknowledgement
+the fee-disclosure work left for checkout: nothing recorded that a buyer saw the
+declared costs before paying.
+
+- **Issued at "Proceed to buy"** (`POST /api/checkout/transactions`), in the
+  same transaction, before any money — the Nigerian order: application, offer,
+  acceptance, payment, allocation. Checkout calls `checkout.OfferLetters`
+  (implemented by documents' `OfferLetterIssuer`, MANDATORY — the **tenth**
+  inverted interface; an interface rather than an event so an estate with no
+  approved, current letter refuses the purchase with 409 `LETTER_NOT_APPROVED`
+  and nothing is opened). The response carries `offer`.
+- **The developer's letterhead, HomeTrue's wording** (`OfferClauses`, fixed,
+  not editable): opening, then the price (figures and words, corner premium
+  named) and the total commitment (`CommitmentCalculator`: one-off fees in, recurring
+  and other-currency ones named outside), then exactly the clauses the
+  allocation letter would print (`LetterClauses`), then a closing saying it's
+  not an allocation and lapses. Same renderer, titled "Offer letter for…".
+- **Read under the selling company's scope.** The buyer's request has no tenant
+  scope and the setup is RLS-policied, so `SellerLetterSetup` sets the seller's
+  `TenantScope` and reads `LetterApprovalService.issuable` in its own
+  `REQUIRES_NEW` read-only transaction (a separate bean), restoring the
+  buyer's scope after — the webhook's narrow-scope pattern. The buyer's own
+  transaction never gains it. **Don't fold it into the outer transaction**:
+  `SET LOCAL` is taken when a transaction begins, so it would read nothing.
+- **Accepting** (`POST /api/documents/offer-letters/{id}/accept`,
+  `client.checkout.reserve`): names the letter; the buyer's own; only while the
+  purchase is `pending_payment` (`OFFER_NOT_OPEN`); who from the session, when,
+  and the browser string (255 max) in `offer_letter_acceptances` — its own
+  append-only table, one per letter, serialized by an advisory lock (the tables
+  can't be updated, so no row lock). Again is a no-op. Audit
+  `offer_letter.issued` (actor the buyer), `offer_letter.accepted`.
+- **Payment waits for it**: `PaymentService.start` refuses 409
+  `OFFER_NOT_ACCEPTED` (via `CheckoutApi.offerFor`). Purchases opened before 098
+  have no offer and stay payable.
+- **No right to the land**: accepting doesn't extend the hold. **Lapsed** is
+  derived, never stored — the purchase is `rejected` or `abandoned`. Late money
+  allocated later reads `accepted` again.
+- **The offer fixes the terms** (decision 4): `AllocationLetterIssuer` copies the
+  accepted offer's clauses and its terms/fees/refund/default versions, and sets
+  `allocation_letters.offer_letter_id`; only letterhead, signatory and template
+  wording follow the current setup. Developers' later changes apply to new
+  buyers — the reservation price rule, applied to terms.
+- Like receipts: buyer-owned, not RLS-policied, a stored copy of everything
+  printed, UPDATE/DELETE/TRUNCATE revoked, PDF/JPEG drawn on demand, its own
+  number (`HT-OFR-`) and verification code; the verify page shows its status.
+
+Proven red: payment without acceptance, the allocation letter using current
+terms, and issuing with the setup read in the buyer's scope. **Not built**:
+emailing the offer, a validity period (it lasts as long as the purchase),
+developer-written offer wording.
 
 ## One password rule, wherever a password is set (`PasswordPolicy`)
 

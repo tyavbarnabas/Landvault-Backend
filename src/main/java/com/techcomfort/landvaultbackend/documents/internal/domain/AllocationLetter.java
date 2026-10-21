@@ -152,4 +152,8 @@ public class AllocationLetter extends AbstractAppendOnlyEntity {
 
     @Column(name = "default_terms_version", updatable = false)
     private Integer defaultTermsVersion;
+
+    /** The accepted offer whose terms this letter copies; null for sales opened before offers (098). */
+    @Column(name = "offer_letter_id", updatable = false)
+    private UUID offerLetterId;
 }
