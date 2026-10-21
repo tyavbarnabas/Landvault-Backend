@@ -958,6 +958,12 @@ Every one links to **`{frontend origin}/purchases/{transactionId}`**, the origin
 purchase (with its payment and refund) after sign-in. Sent only after the decision commits; a mail
 failure never fails the request.
 
+The two "is yours" emails (finance verify, late money allocated) also name the allocation letter —
+"Your allocation letter, HT-ALC-2026-000012, is ready" — and link to
+**`{frontend origin}/documents?letter={allocationLetterId}`**. Today that opens the document vault
+(the letter is listed there); the vault may use `letter` to open that letter straight away
+(`GET /api/documents/allocation-letters/{id}`, own only). Rejections and refunds carry no letter.
+
 
 ## Onboarding requests — **built** (no frontend service yet)
 

@@ -129,11 +129,12 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
 
                     Your payment of NGN %s arrived after your reservation had ended. The plot was still \
                     available, so it has been allocated to you: %s, %s.
-
+                    %s
                     See your purchase:
 
                         %s
-                    """.formatted(alert.amount(), alert.plotLabel(), alert.estateName(), alert.purchaseUrl()));
+                    """.formatted(alert.amount(), alert.plotLabel(), alert.estateName(),
+                    letterParagraph(alert.letterNumber(), alert.letterUrl()), alert.purchaseUrl()));
         } else {
             message.setSubject("Your payment for " + alert.plotLabel() + " is being returned");
             message.setText("""
@@ -164,11 +165,12 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
 
                     The developer has verified your payment of NGN %s, and the plot is allocated to you: \
                     %s, %s.
-
+                    %s
                     See your purchase:
 
                         %s
-                    """.formatted(alert.amount(), alert.plotLabel(), alert.estateName(), alert.purchaseUrl()));
+                    """.formatted(alert.amount(), alert.plotLabel(), alert.estateName(),
+                    letterParagraph(alert.letterNumber(), alert.letterUrl()), alert.purchaseUrl()));
         } else {
             message.setSubject("Your payment for " + alert.plotLabel() + " is being returned");
             message.setText("""
@@ -184,5 +186,18 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
         }
         mailSender.send(message);
         log.info("Purchase decision delivered to a buyer");
+    }
+
+    /** Names the allocation letter and links to it; a blank line when there is none (never expected once allocated). */
+    private static String letterParagraph(String letterNumber, String letterUrl) {
+        if (letterUrl == null) {
+            return "";
+        }
+        return """
+
+                Your allocation letter, %s, is ready. Sign in to view and download it:
+
+                    %s
+                """.formatted(letterNumber, letterUrl);
     }
 }

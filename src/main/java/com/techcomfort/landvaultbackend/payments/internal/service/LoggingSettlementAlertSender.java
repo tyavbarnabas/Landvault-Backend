@@ -35,11 +35,13 @@ public class LoggingSettlementAlertSender implements SettlementAlertSender {
 
     @Override
     public void latePaymentResolved(LatePaymentAlert alert) {
-        log.info("[TEST-ONLY late payment outcome] to={} allocated={}", alert.to(), alert.allocated());
+        log.info("[TEST-ONLY late payment outcome] to={} allocated={} letter={}", alert.to(), alert.allocated(),
+                alert.letterNumber());
     }
 
     @Override
     public void purchaseDecided(PurchaseDecisionAlert alert) {
-        log.info("[TEST-ONLY purchase decision] to={} verified={}", alert.to(), alert.verified());
+        log.info("[TEST-ONLY purchase decision] to={} verified={} letter={}", alert.to(), alert.verified(),
+                alert.letterNumber());
     }
 }

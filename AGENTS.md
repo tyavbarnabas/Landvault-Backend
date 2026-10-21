@@ -5295,6 +5295,16 @@ both late-money ones, and "needs your bank account") links to
 Proven red: the verify email removed, and the catch removed (the rejection's
 request failed though the email was all that broke).
 
+**The "is yours" emails name the allocation letter** (2026-10-20, decided with
+the user): finance verify and late-money allocate add "Your allocation letter,
+HT-ALC-…, is ready" and a link to `{origin}/documents?letter={letterId}`
+(`BuyerNotifier.letterUrl`). The frontend has no single-letter page and the PDF
+needs the buyer signed in, so the link opens the document vault, which works
+today and can later open the named letter. The public verify page was rejected
+as the target: it shows initials only. The letter is read in the deciding
+transaction (issued just before, by the synchronous listener); rejections and
+refunds carry none. Proven red by leaving the letter out of the verify email.
+
 ## File storage (`storage` module), step 1
 
 Uploaded files — estate photos first, then KYC, tenant and title documents —
@@ -6085,9 +6095,8 @@ and the view's term. The PDF download isn't covered by an IT (these tests run
 no storage; the renderer has `AllocationLetterRendererTest`) — check it in the
 live walkthrough.
 
-**Not built**: emailing the buyer the letter link (the "your plot is yours"
-email goes out already; it could link the letter), a developer-side view of
-issued letters, and reissuing/voiding a letter (a reissue will be a new row
+**Not built**: a developer-side view of issued letters (the buyer's "is yours"
+email now links the letter — see "Buyers are emailed about every decision"), and reissuing/voiding a letter (a reissue will be a new row
 pointing at the old one).
 
 ## One password rule, wherever a password is set (`PasswordPolicy`)

@@ -12,7 +12,7 @@ import java.util.UUID;
 /**
  * Buyer emails about a decision: sent only once the decision has committed,
  * and a failed email never undoes or fails it. Every one links to the
- * purchase, on the frontend whose origin {@code PAYSTACK_CALLBACK_URL} names.
+ * purchase (and an allocation to its letter), on the frontend whose origin {@code PAYSTACK_CALLBACK_URL} names.
  * See AGENTS.md, "Buyers are emailed about every decision".
  */
 @Slf4j
@@ -28,6 +28,11 @@ public class BuyerNotifier {
 
     public String purchaseUrl(UUID transactionId) {
         return frontendBase + "/purchases/" + transactionId;
+    }
+
+    /** The document vault, naming the letter so the page can open it; the PDF itself needs the buyer signed in. */
+    public String letterUrl(UUID letterId) {
+        return frontendBase + "/documents?letter=" + letterId;
     }
 
     /** After commit when a transaction is open (never for a rolled-back decision), otherwise now. */

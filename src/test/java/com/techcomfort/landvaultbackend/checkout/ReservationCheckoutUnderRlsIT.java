@@ -936,7 +936,7 @@ class ReservationCheckoutUnderRlsIT {
     // ------------------------------------------------------------------
 
     @Test
-    void verifyingEmailsTheBuyerOnceThatThePlotIsTheirsWithALinkToThePurchase() {
+    void verifyingEmailsTheBuyerOnceThatThePlotIsTheirsWithLinksToThePurchaseAndTheLetter() {
         TransactionDto transaction = paidPurchase();
 
         assertThat(financeAction(staffWithRole(seller.id(), "finance_officer", null), transaction.id(), "verify", null)
@@ -950,6 +950,14 @@ class ReservationCheckoutUnderRlsIT {
         assertThat(new BigDecimal(sent.getValue().amount())).isEqualByComparingTo(TIER_PRICE);
         assertThat(sent.getValue().purchaseUrl()).as("the frontend origin from PAYSTACK_CALLBACK_URL, not its path")
                 .matches("https?://[^/]+/purchases/" + transaction.id());
+        assertLetterNamed(sent.getValue().letterNumber(), sent.getValue().letterUrl(), transaction.id());
+    }
+
+    /** The email names the letter this sale issued, and links to it in the buyer's document vault. */
+    private void assertLetterNamed(String letterNumber, String letterUrl, UUID transactionId) {
+        String where = " FROM allocation_letters WHERE transaction_id = '" + transactionId + "'";
+        assertThat(letterNumber).isEqualTo(queryString("SELECT number" + where));
+        assertThat(letterUrl).matches("https?://[^/]+/documents\\?letter=" + queryString("SELECT id" + where));
     }
 
     @Test
@@ -965,6 +973,8 @@ class ReservationCheckoutUnderRlsIT {
         assertThat(sent.getValue().to()).isEqualTo(buyer.email());
         assertThat(sent.getValue().verified()).isFalse();
         assertThat(sent.getValue().reason()).isEqualTo("Charged back by the bank.");
+        assertThat(sent.getValue().letterNumber()).as("no letter for a rejected sale").isNull();
+        assertThat(sent.getValue().letterUrl()).isNull();
         assertThat(new BigDecimal(sent.getValue().amount())).isEqualByComparingTo(TIER_PRICE);
         assertThat(sent.getValue().purchaseUrl()).as("the frontend origin from PAYSTACK_CALLBACK_URL, not its path")
                 .matches("https?://[^/]+/purchases/" + transaction.id());
@@ -1677,7 +1687,11 @@ class ReservationCheckoutUnderRlsIT {
                 .as("the letter comes with the allocation").isEqualTo("1");
         assertThat(allocated.getBody()).contains("\"allocationLetterNumber\":\"" + queryString(
                 "SELECT number FROM allocation_letters WHERE transaction_id = '" + transaction.id() + "'") + "\"");
-        verify(alerts).latePaymentResolved(any());
+        ArgumentCaptor<SettlementAlertSender.LatePaymentAlert> sent =
+                ArgumentCaptor.forClass(SettlementAlertSender.LatePaymentAlert.class);
+        verify(alerts).latePaymentResolved(sent.capture());
+        assertThat(sent.getValue().allocated()).isTrue();
+        assertLetterNamed(sent.getValue().letterNumber(), sent.getValue().letterUrl(), transaction.id());
     }
 
     /** Someone else reserved the plot meanwhile: allocating changes nothing; refund is the only ending. */
