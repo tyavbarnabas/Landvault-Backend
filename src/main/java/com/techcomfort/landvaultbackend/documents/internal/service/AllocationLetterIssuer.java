@@ -7,10 +7,13 @@ import com.techcomfort.landvaultbackend.documents.dto.LetterVersionsDto;
 import com.techcomfort.landvaultbackend.documents.dto.LetterheadImageDto;
 import com.techcomfort.landvaultbackend.documents.dto.PrintedLetterheadDto;
 import com.techcomfort.landvaultbackend.documents.internal.domain.AllocationLetter;
+import com.techcomfort.landvaultbackend.documents.internal.domain.OfferLetter;
 import com.techcomfort.landvaultbackend.documents.internal.render.DocumentFormats;
 import com.techcomfort.landvaultbackend.documents.internal.render.LetterClauses;
 import com.techcomfort.landvaultbackend.documents.internal.render.LetterPlaceholders;
 import com.techcomfort.landvaultbackend.documents.internal.repository.AllocationLetterRepository;
+import com.techcomfort.landvaultbackend.documents.internal.repository.OfferLetterAcceptanceRepository;
+import com.techcomfort.landvaultbackend.documents.internal.repository.OfferLetterRepository;
 import com.techcomfort.landvaultbackend.identity.IdentityApi;
 import com.techcomfort.landvaultbackend.inventory.EstateDocumentsApi;
 import com.techcomfort.landvaultbackend.inventory.PlotDocumentFacts;
@@ -26,6 +29,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -36,6 +40,11 @@ import java.util.UUID;
  * <p>
  * Checkout refuses to allocate before this can succeed ({@code AllocationLetterGate}),
  * so a failure here is a bug, and is loud: it rolls the sale back.
+ * <p>
+ * OL: when the buyer accepted an offer, its conditions and the versions they
+ * came from are copied, never the estate's current ones — the developer's
+ * later changes apply to new buyers. Only the letterhead, signatory and
+ * template wording follow the current approved setup.
  */
 @Slf4j
 @Service
@@ -43,6 +52,8 @@ import java.util.UUID;
 public class AllocationLetterIssuer {
 
     private final AllocationLetterRepository letters;
+    private final OfferLetterRepository offers;
+    private final OfferLetterAcceptanceRepository acceptances;
     private final LetterApprovalService approvals;
     private final EstateDocumentsApi estates;
     private final IdentityApi identityApi;
@@ -78,8 +89,10 @@ public class AllocationLetterIssuer {
                 "location", Objects.toString(location, ""),
                 "applicationDate", DocumentFormats.date(event.reservedAt()),
                 "allocationDate", DocumentFormats.date(issuedAt));
-        List<String> clauses = LetterClauses.of(setup.template().standardClauses(),
-                List.of(setup.terms().getClauses()), setup.facts());
+        Optional<OfferLetter> offer = offers.findByTransactionId(event.transactionId())
+                .filter(o -> acceptances.findByOfferLetterId(o.getId()).isPresent());
+        List<String> clauses = offer.map(o -> List.of(o.getClauses())).orElseGet(() -> LetterClauses.of(
+                setup.template().standardClauses(), List.of(setup.terms().getClauses()), setup.facts()));
 
         PrintedLetterheadDto p = setup.letterhead();
         LetterVersionsDto v = setup.versions();
@@ -116,19 +129,21 @@ public class AllocationLetterIssuer {
                 .closing(LetterPlaceholders.fill(setup.template().closing(), fields))
                 .signOff(setup.template().signOff())
                 .approvalId(setup.approvalId())
-                .termsId(setup.terms().getId())
-                .termsVersion(v.terms())
+                .termsId(offer.map(OfferLetter::getTermsId).orElse(setup.terms().getId()))
+                .termsVersion(offer.map(OfferLetter::getTermsVersion).orElse(v.terms()))
                 .templateSource(v.templateSource())
                 .templateVersion(v.template())
                 .companyLetterheadVersion(v.companyLetterhead())
                 .branchLetterheadVersion(v.branchLetterhead())
-                .feesVersion(v.fees())
-                .refundTermsVersion(v.refundTerms())
-                .defaultTermsVersion(v.defaultTerms())
+                .feesVersion(offer.isPresent() ? offer.get().getFeesVersion() : v.fees())
+                .refundTermsVersion(offer.isPresent() ? offer.get().getRefundTermsVersion() : v.refundTerms())
+                .defaultTermsVersion(offer.isPresent() ? offer.get().getDefaultTermsVersion() : v.defaultTerms())
+                .offerLetterId(offer.map(OfferLetter::getId).orElse(null))
                 .build());
         auditApi.record(AuditEntryRequest.of(event.actorUserId(), "allocation_letter.issued", "allocation_letter",
                 letter.getId(), event.sellerTenantId(), "Allocation letter " + letter.getNumber() + " issued for "
-                        + plot.label() + ", " + setup.facts().name() + " (conditions v" + v.terms() + ", template "
+                        + plot.label() + ", " + setup.facts().name() + offer.map(o -> " on the terms of offer "
+                        + o.getNumber()).orElse("") + " (conditions v" + letter.getTermsVersion() + ", template "
                         + v.templateSource() + (v.template() == null ? "" : " v" + v.template()) + ")."));
         log.info("Allocation letter {} issued for transaction {}", letter.getNumber(), event.transactionId());
     }

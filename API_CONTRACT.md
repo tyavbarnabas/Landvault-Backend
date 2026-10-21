@@ -395,6 +395,8 @@ WishlistItem {
 | GET | `/api/checkout/transactions/mine?cursor&limit` | — | `Page<Transaction>` — the buyer's own, newest first (limit default 20, max 100) |
 | GET | `/api/checkout/transactions/{id}` | — | `Transaction` (another buyer's is 404) |
 
+**Opening a purchase issues the offer letter** (see Documents): the response's **`offer`** is `{ id, number, issuedAt, acceptedAt }`. Show it and let the buyer accept it (`POST /api/documents/offer-letters/{offer.id}/accept`) before the Pay button; paying is refused with 409 `OFFER_NOT_ACCEPTED` until then. If the estate's letter isn't approved and current, nothing is opened: 409 `LETTER_NOT_APPROVED` (the hold stays). `offer` is null on purchases opened before offer letters.
+
 **Opening a purchase needs an address**: 409 `ADDRESS_REQUIRED` until the buyer has saved one
 (`PUT /api/me/address`) — route them there and back, like `KYC_REQUIRED`. The address is copied
 onto the purchase as **`buyerAddress`** (`{ line1, line2, city, state, postalCode, country }`) and
@@ -471,9 +473,9 @@ All need `client.portfolio.view` (every buyer has it). Read-only: **ownership on
 
 **Not built, and the frontend's live calls to them will 404/405**: `POST /api/portfolio/plots` and `PUT /api/portfolio/plots/{id}` (**never will be** — a client must not be able to create or change ownership), the schedule, installment payment and verify routes, and `restructure-requests`. They arrive with installment plans.
 
-## Documents — `documentsService.ts` — **receipts (089) and allocation letters (095) built**
+## Documents — `documentsService.ts` — **receipts (089), allocation letters (095) and offer letters (098) built**
 
-All need `client.documents.view` (every buyer has it) except verify, which is public. Read-only: documents are issued by events, never by a client.
+All need `client.documents.view` (every buyer has it) except verify, which is public, and accepting an offer, which needs `client.checkout.reserve`. Documents are issued by events, never by a client; accepting an offer is the one thing a buyer does to one.
 
 | Method | Path | Response |
 |---|---|---|
@@ -485,16 +487,21 @@ All need `client.documents.view` (every buyer has it) except verify, which is pu
 | GET | `/api/documents/allocation-letters/{id}` | `Document`; another buyer's: 404 `DOCUMENT_NOT_FOUND`. |
 | GET | `/api/documents/allocation-letters/{id}/pdf` | The letter (A4, as many pages as it needs), as an attachment named `HomeTrue-<number>.pdf`. |
 | GET | `/api/documents/allocation-letters/{id}/jpeg` | Every page stacked into one JPEG, for sharing. |
+| GET | `/api/documents/offer-letters/{id}` | `Document` (`status`: `issued`, `accepted` or `lapsed`; `acceptedAt`); another buyer's: 404. |
+| POST | `/api/documents/offer-letters/{id}/accept` | No body. `Document`, now `accepted`. Again: the same answer. Another buyer's: 404. Purchase no longer waiting for payment: 409 `OFFER_NOT_OPEN`. |
+| GET | `/api/documents/offer-letters/{id}/pdf` | The offer (A4), as an attachment named `HomeTrue-<number>.pdf`; once accepted it prints when. |
+| GET | `/api/documents/offer-letters/{id}/jpeg` | Every page stacked into one JPEG. |
 | GET | `/api/documents/verify/{code}` | **Public**, rate limited (30/min per connection). `DocumentVerification`, or 404 `NOT_A_HOMETRUE_DOCUMENT` (unknown or malformed code — one answer for both). |
 
 - **A receipt is issued the moment Paystack confirms a payment** (return page, webhook or sweep), in the same database step, by **HomeTrue** — it received the money — naming the developer as seller. Never for a failed, abandoned or mismatched payment.
 - **An allocation letter is issued the moment the developer's finance verifies the sale** (or allocates late money), in the same database step as the plot becoming sold — never before. It's built from the estate's approved setup: letterhead, signature and seal, the template's wording, the HomeTrue-approved conditions, then HomeTrue's disclosure clauses, with the buyer's name and phone, the plot and its size filled in. Number `HT-ALC-2026-000123`. Sales verified before this shipped have no letter.
-- `Document`: the frontend's shape — `id, type ("receipt" | "allocation_letter"), title, date, status, qrCode, size, plotId, transactionId, supersedes` — plus `number` (`HT-RCT-2026-000123`), `issuedAt`, `verifyUrl`, `refundedAt`, `pdfUrl`, `jpegUrl`. `qrCode` is the printed verification code (`3F9A-1C77-B02E-55D1`). `size` is null (drawn on demand). `plotId` is the **inventory** plot, not a portfolio id. `status` is `valid`; a refunded payment's receipt stays `valid` (the money did arrive) with `refundedAt` set.
+- **An offer letter is issued the moment the buyer opens a purchase** ("Proceed to buy" — suggested label "Get my offer letter"), in the same database step, from the estate's approved letter setup: the developer's letterhead and signatory, **HomeTrue's fixed wording**, the price and total commitment, then the same conditions and disclosure clauses the allocation letter would print. Number `HT-OFR-2026-000123`. The buyer must **accept it before paying**: `POST /api/transactions/{id}/payments` answers 409 `OFFER_NOT_ACCEPTED` until then. Accepting records who (the session), when and the browser string. It gives **no right to the plot** and doesn't extend the hold; when the purchase is rejected or abandoned the offer shows `lapsed`. **The offer fixes the terms**: the allocation letter issued later copies its conditions from the accepted offer, not the estate's current ones. Purchases opened before this have no offer and stay payable.
+- `Document`: the frontend's shape — `id, type ("receipt" | "allocation_letter" | "offer_letter"), title, date, status, qrCode, size, plotId, transactionId, supersedes` — plus `number` (`HT-RCT-2026-000123`), `issuedAt`, `verifyUrl`, `refundedAt`, `pdfUrl`, `jpegUrl`. `qrCode` is the printed verification code (`3F9A-1C77-B02E-55D1`). `size` is null (drawn on demand). `plotId` is the **inventory** plot, not a portfolio id. `status` is `valid` for receipts and allocation letters; a refunded payment's receipt stays `valid` (the money did arrive) with `refundedAt` set. Offer letters: `issued`, `accepted` or `lapsed`, with `acceptedAt`.
 - **Downloads need the bearer token**, so fetch them as a blob (`apiClient` with `responseType: blob`) and hand the `File` to `navigator.share({ files })`; fall back to a download link where sharing files isn't supported. The backend never sends a document anywhere itself.
-- **The QR code opens `{frontend}/verify/{code}`** (`DOCUMENTS_VERIFY_URL`, default `http://localhost:8443/verify`). That frontend page calls the verify route. `DocumentVerification`: `{ status ("valid" | "refunded"), documentType, number, issuedAt, issuedBy ("HomeTrue"), developer, estate, location, plot, holderInitials, refundedAt }` — **never an amount, and never the holder's name, email or phone** (initials only): anyone holding a copy can open it.
+- **The QR code opens `{frontend}/verify/{code}`** (`DOCUMENTS_VERIFY_URL`, default `http://localhost:8443/verify`). That frontend page calls the verify route. `DocumentVerification`: `{ status ("valid" | "refunded", or for an offer "issued" | "accepted" | "lapsed"), documentType, number, issuedAt, issuedBy ("HomeTrue"), developer, estate, location, plot, holderInitials, refundedAt }` — **never an amount, and never the holder's name, email or phone** (initials only): anyone holding a copy can open it.
 - The frontend's `POST /api/documents` (batch issue), `POST /api/documents/{id}/void` and `/api/documents/by-plot/{plotId}` **don't exist and won't**: documents are issued by the backend at the moment the event happens, and a reissue (letters, later) is a new document pointing at the old one.
-- `/api/documents` lists receipts and letters together, newest first; `/api/portfolio/plots/{id}/documents` returns the letter first, then the receipts. The verify page's `documentType` is `receipt` or `allocation_letter`; a letter's `developer` is the company it's from.
-- **Next**: the offer letter, then the irrevocable power of attorney.
+- `/api/documents` lists receipts, offers and letters together, newest first; `/api/portfolio/plots/{id}/documents` returns the allocation letter first, then the receipts, then the offer. The verify page's `documentType` is `receipt`, `allocation_letter` or `offer_letter`; a letter's `developer` is the company it's from.
+- **Next**: the irrevocable power of attorney.
 
 ### Portal: letterheads (changeset 090) — **built**
 

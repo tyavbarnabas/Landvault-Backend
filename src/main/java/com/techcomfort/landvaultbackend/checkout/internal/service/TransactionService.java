@@ -2,6 +2,9 @@ package com.techcomfort.landvaultbackend.checkout.internal.service;
 
 import com.techcomfort.landvaultbackend.audit.AuditApi;
 import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
+import com.techcomfort.landvaultbackend.checkout.NewPurchase;
+import com.techcomfort.landvaultbackend.checkout.OfferLetters;
+import com.techcomfort.landvaultbackend.checkout.OfferSummary;
 import com.techcomfort.landvaultbackend.checkout.PaymentSummary;
 import com.techcomfort.landvaultbackend.checkout.PaymentSummaryProvider;
 import com.techcomfort.landvaultbackend.checkout.dto.CreateTransactionRequest;
@@ -60,6 +63,8 @@ public class TransactionService {
     /** Implemented by the payments module; see the interface for why checkout doesn't read payments itself. */
     private final PaymentSummaryProvider paymentSummaries;
     private final IdentityApi identityApi;
+    /** Implemented by documents; see the interface for why checkout doesn't issue letters itself. */
+    private final OfferLetters offerLetters;
 
     @Transactional
     public TransactionDto create(UUID buyerUserId, CreateTransactionRequest request) {
@@ -124,6 +129,15 @@ public class TransactionService {
                 .status(TransactionStatus.PENDING_PAYMENT)
                 .build());
 
+        // OL: the offer letter is issued in the same step, from the estate's
+        // approved letter setup — so a purchase never exists without the terms
+        // it was offered on. No approved, current setup: nothing is opened.
+        OfferSummary offer = offerLetters.issue(new NewPurchase(transaction.getId(), buyerUserId,
+                        transaction.getPlotId(), transaction.getEstateId(), transaction.getSellerTenantId(),
+                        transaction.getBasePrice(), transaction.getCornerPremiumPct(), transaction.getTotalPrice(),
+                        transaction.getCurrency(), reservation.getCreatedAt(), address))
+                .orElseThrow(CheckoutException.LetterNotApproved::new);
+
         log.info("Transaction {} opened by buyer {} against reservation {}",
                 transaction.getReference(), buyerUserId, reservation.getId());
         auditApi.record(AuditEntryRequest.of(
@@ -132,7 +146,7 @@ public class TransactionService {
                 "Pending purchase opened (" + plan.getValue() + ")"));
 
         // Nothing paid yet on a purchase opened this instant.
-        return toDto(transaction, null);
+        return toDto(transaction, null, offer);
     }
 
     /** A buyer's own transaction. Another buyer's is not found, not forbidden. */
@@ -147,13 +161,16 @@ public class TransactionService {
     @Transactional(readOnly = true)
     public PageResponse<TransactionDto> mine(UUID buyerUserId, Pageable pageable) {
         Page<Transaction> page = transactionRepository.findAllByBuyerUserIdOrderByCreatedAtDesc(buyerUserId, pageable);
-        Map<UUID, PaymentSummary> summaries = paymentSummaries.summariesFor(
-                page.getContent().stream().map(Transaction::getId).toList());
-        return PageResponses.from(page, t -> toDto(t, summaries.get(t.getId())));
+        List<UUID> ids = page.getContent().stream().map(Transaction::getId).toList();
+        Map<UUID, PaymentSummary> summaries = paymentSummaries.summariesFor(ids);
+        Map<UUID, OfferSummary> offers = offerLetters.forTransactions(ids);
+        return PageResponses.from(page, t -> toDto(t, summaries.get(t.getId()), offers.get(t.getId())));
     }
 
     private TransactionDto withPayment(Transaction transaction) {
-        return toDto(transaction, paymentSummaries.summariesFor(List.of(transaction.getId())).get(transaction.getId()));
+        List<UUID> id = List.of(transaction.getId());
+        return toDto(transaction, paymentSummaries.summariesFor(id).get(transaction.getId()),
+                offerLetters.forTransactions(id).get(transaction.getId()));
     }
 
     /**
@@ -182,7 +199,7 @@ public class TransactionService {
         return reference.toString();
     }
 
-    private static TransactionDto toDto(Transaction transaction, PaymentSummary payment) {
+    private static TransactionDto toDto(Transaction transaction, PaymentSummary payment, OfferSummary offer) {
         return new TransactionDto(
                 transaction.getId(),
                 transaction.getReference(),
@@ -199,6 +216,7 @@ public class TransactionService {
                 transaction.getStatus().getValue(),
                 transaction.getCreatedAt(),
                 payment,
-                transaction.buyerAddress().orElse(null));
+                transaction.buyerAddress().orElse(null),
+                offer);
     }
 }

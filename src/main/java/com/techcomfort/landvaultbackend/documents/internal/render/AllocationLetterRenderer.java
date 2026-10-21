@@ -125,6 +125,9 @@ public class AllocationLetterRenderer {
             if (present(l.number())) {
                 c.rightText(right, top - LEADING, c.regular, 9, MUTED, "Ref: " + l.number());
             }
+            if (present(l.stamp())) {
+                c.rightText(right, top - 2 * LEADING, c.bold, 9, INK, l.stamp());
+            }
             boolean first = true;
             for (String line : l.buyerLines()) {
                 y = c.paragraph(left, y, width * 0.6f, first ? c.bold : c.regular, first ? BODY : 10, LEADING, INK,
@@ -137,7 +140,7 @@ public class AllocationLetterRenderer {
         }
 
         private void body() throws IOException {
-            String title = upper("Letter of allocation for " + l.estateName()
+            String title = upper(l.title() + " " + l.estateName()
                     + (present(l.estateLocation()) ? ", " + l.estateLocation() : ""));
             for (String line : PdfCanvas.wrap(c.bold, 11.5f, width, title)) {
                 float lineWidth = PdfCanvas.width(c.bold, 11.5f, line);
@@ -299,8 +302,8 @@ public class AllocationLetterRenderer {
             c.use(stream);
             y = page.getMediaBox().getHeight() - MARGIN;
             if (continued) {
-                c.text(left, y, c.regular, 8.5f, MUTED, l.company().name() + " — letter of allocation, "
-                        + l.estateName() + " (continued)");
+                c.text(left, y, c.regular, 8.5f, MUTED, l.company().name() + " — "
+                        + l.kind().toLowerCase(Locale.ROOT) + ", " + l.estateName() + " (continued)");
                 y -= 24;
             }
         }
@@ -326,7 +329,7 @@ public class AllocationLetterRenderer {
 
     private static void describe(PDDocument document, AllocationLetterContent l) {
         PDDocumentInformation info = document.getDocumentInformation();
-        info.setTitle((l.sample() ? "Sample letter of allocation, " : "Letter of allocation, ") + l.estateName());
+        info.setTitle((l.sample() ? "Sample " + l.kind().toLowerCase(Locale.ROOT) : l.kind()) + ", " + l.estateName());
         info.setAuthor(l.company().name());
         info.setCreator("HomeTrue");
         Calendar date = new GregorianCalendar(TimeZone.getTimeZone(DocumentFormats.NIGERIA));

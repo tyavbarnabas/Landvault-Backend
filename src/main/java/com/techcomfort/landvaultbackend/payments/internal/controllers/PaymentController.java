@@ -60,7 +60,7 @@ public class PaymentController {
             @ApiResponse(responseCode = "200", description = "The open link from a moment ago, handed back"),
             @ApiResponse(responseCode = "400", description = "`CURRENCY_NOT_SUPPORTED`, `PAYMENT_PLAN_NOT_SUPPORTED`, `INVALID_AMOUNT`", content = @Content()),
             @ApiResponse(responseCode = "404", description = "`TRANSACTION_NOT_FOUND` (including someone else's)", content = @Content()),
-            @ApiResponse(responseCode = "409", description = "`TRANSACTION_NOT_PAYABLE`: already past waiting for payment", content = @Content()),
+            @ApiResponse(responseCode = "409", description = "`TRANSACTION_NOT_PAYABLE`: already past waiting for payment; `OFFER_NOT_ACCEPTED`: accept the offer letter first", content = @Content()),
             @ApiResponse(responseCode = "502", description = "`PAYMENT_PROVIDER_REFUSED`", content = @Content()),
             @ApiResponse(responseCode = "503", description = "`PAYMENT_PROVIDER_UNAVAILABLE`: try again shortly", content = @Content())
     })

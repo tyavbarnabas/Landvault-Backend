@@ -17,6 +17,11 @@ public final class LetterApprovalFixture {
     }
 
     public static String approvedLetterSql(UUID estateId) {
+        return approvedLetterSql(estateId, "The plot is for residential use only.");
+    }
+
+    /** The same, with this condition as the estate's newest approved version — a change of terms. */
+    public static String approvedLetterSql(UUID estateId, String condition) {
         return """
                 WITH sig AS (
                     INSERT INTO stored_files (id, tenant_id, created_at, deleted, visibility, bucket, object_key,
@@ -42,7 +47,7 @@ public final class LetterApprovalFixture {
                                                      author_user_id)
                     SELECT gen_random_uuid(), now(), e.tenant_id, e.branch_id, e.id,
                            coalesce((SELECT max(version) FROM estate_letter_terms WHERE estate_id = e.id), 0) + 1,
-                           ARRAY['The plot is for residential use only.'],
+                           ARRAY['%2$s'],
                            (SELECT id FROM users ORDER BY created_at LIMIT 1)
                     FROM estates e WHERE e.id = '%1$s'
                     RETURNING id, tenant_id, branch_id, estate_id, version
@@ -71,6 +76,6 @@ public final class LetterApprovalFixture {
                        (SELECT max(version) FROM estate_default_terms WHERE estate_id = e.id AND deleted = false),
                        'default', NULL
                 FROM estates e WHERE e.id = '%1$s'
-                """.formatted(estateId);
+                """.formatted(estateId, condition.replace("'", "''"));
     }
 }

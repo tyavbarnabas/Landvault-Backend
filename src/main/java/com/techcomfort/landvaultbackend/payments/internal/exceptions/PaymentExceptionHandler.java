@@ -40,6 +40,7 @@ public class PaymentExceptionHandler {
             case PaymentException.PlotNotReserved e -> body(HttpStatus.CONFLICT, e, "PLOT_NOT_RESERVED");
             case PaymentException.PaymentNotConfirmed e -> body(HttpStatus.CONFLICT, e, "PAYMENT_NOT_CONFIRMED");
             case PaymentException.TransactionNotPayable e -> body(HttpStatus.CONFLICT, e, "TRANSACTION_NOT_PAYABLE");
+            case PaymentException.OfferNotAccepted e -> body(HttpStatus.CONFLICT, e, "OFFER_NOT_ACCEPTED");
             case PaymentException.PlanNotSupported e -> body(HttpStatus.BAD_REQUEST, e, "PAYMENT_PLAN_NOT_SUPPORTED");
             case PaymentException.UnsupportedCurrency e -> body(HttpStatus.BAD_REQUEST, e, "CURRENCY_NOT_SUPPORTED");
             case PaymentException.SettlementRequiresCompanyWideScope e -> body(HttpStatus.FORBIDDEN, e, "SETTLEMENT_REQUIRES_COMPANY_WIDE_SCOPE");

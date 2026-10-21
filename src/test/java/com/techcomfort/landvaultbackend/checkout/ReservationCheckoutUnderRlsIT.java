@@ -13,6 +13,7 @@ import com.techcomfort.landvaultbackend.portfolio.dto.PortfolioSummaryDto;
 import com.techcomfort.landvaultbackend.portfolio.dto.OwnedPlotDto;
 import com.techcomfort.landvaultbackend.checkout.dto.CreateReservationRequest;
 import com.techcomfort.landvaultbackend.checkout.dto.ReservationDto;
+import com.techcomfort.landvaultbackend.checkout.OfferSummary;
 import com.techcomfort.landvaultbackend.checkout.dto.TransactionDto;
 import com.techcomfort.landvaultbackend.checkout.internal.service.ReservationExpirySweeper;
 import com.techcomfort.landvaultbackend.common.Currency;
@@ -2235,12 +2236,24 @@ class ReservationCheckoutUnderRlsIT {
                 entity(who.token(), new CreateReservationRequest(plot)), String.class);
     }
 
+    /** Opens the purchase and accepts its offer letter, as a buyer must before paying. */
     private TransactionDto createTransaction(Buyer who, UUID reservationId, String plan, Integer months) {
+        TransactionDto transaction = openPurchase(who, reservationId, plan, months);
+        assertThat(acceptOffer(who, transaction.offer().id()).getStatusCode()).isEqualTo(HttpStatus.OK);
+        return transaction;
+    }
+
+    private TransactionDto openPurchase(Buyer who, UUID reservationId, String plan, Integer months) {
         ResponseEntity<TransactionDto> response = restTemplate.exchange(
                 "/api/checkout/transactions", HttpMethod.POST,
                 entity(who.token(), body(reservationId, plan, months)), TransactionDto.class);
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         return response.getBody();
+    }
+
+    private ResponseEntity<String> acceptOffer(Buyer who, UUID offerId) {
+        return restTemplate.exchange("/api/documents/offer-letters/" + offerId + "/accept", HttpMethod.POST,
+                entity(who.token(), null), String.class);
     }
 
     private static String body(UUID reservationId, String plan, Integer months) {
@@ -2402,7 +2415,8 @@ class ReservationCheckoutUnderRlsIT {
                 .as("a second confirmation issues nothing new").isEqualTo("1");
 
         PageResponse<DocumentDto> documents = documents(buyer);
-        assertThat(documents.total()).isOne();
+        assertThat(documents.items()).extracting(DocumentDto::type).as("newest first: the receipt, then the offer")
+                .containsExactly("receipt", "offer_letter");
         DocumentDto receipt = documents.items().getFirst();
         assertThat(receipt.type()).isEqualTo("receipt");
         assertThat(receipt.number()).matches("HT-RCT-\\d{4}-\\d{6}");
@@ -2431,7 +2445,7 @@ class ReservationCheckoutUnderRlsIT {
                 .isEqualTo(receipt.id().toString());
         assertThat(restTemplate.exchange("/api/portfolio/plots/" + transaction.id() + "/documents", HttpMethod.GET,
                 new HttpEntity<>(bearer(buyer.token())), new ParameterizedTypeReference<List<DocumentDto>>() {
-                }).getBody()).extracting(DocumentDto::id).containsExactly(receipt.id());
+                }).getBody()).extracting(DocumentDto::id).containsExactly(receipt.id(), transaction.offer().id());
     }
 
     @Test
@@ -2470,7 +2484,8 @@ class ReservationCheckoutUnderRlsIT {
 
         assertThat(queryString("SELECT count(*) FROM receipts WHERE payment_reference = '" + reference + "'"))
                 .isEqualTo("0");
-        assertThat(documents(buyer).total()).isZero();
+        assertThat(documents(buyer).items()).extracting(DocumentDto::type).as("only the offer")
+                .containsExactly("offer_letter");
     }
 
     /** DV-2: anyone may check a code; nothing about money or the person beyond initials. */
@@ -2538,6 +2553,122 @@ class ReservationCheckoutUnderRlsIT {
 
         assertThat(queryString("SELECT array_to_string(buyer_lines, '|') FROM allocation_letters WHERE transaction_id = '"
                 + transaction.id() + "'")).isEqualTo("Ada Buyer|" + LAGOS_LINES + "|0803 000 0000");
+    }
+
+    // --- documents: the offer letter (changeset 098) ---
+
+    /** OL: "Proceed to buy" issues the offer; paying waits for the buyer to accept that exact letter. */
+    @Test
+    void openingAPurchaseIssuesTheOfferAndPaymentWaitsForItsAcceptance() {
+        TransactionDto transaction = openPurchase(buyer, reserve(buyer, plotId).id(), "outright", null);
+        OfferSummary offer = transaction.offer();
+        assertThat(offer.number()).matches("HT-OFR-\\d{4}-\\d{6}");
+        assertThat(offer.acceptedAt()).isNull();
+
+        String row = "FROM offer_letters WHERE id = '" + offer.id() + "'";
+        assertThat(queryString("SELECT transaction_id " + row)).isEqualTo(transaction.id().toString());
+        assertThat(queryString("SELECT total_price = " + transaction.totalPrice() + " " + row)).isEqualTo("t");
+        assertThat(queryString("SELECT array_to_string(price_clauses, '|') " + row))
+                .startsWith("That the price of the plot is ₦20,000,000.00 (Twenty Million Naira Only).");
+        assertThat(queryString("SELECT array_to_string(clauses, '|') " + row))
+                .contains("The plot is for residential use only.")
+                .endsWith(DisclosureClauses.PAY_ONLY_THROUGH_HOMETRUE);
+        assertThat(queryString("SELECT array_to_string(buyer_lines, '|') " + row))
+                .isEqualTo("Ada Buyer|" + LAGOS_LINES + "|+2348000000000");
+        assertThat(queryString("SELECT signatory_name || '/' || opening " + row))
+                .startsWith("Fixture Signatory/Following your application of ").contains("is pleased to offer you");
+
+        DocumentDto listed = documents(buyer).items().stream()
+                .filter(d -> d.type().equals("offer_letter")).findFirst().orElseThrow();
+        assertThat(listed.status()).isEqualTo("issued");
+        assertThat(listed.pdfUrl()).isEqualTo("/api/documents/offer-letters/" + offer.id() + "/pdf");
+
+        paystackReturnsALink();
+        ResponseEntity<String> refused = pay(buyer, transaction.id());
+        assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(refused.getBody()).contains("OFFER_NOT_ACCEPTED");
+        assertThat(queryString("SELECT count(*) FROM payments WHERE transaction_id = '" + transaction.id() + "'"))
+                .isEqualTo("0");
+
+        assertThat(acceptOffer(verifiedBuyer(), offer.id()).getStatusCode()).as("another buyer's offer")
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        ResponseEntity<String> accepted = acceptOffer(buyer, offer.id());
+        assertThat(accepted.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(accepted.getBody()).contains("\"status\":\"accepted\"", "\"acceptedAt\":\"");
+        String acceptedAt = queryString("SELECT accepted_at FROM offer_letter_acceptances WHERE offer_letter_id = '"
+                + offer.id() + "'");
+        assertThat(acceptOffer(buyer, offer.id()).getStatusCode()).as("accepting again").isEqualTo(HttpStatus.OK);
+        assertThat(queryString("SELECT count(*) || '/' || max(accepted_at) FROM offer_letter_acceptances "
+                + "WHERE offer_letter_id = '" + offer.id() + "'")).isEqualTo("1/" + acceptedAt);
+        assertThat(queryString("SELECT buyer_user_id FROM offer_letter_acceptances WHERE offer_letter_id = '"
+                + offer.id() + "'")).isEqualTo(buyer.id().toString());
+        assertThat(queryString("SELECT count(*) FROM audit_log_entries WHERE action = 'offer_letter.accepted' "
+                + "AND target_id = '" + offer.id() + "'")).isEqualTo("1");
+        assertThat(get("/api/checkout/transactions/" + transaction.id(), buyer.token(), String.class).getBody())
+                .contains("\"acceptedAt\":\"");
+
+        assertThat(pay(buyer, transaction.id()).getStatusCode().is2xxSuccessful()).as("paying, once accepted").isTrue();
+
+        String code = queryString("SELECT verification_code " + row);
+        assertThat(restTemplate.getForEntity("/api/documents/verify/" + code, String.class).getBody())
+                .contains("\"documentType\":\"offer_letter\"", "\"status\":\"accepted\"", "\"holderInitials\":\"A. B.\"")
+                .doesNotContain("Ada", "20000000");
+        assertThat(appRoleCan("UPDATE offer_letters SET buyer_name = 'x' WHERE id = '" + offer.id() + "'")).isFalse();
+        assertThat(appRoleCan("DELETE FROM offer_letter_acceptances WHERE offer_letter_id = '" + offer.id() + "'"))
+                .isFalse();
+    }
+
+    /** No approved, current letter: no offer can be issued, so nothing is opened and the hold stays. */
+    @Test
+    void noPurchaseIsOpenedWhileTheEstatesLetterIsNotApproved() {
+        ReservationDto reservation = reserve(buyer, plotId);
+        withdrawLetterApproval();
+
+        ResponseEntity<String> refused = restTemplate.exchange("/api/checkout/transactions", HttpMethod.POST,
+                entity(buyer.token(), body(reservation.id(), "outright", null)), String.class);
+
+        assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(refused.getBody()).contains("LETTER_NOT_APPROVED");
+        assertThat(queryString("SELECT count(*) FROM transactions WHERE reservation_id = '" + reservation.id() + "'"))
+                .isEqualTo("0");
+        assertThat(queryString("SELECT count(*) FROM offer_letters WHERE buyer_user_id = '" + buyer.id() + "'"))
+                .isEqualTo("0");
+        assertThat(reservationStatus(reservation.id())).isEqualTo("ACTIVE");
+    }
+
+    /** Decided with the user: the offer fixes the terms; the allocation letter copies them, not today's. */
+    @Test
+    void theAllocationLetterKeepsTheTermsOfTheAcceptedOffer() {
+        TransactionDto transaction = outrightTransaction();
+        execute(LetterApprovalFixture.approvedLetterSql(estateId, "Only bungalows may be built."));
+
+        String reference = startPayment(transaction);
+        paystackSays(reference, "success", 2_000_000_000L, "NGN", "Approved");
+        assertThat(confirm(buyer, reference).getBody()).contains("\"status\":\"succeeded\"");
+        assertThat(financeAction(seller.token(), transaction.id(), "verify", null).getStatusCode())
+                .isEqualTo(HttpStatus.OK);
+
+        String letter = "FROM allocation_letters WHERE transaction_id = '" + transaction.id() + "'";
+        assertThat(queryString("SELECT array_to_string(clauses, '|') " + letter))
+                .contains("The plot is for residential use only.").doesNotContain("bungalows");
+        assertThat(queryString("SELECT offer_letter_id " + letter)).isEqualTo(transaction.offer().id().toString());
+        assertThat(queryString("SELECT terms_version " + letter)).isEqualTo(queryString(
+                "SELECT terms_version FROM offer_letters WHERE id = '" + transaction.offer().id() + "'"));
+    }
+
+    /** An offer gives no right to the plot: when the purchase is abandoned it lapses and can't be accepted. */
+    @Test
+    void anAbandonedPurchasesOfferLapses() {
+        TransactionDto transaction = openPurchase(buyer, reserve(buyer, plotId).id(), "outright", null);
+        holdEndedMinutesAgo(transaction, 20);
+        paymentSweeper.sweep();
+
+        assertThat(plotStatus(plotId)).isEqualTo("AVAILABLE_DEV");
+        ResponseEntity<String> late = acceptOffer(buyer, transaction.offer().id());
+        assertThat(late.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(late.getBody()).contains("OFFER_NOT_OPEN");
+        assertThat(documents(buyer).items().stream().filter(d -> d.type().equals("offer_letter")).findFirst()
+                .orElseThrow().status()).isEqualTo("lapsed");
     }
 
     // --- the buyer's address (changeset 097) ---
@@ -2643,7 +2774,7 @@ class ReservationCheckoutUnderRlsIT {
         assertThat(letter.transactionId()).isEqualTo(transaction.id());
         assertThat(letter.plotId()).isEqualTo(plotId);
         assertThat(letter.pdfUrl()).isEqualTo("/api/documents/allocation-letters/" + letter.id() + "/pdf");
-        assertThat(documents(buyer).total()).as("the receipt and the letter").isEqualTo(2);
+        assertThat(documents(buyer).total()).as("the offer, the receipt and the letter").isEqualTo(3);
         assertThat(get("/api/documents/allocation-letters/" + letter.id(), buyer.token(), String.class).getBody())
                 .contains(letter.number());
 
@@ -2662,7 +2793,7 @@ class ReservationCheckoutUnderRlsIT {
                 + "'allocation_letter.issued' AND target_id = '" + letter.id() + "'")).as("finance issued it").isEqualTo("t");
         assertThat(restTemplate.exchange("/api/portfolio/plots/" + transaction.id() + "/documents", HttpMethod.GET,
                 new HttpEntity<>(bearer(buyer.token())), new ParameterizedTypeReference<List<DocumentDto>>() {
-                }).getBody()).extracting(DocumentDto::type).containsExactly("allocation_letter", "receipt");
+                }).getBody()).extracting(DocumentDto::type).containsExactly("allocation_letter", "receipt", "offer_letter");
 
         ResponseEntity<String> verified = restTemplate.getForEntity("/api/documents/verify/" + letter.qrCode(), String.class);
         assertThat(verified.getBody()).contains("\"documentType\":\"allocation_letter\"", letter.number(),

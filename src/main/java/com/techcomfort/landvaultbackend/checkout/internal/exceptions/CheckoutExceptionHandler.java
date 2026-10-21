@@ -54,6 +54,12 @@ public class CheckoutExceptionHandler {
                 .body(ErrorResponse.of(ex.getMessage(), "ADDRESS_REQUIRED"));
     }
 
+    @ExceptionHandler(CheckoutException.LetterNotApproved.class)
+    public ResponseEntity<ErrorResponse> handleLetterNotApproved(CheckoutException.LetterNotApproved ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of(ex.getMessage(), "LETTER_NOT_APPROVED"));
+    }
+
     @ExceptionHandler(CheckoutException.ReservationNotFound.class)
     public ResponseEntity<ErrorResponse> handleReservationNotFound(CheckoutException.ReservationNotFound ex) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)

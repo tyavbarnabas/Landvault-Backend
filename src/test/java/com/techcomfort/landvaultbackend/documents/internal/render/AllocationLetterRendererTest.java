@@ -23,6 +23,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -63,7 +64,8 @@ class AllocationLetterRendererTest {
                 sample.seal(), sample.date(), List.of("Ada Obi", "12 Airport Road, Abuja"), "Dear Ada Obi,",
                 sample.estateName(), sample.estateLocation(), sample.opening(), sample.clauses(), null,
                 sample.signOff(), sample.signatoryName(), sample.signatoryTitle(), List.of(), "HT-ALC-2026-000001",
-                "https://hometrue.com.ng/verify/3F9A1C77B02E55D1", "3F9A1C77B02E55D1");
+                "https://hometrue.com.ng/verify/3F9A1C77B02E55D1", "3F9A1C77B02E55D1",
+                AllocationLetterContent.ALLOCATION_TITLE, null);
         byte[] pdf = renderer.pdf(issued);
         try (PDDocument document = Loader.loadPDF(pdf)) {
             assertThat(new PDFTextStripper().getText(document)).contains("Check this letter is genuine",
@@ -105,6 +107,26 @@ class AllocationLetterRendererTest {
         }
     }
 
+    @Test
+    void anOfferLetterIsTitledAsAnOfferAndCarriesItsAcceptance() throws Exception {
+        AllocationLetterContent sample = sample(IntStream.rangeClosed(1, 30)
+                .mapToObj(i -> "That condition " + i + " applies to the plot for as long as it is held.").toList());
+        AllocationLetterContent offer = new AllocationLetterContent(sample.company(), sample.logo(), sample.signature(),
+                sample.seal(), sample.date(), List.of("Ada Obi"), "Dear Ada Obi,", sample.estateName(),
+                sample.estateLocation(), sample.opening(), sample.clauses(), "To accept this offer, press Accept.",
+                "We look forward to your acceptance.", sample.signatoryName(), sample.signatoryTitle(), List.of(),
+                "HT-OFR-2026-000001", "https://hometrue.com.ng/verify/3F9A1C77B02E55D1", "3F9A1C77B02E55D1",
+                AllocationLetterContent.OFFER_TITLE, "Accepted on 17 October 2026, 11:00 am");
+        try (PDDocument document = Loader.loadPDF(renderer.pdf(offer))) {
+            assertThat(document.getNumberOfPages()).isGreaterThan(1);
+            assertThat(new PDFTextStripper().getText(document)).contains("OFFER LETTER FOR DOUBLE KING DELUXE",
+                    "Ref: HT-OFR-2026-000001", "Accepted on 17 October 2026, 11:00 am",
+                    "Double King Estate Limited — offer letter, Double King Deluxe (continued)")
+                    .doesNotContainIgnoringCase("letter of allocation");
+            assertThat(document.getDocumentInformation().getTitle()).isEqualTo("Offer letter, Double King Deluxe");
+        }
+    }
+
     private static AllocationLetterContent sample(List<String> clauses) throws IOException {
         return new AllocationLetterContent(
                 new AllocationLetterContent.Company("Double King Estate Limited", "1234567",
@@ -126,7 +148,7 @@ class AllocationLetterRendererTest {
                 "Omah Uchenna",
                 "Managing Director",
                 List.of("SAMPLE — NOT VALID", "Preview only. Not an allocation."),
-                null, null, null);
+                null, null, null, AllocationLetterContent.ALLOCATION_TITLE, null);
     }
 
     private static byte[] png(int width, int height, Color color) throws IOException {

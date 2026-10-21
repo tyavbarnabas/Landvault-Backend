@@ -21,6 +21,8 @@ import java.util.List;
  * @param watermark     lines stamped across every page; empty for an issued letter
  * @param number        the letter's number; null on a sample
  * @param verifyUrl     where its QR code points; null on a sample, and then no QR is drawn
+ * @param title         what the letter is, before the estate: "Letter of allocation for", "Offer letter for"
+ * @param stamp         a line printed under the reference, e.g. when an offer was accepted; null for none
  */
 public record AllocationLetterContent(
         Company company,
@@ -41,13 +43,23 @@ public record AllocationLetterContent(
         List<String> watermark,
         String number,
         String verifyUrl,
-        String verificationCode
+        String verificationCode,
+        String title,
+        String stamp
 ) {
+
+    public static final String ALLOCATION_TITLE = "Letter of allocation for";
+    public static final String OFFER_TITLE = "Offer letter for";
 
     public record Company(String name, String rcNumber, String address, String phone, String email, String website) {
     }
 
     public boolean sample() {
         return verifyUrl == null;
+    }
+
+    /** "Letter of allocation" or "Offer letter": the title without its trailing "for". */
+    public String kind() {
+        return title.replaceFirst("\\s+for$", "");
     }
 }

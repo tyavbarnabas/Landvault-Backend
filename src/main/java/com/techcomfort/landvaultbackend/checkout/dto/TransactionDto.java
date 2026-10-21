@@ -1,6 +1,7 @@
 package com.techcomfort.landvaultbackend.checkout.dto;
 
 import com.techcomfort.landvaultbackend.checkout.PaymentSummary;
+import com.techcomfort.landvaultbackend.checkout.OfferSummary;
 import com.techcomfort.landvaultbackend.common.PostalAddress;
 import io.swagger.v3.oas.annotations.media.Schema;
 
@@ -72,6 +73,11 @@ public record TransactionDto(
 
         @Schema(description = "The buyer's address as it stood when this purchase was opened; never changes "
                 + "afterwards. Null on purchases opened before addresses were collected.", nullable = true)
-        PostalAddress buyerAddress
+        PostalAddress buyerAddress,
+
+        @Schema(description = "The offer letter issued when this purchase was opened: `{ id, number, issuedAt, "
+                + "acceptedAt }`. Paying is refused (`OFFER_NOT_ACCEPTED`) until `acceptedAt` is set. Null on "
+                + "purchases opened before offer letters existed.", nullable = true)
+        OfferSummary offer
 ) {
 }

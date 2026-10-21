@@ -57,6 +57,13 @@ public abstract class PaymentException extends RuntimeException {
         }
     }
 
+    /** OL: the buyer hasn't accepted the purchase's offer letter yet. */
+    public static class OfferNotAccepted extends PaymentException {
+        public OfferNotAccepted() {
+            super("Accept your offer letter before paying.");
+        }
+    }
+
     /** Installments need saved-card charging, which isn't built yet. */
     public static class PlanNotSupported extends PaymentException {
         public PlanNotSupported(String plan) {

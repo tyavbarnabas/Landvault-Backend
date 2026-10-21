@@ -11,9 +11,10 @@ import java.time.Instant;
  */
 @Schema(name = "DocumentVerification")
 public record DocumentVerificationDto(
-        @Schema(description = "`valid` or `refunded` (the payment was later returned). Unknown codes are a 404.")
+        @Schema(description = "`valid` or `refunded` (the payment was later returned); for an offer letter `issued`, "
+                + "`accepted` or `lapsed`. Unknown codes are a 404.")
         String status,
-        @Schema(description = "`receipt` or `allocation_letter`") String documentType,
+        @Schema(description = "`receipt`, `allocation_letter` or `offer_letter`") String documentType,
         String number,
         Instant issuedAt,
         @Schema(description = "Always `HomeTrue` for a generated document.") String issuedBy,

@@ -40,6 +40,14 @@ public sealed class CheckoutException extends RuntimeException {
         }
     }
 
+    /** OL: the estate's letter setup isn't approved and current, so no offer can be issued. */
+    public static final class LetterNotApproved extends CheckoutException {
+        public LetterNotApproved() {
+            super("This estate's offer letter can't be issued right now, so the purchase can't be opened. "
+                    + "Please try again later.");
+        }
+    }
+
     /** No such reservation for this buyer — also what another buyer's hold looks like. */
     public static final class ReservationNotFound extends CheckoutException {
         public ReservationNotFound() {

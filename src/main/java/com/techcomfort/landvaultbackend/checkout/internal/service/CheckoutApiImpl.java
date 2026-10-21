@@ -4,6 +4,8 @@ import com.techcomfort.landvaultbackend.audit.AuditApi;
 import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
 import com.techcomfort.landvaultbackend.checkout.AbandonedSale;
 import com.techcomfort.landvaultbackend.checkout.AllocationLetterGate;
+import com.techcomfort.landvaultbackend.checkout.OfferLetters;
+import com.techcomfort.landvaultbackend.checkout.OfferSummary;
 import com.techcomfort.landvaultbackend.checkout.CheckoutApi;
 import com.techcomfort.landvaultbackend.checkout.FinanceDecision;
 import com.techcomfort.landvaultbackend.checkout.FinanceQueueRow;
@@ -44,11 +46,18 @@ public class CheckoutApiImpl implements CheckoutApi {
     private final AuditApi auditApi;
     private final ApplicationEventPublisher events;
     private final AllocationLetterGate letterGate;
+    private final OfferLetters offerLetters;
 
     @Override
     @Transactional(readOnly = true)
     public Optional<PayableTransaction> transactionForBuyer(UUID transactionId, UUID buyerUserId) {
         return transactions.findByIdAndBuyerUserId(transactionId, buyerUserId).map(CheckoutApiImpl::toPayable);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<OfferSummary> offerFor(UUID transactionId) {
+        return Optional.ofNullable(offerLetters.forTransactions(List.of(transactionId)).get(transactionId));
     }
 
     @Override

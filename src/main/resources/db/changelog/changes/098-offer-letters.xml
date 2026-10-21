@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        The offer letter (OL), issued when a buyer opens a purchase, and the
+        buyer's acceptance of it. See AGENTS.md, "Documents: the offer letter".
+
+        Like receipts and allocation letters: buyer-owned (not RLS-policied,
+        reached by buyer_user_id or verification code), a copy of everything
+        printed, never changed or deleted. Acceptance is its own row because the
+        letter can't be updated; one per letter. "Lapsed" is never stored — it
+        follows from the purchase's status. The allocation letter issued later
+        copies its terms from the accepted offer (offer_letter_id).
+    -->
+    <changeSet id="098-create-offer-letters" author="landvault">
+        <sql><![CDATA[
+            CREATE SEQUENCE offer_letter_number_seq;
+            GRANT USAGE ON SEQUENCE offer_letter_number_seq TO ${appDbUsername};
+
+            CREATE TABLE offer_letters (
+                id                          uuid NOT NULL PRIMARY KEY,
+                created_at                  timestamp(6) with time zone NOT NULL,
+                created_by                  varchar(255),
+
+                number                      varchar(32) NOT NULL,
+                verification_code           varchar(16) NOT NULL,
+                transaction_id              uuid NOT NULL REFERENCES transactions (id),
+                buyer_user_id               uuid NOT NULL REFERENCES users (id),
+                seller_tenant_id            uuid NOT NULL REFERENCES organizations (id),
+                branch_id                   uuid REFERENCES branches (id),
+                estate_id                   uuid NOT NULL REFERENCES estates (id),
+                plot_id                     uuid NOT NULL REFERENCES plots (id),
+                issued_at                   timestamp(6) with time zone NOT NULL,
+
+                company_name                varchar(255) NOT NULL,
+                company_rc_number           varchar(64),
+                company_address             varchar(512),
+                company_phone               varchar(64),
+                company_email               varchar(255),
+                company_website             varchar(255),
+                logo_file_id                uuid REFERENCES stored_files (id),
+                signature_file_id           uuid NOT NULL REFERENCES stored_files (id),
+                seal_file_id                uuid REFERENCES stored_files (id),
+                signatory_name              varchar(120) NOT NULL,
+                signatory_title             varchar(120) NOT NULL,
+
+                buyer_name                  varchar(255) NOT NULL,
+                buyer_lines                 text[] NOT NULL,
+                salutation                  varchar(300) NOT NULL,
+                estate_name                 varchar(255) NOT NULL,
+                estate_location             varchar(512),
+                plot_label                  varchar(255) NOT NULL,
+                opening                     text NOT NULL,
+                price_clauses               text[] NOT NULL,
+                clauses                     text[] NOT NULL,
+                closing                     text NOT NULL,
+                sign_off                    varchar(80) NOT NULL,
+
+                base_price                  numeric(19, 4) NOT NULL,
+                corner_premium_pct          numeric(5, 2),
+                total_price                 numeric(19, 4) NOT NULL,
+                currency                    varchar(3) NOT NULL,
+
+                approval_id                 uuid NOT NULL REFERENCES estate_letter_approvals (id),
+                terms_id                    uuid NOT NULL REFERENCES estate_letter_terms (id),
+                terms_version               integer NOT NULL,
+                template_source             varchar(10) NOT NULL,
+                template_version            integer,
+                company_letterhead_version  integer NOT NULL,
+                branch_letterhead_version   integer,
+                fees_version                integer,
+                refund_terms_version        integer,
+                default_terms_version       integer,
+
+                CONSTRAINT uq_offer_letters_number UNIQUE (number),
+                CONSTRAINT uq_offer_letters_verification_code UNIQUE (verification_code),
+                CONSTRAINT uq_offer_letters_transaction UNIQUE (transaction_id),
+                CONSTRAINT chk_offer_letters_verification_code CHECK (verification_code ~ '^[0-9A-F]{16}$'),
+                CONSTRAINT chk_offer_letters_template_source
+                    CHECK (template_source IN ('default', 'company', 'branch'))
+            );
+            CREATE INDEX idx_offer_letters_buyer ON offer_letters (buyer_user_id, issued_at DESC);
+            REVOKE UPDATE, DELETE, TRUNCATE ON offer_letters FROM ${appDbUsername};
+            COMMENT ON TABLE offer_letters IS
+                'Offer letters HomeTrue issued when a buyer opened a purchase: a copy of everything printed and the versions it quoted, never changed. Lapsed is derived from the purchase. See AGENTS.md, "Documents: the offer letter".';
+
+            CREATE TABLE offer_letter_acceptances (
+                id                  uuid NOT NULL PRIMARY KEY,
+                created_at          timestamp(6) with time zone NOT NULL,
+                created_by          varchar(255),
+
+                offer_letter_id     uuid NOT NULL REFERENCES offer_letters (id),
+                buyer_user_id       uuid NOT NULL REFERENCES users (id),
+                accepted_at         timestamp(6) with time zone NOT NULL,
+                user_agent          varchar(255),
+
+                CONSTRAINT uq_offer_letter_acceptances_offer UNIQUE (offer_letter_id)
+            );
+            REVOKE UPDATE, DELETE, TRUNCATE ON offer_letter_acceptances FROM ${appDbUsername};
+            COMMENT ON TABLE offer_letter_acceptances IS
+                'A buyer accepting an offer letter: who (from the session), when, and their browser string. One per letter, never changed.';
+
+            ALTER TABLE allocation_letters
+                ADD COLUMN offer_letter_id uuid REFERENCES offer_letters (id);
+            COMMENT ON COLUMN allocation_letters.offer_letter_id IS
+                'The accepted offer whose terms this letter copies. Null for sales opened before offer letters (changeset 098).';
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE allocation_letters DROP COLUMN offer_letter_id;
+            DROP TABLE offer_letter_acceptances;
+            DROP TABLE offer_letters;
+            DROP SEQUENCE offer_letter_number_seq;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

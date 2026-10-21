@@ -16,6 +16,9 @@ public interface CheckoutApi {
     /** The buyer's own transaction, or empty — someone else's is indistinguishable from none. */
     Optional<PayableTransaction> transactionForBuyer(UUID transactionId, UUID buyerUserId);
 
+    /** OL: the purchase's offer letter; empty for purchases opened before offers existed. */
+    Optional<OfferSummary> offerFor(UUID transactionId);
+
     /**
      * Paystack confirmed the money for this transaction: it moves from
      * {@code pending_payment} straight to {@code awaiting_finance} (decided

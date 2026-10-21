@@ -127,7 +127,7 @@ public class LetterApprovalService {
                 List.of(SAMPLE_WATERMARK, shown.isEmpty() ? "No conditions saved yet"
                         : shownApproved ? "Preview only. Not an allocation."
                         : "Wording not yet approved by HomeTrue"),
-                null, null, null);
+                null, null, null, AllocationLetterContent.ALLOCATION_TITLE, null);
         byte[] pdf = renderer.pdf(content);
         String name = "Sample-allocation-letter-" + slug(s.facts().name());
         return jpeg ? new Sample(PdfImages.allPagesAsJpeg(pdf), name + ".jpg") : new Sample(pdf, name + ".pdf");

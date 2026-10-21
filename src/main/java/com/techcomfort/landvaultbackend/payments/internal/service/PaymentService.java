@@ -66,6 +66,11 @@ public class PaymentService {
         if (!transaction.isOutright()) {
             throw new PaymentException.PlanNotSupported(transaction.plan());
         }
+        // OL: no money before the buyer has accepted the offer letter. Purchases
+        // opened before offer letters existed have none, and stay payable.
+        if (checkoutApi.offerFor(transactionId).filter(offer -> !offer.accepted()).isPresent()) {
+            throw new PaymentException.OfferNotAccepted();
+        }
         // NGN only, above zero, whole kobo — refused here before Paystack is ever called.
         long amountKobo = PaystackAmounts.toKobo(transaction.totalPrice(), transaction.currency());
 
