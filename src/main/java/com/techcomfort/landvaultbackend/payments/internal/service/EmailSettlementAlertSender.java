@@ -205,6 +205,30 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
         log.info("Purchase decision delivered to a buyer");
     }
 
+    @Override
+    public void instalmentVerified(InstalmentAlert alert) {
+        SimpleMailMessage message = new SimpleMailMessage();
+        message.setFrom(fromAddress);
+        message.setTo(alert.to());
+        message.setSubject("Instalment " + alert.instalmentsPaid() + " of " + alert.instalmentCount() + " verified: "
+                + alert.plotLabel() + " at " + alert.estateName());
+        message.setText("""
+                Hello,
+
+                The developer has verified your instalment of NGN %s for %s, %s. You have now paid %d of %d \
+                instalments.
+                %s
+                See your purchase and its schedule:
+
+                    %s
+                """.formatted(alert.amount(), alert.plotLabel(), alert.estateName(), alert.instalmentsPaid(),
+                alert.instalmentCount(), alert.nextDueDate() == null ? ""
+                        : "\nYour next instalment, NGN " + alert.nextDueAmount() + ", is due on " + alert.nextDueDate()
+                        + ".\n", alert.purchaseUrl()));
+        mailSender.send(message);
+        log.info("Instalment verification delivered to a buyer");
+    }
+
     /** Names the allocation letter and links to it; a blank line when there is none (never expected once allocated). */
     private static String letterParagraph(String kind, String letterNumber, String letterUrl) {
         if (letterUrl == null) {

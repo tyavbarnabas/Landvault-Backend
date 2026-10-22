@@ -6299,6 +6299,38 @@ payouts. Decided with the user before 3a: a refund term's "% of the total price"
 
 Proven red: treating a verified deposit as a full payment (the sale rolls back with a 500).
 
+### Phase 3b: the instalments (changeset 102)
+
+- **Verification moved to the payment**: `payments.finance_verified_at/by` (a plan takes many payments; decision 5),
+  set by every finance verify — outright, deposit, late money, instalment — and backfilled for verified sales.
+  `verified_at` stays Paystack's confirmation. `purpose` gains `INSTALMENT` (with `instalment_sequence`, a CHECK) and
+  `BALANCE`; a partial unique index keeps one verified payment per instalment.
+- **`PlanProgress`** (payments) is the one reading of a plan: verified instalments, a verified pay-off, the payment
+  awaiting finance, what's left, the balance. "Paid" means verified.
+- **Pay on an `on_plan` purchase** charges the **next instalment** from the schedule, or with `?balance=true` the
+  **balance** (no discount); one at a time — the next is refused (`INSTALMENT_AWAITING_VERIFICATION`) while one awaits
+  finance (decision 7); a completed plan is `TRANSACTION_NOT_PAYABLE`; `balance=true` elsewhere `NOTHING_TO_PAY_OFF`.
+  An open link is reused only for the same purpose, sequence and amount.
+- **Confirmation doesn't move an `on_plan` purchase** — an instalment or pay-off only needs the plan still running;
+  otherwise it's flagged for review like late money.
+- **Finance**: the queue adds plan payments awaiting verification (`paymentFor` `instalment`/`balance`,
+  `instalmentSequence`, `instalmentCount`, `dueDate`; rows via `CheckoutApi.onPlan`, under the officer's RLS). The
+  same verify route checks the amount against the schedule, marks the payment, audits
+  `payment.instalment_verified` and emails the buyer (`instalmentVerified`: n of N paid, next due). **The last
+  instalment or a pay-off completes the plan** in the same transaction: `CheckoutApi.completePlan` — plot
+  `ON_PLAN → SOLD`, purchase `ON_PLAN → VERIFIED`, `PlotAllocated(provisional = false)` → the portfolio record
+  becomes `COMPLETED` (not a new row) and the **final allocation letter** is issued (offer's conditions); a lapsed
+  letter approval refuses (`LETTER_NOT_APPROVED`) and undoes the verification. Rejecting a plan payment refunds just
+  that payment (refund flagged); the plan carries on and the instalment is owed again.
+- **Portfolio** (plans): `paidAmount` = verified payments, `installmentsPaid`, next unpaid instalment, and every
+  succeeded payment in the history (`deposit`/`instalment`/`balance`, confirmed or pending_verification), via
+  `PaymentSummaryProvider.succeededPaymentsFor`.
+- **Payouts**: completed instalment sales are **kept off the payout list** (`findVerifiedSales` excludes
+  `INSTALLMENT`) until escrow payouts (3c) — otherwise they'd pay the plain agreed price.
+
+Proven red: paying the next instalment before the current one is verified, and a last instalment that doesn't
+complete the plan.
+
 ## A buyer's address (changeset 097)
 
 Built 2026-10-21, decided with the user, so the allocation letter can name

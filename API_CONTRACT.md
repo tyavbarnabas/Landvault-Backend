@@ -327,7 +327,19 @@ gets it without a new call.
   `installmentsPaid`, `nextDueDate`/`nextDueAmount`), and a **provisional allocation letter** is issued — Document
   type **`provisional_allocation_letter`**, number `HT-PAL-…`. The buyer's email says the plot is held on the plan.
   Nothing is paid out to the developer yet. Late money on a deposit can only be refunded: allocate answers 409
-  `LATE_DEPOSIT_NOT_SUPPORTED`. Paying the instalments themselves is phase 3b.
+  `LATE_DEPOSIT_NOT_SUPPORTED`.
+  **Phase 3b built** (changeset 102): once `on_plan`, `POST /api/transactions/{id}/payments` charges the **next
+  instalment**; `?balance=true` charges **everything still owed** in one payment. One at a time: 409
+  `INSTALMENT_AWAITING_VERIFICATION` while the last one waits for finance; a paid-off plan is
+  `TRANSACTION_NOT_PAYABLE`; `balance=true` without an active plan is `NOTHING_TO_PAY_OFF`. The finance queue lists
+  each awaiting instalment (`paymentFor: instalment | balance`, `instalmentSequence`, `instalmentCount`, `dueDate`)
+  and the same verify/reject routes act on it (verify answers `status: on_plan`; reject refunds just that payment and
+  the plan carries on). **Verifying the last instalment, or a balance**, sells the plot, makes the purchase
+  `verified`, the portfolio entry `completed`, and issues the final `allocation_letter` (answer `status: verified`).
+  Portfolio plans: `paidAmount` is what finance verified, `installmentsPaid`, `nextDueDate`/`nextDueAmount` the first
+  unpaid instalment, and `payments[]` every payment (`type` `deposit`/`instalment`/`balance`, `status` `confirmed` or
+  `pending_verification`). The buyer is emailed per verified instalment. Instalment sales aren't paid out to the
+  developer until escrow payouts (3c).
 
 ### Publication now has SEVEN conditions, not five
 

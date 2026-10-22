@@ -24,6 +24,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -49,8 +50,11 @@ public class PaymentController {
                     Requires `client.checkout.reserve`. Returns a Paystack payment link: send the buyer \
                     to `authorizationUrl`; Paystack returns them to the frontend afterwards.
 
-                    - The amount is the price **agreed at reservation**, never sent by the client.
-                    - Outright purchases only; NGN only.
+                    - The amount is never sent by the client: the price **agreed at reservation**; on an \
+                    instalment plan the **deposit**, then — once the deposit is verified (`on_plan`) — the \
+                    **next instalment** from the fixed schedule, one at a time (the next only after the last is \
+                    verified). With `?balance=true`, everything still owed on the plan in one payment.
+                    - Outright and instalment purchases; NGN only.
                     - Pressing pay again within 30 minutes returns **the same open link** (200) instead \
                     of opening a second payment (201).
                     - **Landing back on the frontend proves nothing.** A payment counts only once \
@@ -60,14 +64,15 @@ public class PaymentController {
             @ApiResponse(responseCode = "200", description = "The open link from a moment ago, handed back"),
             @ApiResponse(responseCode = "400", description = "`CURRENCY_NOT_SUPPORTED`, `PAYMENT_PLAN_NOT_SUPPORTED`, `INVALID_AMOUNT`", content = @Content()),
             @ApiResponse(responseCode = "404", description = "`TRANSACTION_NOT_FOUND` (including someone else's)", content = @Content()),
-            @ApiResponse(responseCode = "409", description = "`TRANSACTION_NOT_PAYABLE`: already past waiting for payment; `OFFER_NOT_ACCEPTED`: accept the offer letter first", content = @Content()),
+            @ApiResponse(responseCode = "409", description = "`TRANSACTION_NOT_PAYABLE`: already past waiting for payment (or a plan paid in full); `OFFER_NOT_ACCEPTED`: accept the offer letter first; `INSTALMENT_AWAITING_VERIFICATION`: the last instalment isn't verified yet; `NOTHING_TO_PAY_OFF`: `balance=true` on a purchase with no active plan", content = @Content()),
             @ApiResponse(responseCode = "502", description = "`PAYMENT_PROVIDER_REFUSED`", content = @Content()),
             @ApiResponse(responseCode = "503", description = "`PAYMENT_PROVIDER_UNAVAILABLE`: try again shortly", content = @Content())
     })
     @PostMapping("/transactions/{transactionId}/payments")
     @PreAuthorize("hasAuthority('client.checkout.reserve')")
-    public ResponseEntity<PaymentDto> start(@PathVariable UUID transactionId) {
-        PaymentService.Started started = service.start(transactionId);
+    public ResponseEntity<PaymentDto> start(@PathVariable UUID transactionId,
+                                            @RequestParam(defaultValue = "false") boolean balance) {
+        PaymentService.Started started = service.start(transactionId, balance);
         return ResponseEntity.status(started.created() ? HttpStatus.CREATED : HttpStatus.OK).body(started.payment());
     }
 

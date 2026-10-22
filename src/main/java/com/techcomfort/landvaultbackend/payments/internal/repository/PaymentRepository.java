@@ -1,6 +1,7 @@
 package com.techcomfort.landvaultbackend.payments.internal.repository;
 
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
+import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentPurpose;
 import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentStatus;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -44,4 +45,10 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
             UUID sellerTenantId, PaymentStatus status);
 
     List<Payment> findAllByTransactionIdIn(Collection<UUID> transactionIds);
+
+    List<Payment> findAllByTransactionIdOrderByCreatedAtAsc(UUID transactionId);
+
+    /** 3b: a company's instalment and pay-off payments that Paystack confirmed and finance hasn't verified yet. */
+    List<Payment> findAllBySellerTenantIdAndStatusAndPurposeInAndFinanceVerifiedAtIsNullAndReviewReasonIsNullOrderByPaidAtAsc(
+            UUID sellerTenantId, PaymentStatus status, Collection<PaymentPurpose> purposes);
 }

@@ -16,5 +16,9 @@ public enum FinanceDecision {
     /** The estate's allocation letter isn't approved (or lapsed), so the sale can't be allocated yet. */
     LETTER_NOT_APPROVED,
     /** Late money on an instalment purchase: allocating a late deposit isn't supported yet — refund it. */
-    LATE_DEPOSIT_NOT_SUPPORTED
+    LATE_DEPOSIT_NOT_SUPPORTED,
+    /** 3b: the purchase isn't an instalment plan in progress. */
+    NOT_ON_PLAN,
+    /** 3b: the held plot isn't ON_PLAN any more, so it can't be sold. */
+    PLOT_NOT_ON_PLAN
 }

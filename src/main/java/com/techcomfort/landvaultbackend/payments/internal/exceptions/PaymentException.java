@@ -64,6 +64,21 @@ public abstract class PaymentException extends RuntimeException {
         }
     }
 
+    /** 3b, decision 7: the next instalment only once the current one is verified. */
+    public static class InstalmentAwaitingVerification extends PaymentException {
+        public InstalmentAwaitingVerification() {
+            super("Your last payment is waiting for the developer's finance team to verify it. You can pay the next "
+                    + "one once it's verified.");
+        }
+    }
+
+    /** "Pay off the balance" only applies to a plan whose deposit is verified. */
+    public static class NothingToPayOff extends PaymentException {
+        public NothingToPayOff() {
+            super("There is no plan balance to pay off on this purchase.");
+        }
+    }
+
     /** Installments need saved-card charging, which isn't built yet. */
     public static class PlanNotSupported extends PaymentException {
         public PlanNotSupported(String plan) {

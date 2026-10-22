@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Instalment plans, phase 3b: paying the instalments. See AGENTS.md,
+        "Instalment plans".
+
+        An instalment purchase takes many payments, each verified by finance on
+        its own (decision 5), so verification moves from the purchase to the
+        payment: finance_verified_at/by on payments. (verified_at is when
+        Paystack confirmed it; unchanged.) An INSTALMENT payment names its
+        place in the schedule; a BALANCE payment pays off everything left.
+        Existing verified sales are backfilled from their transaction's
+        verification, so every succeeded-and-verified payment says so.
+    -->
+    <changeSet id="102-payment-finance-verification" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE payments
+                DROP CONSTRAINT chk_payments_purpose,
+                ADD CONSTRAINT chk_payments_purpose
+                    CHECK (purpose IN ('OUTRIGHT', 'DEPOSIT', 'INSTALMENT', 'BALANCE')),
+                ADD COLUMN instalment_sequence  integer,
+                ADD COLUMN finance_verified_at  timestamp(6) with time zone,
+                ADD COLUMN finance_verified_by  uuid REFERENCES users (id),
+                ADD CONSTRAINT chk_payments_instalment_sequence
+                    CHECK ((purpose = 'INSTALMENT') = (instalment_sequence IS NOT NULL)),
+                ADD CONSTRAINT chk_payments_finance_verified
+                    CHECK (finance_verified_at IS NULL OR status = 'SUCCEEDED');
+            CREATE UNIQUE INDEX uq_payments_one_verified_instalment
+                ON payments (transaction_id, instalment_sequence)
+                WHERE purpose = 'INSTALMENT' AND finance_verified_at IS NOT NULL;
+            COMMENT ON COLUMN payments.finance_verified_at IS
+                'When the developer''s finance verified this payment (never automatic). Per payment, because an instalment purchase takes many.';
+
+            UPDATE payments p SET finance_verified_at = t.updated_at
+              FROM transactions t
+             WHERE t.id = p.transaction_id AND p.status = 'SUCCEEDED'
+               AND t.status IN ('VERIFIED', 'ON_PLAN') AND p.review_reason IS NULL;
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP INDEX uq_payments_one_verified_instalment;
+            ALTER TABLE payments
+                DROP CONSTRAINT chk_payments_finance_verified,
+                DROP CONSTRAINT chk_payments_instalment_sequence,
+                DROP COLUMN finance_verified_by,
+                DROP COLUMN finance_verified_at,
+                DROP COLUMN instalment_sequence,
+                DROP CONSTRAINT chk_payments_purpose,
+                ADD CONSTRAINT chk_payments_purpose CHECK (purpose IN ('OUTRIGHT', 'DEPOSIT'));
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

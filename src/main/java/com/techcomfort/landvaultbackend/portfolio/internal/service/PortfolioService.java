@@ -4,6 +4,7 @@ import com.techcomfort.landvaultbackend.checkout.CheckoutApi;
 import com.techcomfort.landvaultbackend.checkout.PaymentSummary;
 import com.techcomfort.landvaultbackend.checkout.PaymentSummaryProvider;
 import com.techcomfort.landvaultbackend.checkout.PendingPurchase;
+import com.techcomfort.landvaultbackend.checkout.PlanPayment;
 import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.PageResponse;
@@ -38,6 +39,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -136,10 +138,13 @@ public class PortfolioService implements PortfolioApi {
 
         List<Entry> out = new ArrayList<>(owned.size() + pending.size());
         pending.forEach(p -> out.add(pendingDto(p, details.get(p.plotId()), paid.get(p.transactionId()))));
-        Map<UUID, PlanSchedule> schedules = checkoutApi.schedulesOf(owned.stream()
-                .filter(o -> o.getStatus() == OwnedPlotStatus.INSTALLMENT_ACTIVE).map(OwnedPlot::getTransactionId).toList());
+        List<UUID> onPlans = owned.stream().filter(o -> "INSTALLMENT".equals(o.getPlan()) && o.getTransactionId() != null)
+                .map(OwnedPlot::getTransactionId).toList();
+        Map<UUID, PlanSchedule> schedules = checkoutApi.schedulesOf(onPlans);
+        Map<UUID, List<PlanPayment>> planPayments = payments.succeededPaymentsFor(onPlans);
         // A record with no sale behind it (an upgrade's) has no transaction id, and no plan.
         owned.forEach(o -> out.add(ownedDto(o, o.getTransactionId() == null ? null : schedules.get(o.getTransactionId()),
+                o.getTransactionId() == null ? List.of() : planPayments.getOrDefault(o.getTransactionId(), List.of()),
                 details.get(o.getPlotId()),
                 o.getTransactionId() == null ? null : paid.get(o.getTransactionId()))));
         return out;
@@ -150,28 +155,52 @@ public class PortfolioService implements PortfolioApi {
      * plan costs, the deposit is what's paid, and the next instalment comes
      * from the fixed schedule; instalments themselves arrive with phase 3b.
      */
-    private Entry ownedDto(OwnedPlot o, PlanSchedule schedule, PlotDetails d, PaymentSummary payment) {
+    private Entry ownedDto(OwnedPlot o, PlanSchedule schedule, List<PlanPayment> planPayments, PlotDetails d,
+                           PaymentSummary payment) {
+        if (schedule != null) {
+            return planDto(o, schedule, planPayments, d);
+        }
         boolean confirmed = payment != null && "succeeded".equals(payment.status()) && payment.amountPaid() != null;
-        String paymentType = schedule == null ? "outright" : "deposit";
         List<PortfolioPaymentDto> history = confirmed
-                ? List.of(paymentDto(payment, o.getCurrency(), "confirmed", o.getAcquiredAt(), paymentType))
+                ? List.of(paymentDto(payment, o.getCurrency(), "confirmed", o.getAcquiredAt(), "outright"))
                 : List.of();
-        Entry entry = dto(o.getId(), o.getTransactionId(), o.getEstateId(), o.getPlotId(), d, o.getCornerPremiumPct(),
-                o.getBasePrice(), o.getIntent().getValue(), o.getPlan().toLowerCase(Locale.ROOT),
-                schedule == null ? o.getTotalPrice() : schedule.planTotal(),
+        return dto(o.getId(), o.getTransactionId(), o.getEstateId(), o.getPlotId(), d, o.getCornerPremiumPct(),
+                o.getBasePrice(), o.getIntent().getValue(), o.getPlan().toLowerCase(Locale.ROOT), o.getTotalPrice(),
                 confirmed ? payment.amountPaid() : BigDecimal.ZERO, o.getCurrency(),
                 LocalDate.ofInstant(o.getAcquiredAt(), NIGERIA), o.getStatus(), history, o.getSupersedes(),
                 o.getAcquiredAt());
-        if (schedule == null || schedule.instalments().isEmpty()) {
-            return entry;
-        }
-        PlanSchedule.Instalment next = schedule.instalments().getFirst();
+    }
+
+    /**
+     * An instalment plan (3b): the plan total, what finance has verified (the
+     * deposit plus each verified instalment — "paid" means verified), how many
+     * instalments that is, and the first one still owed. Every succeeded payment
+     * is listed, awaiting verification or confirmed.
+     */
+    private Entry planDto(OwnedPlot o, PlanSchedule schedule, List<PlanPayment> planPayments, PlotDetails d) {
+        List<PlanPayment> verified = planPayments.stream().filter(PlanPayment::verified).toList();
+        boolean paidOff = verified.stream().anyMatch(p -> "balance".equals(p.purpose()));
+        Set<Integer> paidInstalments = verified.stream().filter(p -> "instalment".equals(p.purpose()))
+                .map(PlanPayment::instalmentSequence).collect(Collectors.toSet());
+        Optional<PlanSchedule.Instalment> next = paidOff ? Optional.empty() : schedule.instalments().stream()
+                .filter(i -> !paidInstalments.contains(i.sequence())).findFirst();
+        List<PortfolioPaymentDto> history = planPayments.stream().map(p -> new PortfolioPaymentDto(p.reference(),
+                p.paidAt() == null ? null : LocalDate.ofInstant(p.paidAt(), NIGERIA), p.amount(), o.getCurrency().name(),
+                p.purpose(), p.verified() ? "confirmed" : "pending_verification",
+                p.receiptId() == null ? null : p.receiptId().toString(), null, p.financeVerifiedAt())).toList();
+        Entry entry = dto(o.getId(), o.getTransactionId(), o.getEstateId(), o.getPlotId(), d, o.getCornerPremiumPct(),
+                o.getBasePrice(), o.getIntent().getValue(), o.getPlan().toLowerCase(Locale.ROOT), schedule.planTotal(),
+                verified.stream().map(PlanPayment::amount).reduce(BigDecimal.ZERO, BigDecimal::add), o.getCurrency(),
+                LocalDate.ofInstant(o.getAcquiredAt(), NIGERIA), o.getStatus(), history, o.getSupersedes(),
+                o.getAcquiredAt());
         OwnedPlotDto p = entry.dto();
         return new Entry(new OwnedPlotDto(p.id(), p.transactionId(), p.estateId(), p.plotId(), p.plotLabel(),
                 p.estate(), p.location(), p.sqm(), p.actualSqm(), p.isCorner(), p.cornerPremiumPct(),
                 p.basePrice(), p.titleType(), p.titleStatus(), p.titleVerified(), p.intent(), p.plan(),
-                p.totalPrice(), p.paidAmount(), p.currency(), p.acquiredDate(), p.status(), next.dueDate(),
-                next.amount(), p.payments(), schedule.instalments().size(), 0, p.arrears(), p.restructureStatus(),
+                p.totalPrice(), p.paidAmount(), p.currency(), p.acquiredDate(), p.status(),
+                next.map(PlanSchedule.Instalment::dueDate).orElse(null),
+                next.map(PlanSchedule.Instalment::amount).orElse(null), p.payments(), schedule.instalments().size(),
+                paidOff ? schedule.instalments().size() : paidInstalments.size(), p.arrears(), p.restructureStatus(),
                 p.supersedes()), entry.sortTime());
     }
 

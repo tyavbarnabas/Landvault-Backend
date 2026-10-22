@@ -37,6 +37,10 @@ public class PortfolioAllocationListener {
         // verified deposit (phase 3a) and stays active until the last
         // instalment. Anything else would be a plan the portfolio can't show.
         boolean onPlan = event.provisional() && "installment".equals(event.plan());
+        if (!event.provisional() && "installment".equals(event.plan())) {
+            completePlan(event);
+            return;
+        }
         if (!onPlan && !"outright".equals(event.plan())) {
             throw new IllegalStateException("Allocated a " + event.plan() + " sale; the portfolio knows outright "
                     + "sales and instalment plans at their deposit.");
@@ -62,5 +66,19 @@ public class PortfolioAllocationListener {
                         : " is now owned by buyer ") + event.buyerUserId()
                         + " (sale " + event.transactionId() + ")."));
         log.info("Owned plot {} recorded for sale {}", owned.getId(), event.transactionId());
+    }
+
+    /** 3b: the last instalment is verified — the plan's record is now owned outright. */
+    private void completePlan(PlotAllocated event) {
+        OwnedPlot owned = ownedPlots.findByTransactionIdAndBuyerUserId(event.transactionId(), event.buyerUserId())
+                .filter(o -> o.getStatus() == OwnedPlotStatus.INSTALLMENT_ACTIVE)
+                .orElseThrow(() -> new IllegalStateException("No active plan to complete for sale "
+                        + event.transactionId()));
+        owned.setStatus(OwnedPlotStatus.COMPLETED);
+        ownedPlots.saveAndFlush(owned);
+        auditApi.record(AuditEntryRequest.of(event.actorUserId(), "portfolio.plan_completed", "owned_plot",
+                owned.getId(), event.sellerTenantId(), "Plan paid in full: plot " + event.plotId()
+                        + " is now owned by buyer " + event.buyerUserId() + " (sale " + event.transactionId() + ")."));
+        log.info("Owned plot {} completed for sale {}", owned.getId(), event.transactionId());
     }
 }

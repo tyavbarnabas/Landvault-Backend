@@ -57,6 +57,17 @@ public class Payment extends AbstractEntity {
     @Column(name = "status", nullable = false, length = 16)
     private PaymentStatus status;
 
+    /** Which instalment an INSTALMENT payment pays; null otherwise (changeset 102). */
+    @Column(name = "instalment_sequence", updatable = false)
+    private Integer instalmentSequence;
+
+    /** When the developer's finance verified this payment — never automatic (changeset 102). */
+    @Column(name = "finance_verified_at")
+    private Instant financeVerifiedAt;
+
+    @Column(name = "finance_verified_by")
+    private UUID financeVerifiedBy;
+
     /** The full price, or an instalment plan's deposit (changeset 101). */
     @Enumerated(EnumType.STRING)
     @Column(name = "purpose", nullable = false, updatable = false, length = 16)
