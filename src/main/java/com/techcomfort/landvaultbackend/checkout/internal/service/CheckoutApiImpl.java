@@ -20,6 +20,7 @@ import com.techcomfort.landvaultbackend.checkout.internal.enums.PaymentPlan;
 import com.techcomfort.landvaultbackend.checkout.internal.enums.ReservationStatus;
 import com.techcomfort.landvaultbackend.checkout.internal.enums.TransactionStatus;
 import com.techcomfort.landvaultbackend.common.Currency;
+import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
 import com.techcomfort.landvaultbackend.checkout.internal.repository.ReservationRepository;
 import com.techcomfort.landvaultbackend.checkout.internal.repository.TransactionRepository;
 import lombok.RequiredArgsConstructor;
@@ -335,7 +336,9 @@ public class CheckoutApiImpl implements CheckoutApi {
     private static VerifiedSale toVerifiedSale(Object[] r) {
         return new VerifiedSale((UUID) r[0], (String) r[1], (UUID) r[2], (String) r[3],
                 r[4] == null ? "Plot " + r[5] : "Block " + r[4] + ", Plot " + r[5],
-                (BigDecimal) r[6], Currency.valueOf((String) r[7]), (Instant) r[8]);
+                (BigDecimal) r[6], Currency.valueOf((String) r[7]), (Instant) r[8],
+                !"INSTALLMENT".equals(r[9]) ? null : new VerifiedSale.Escrow("VERIFIED".equals(r[10]),
+                        (BigDecimal) r[11], r[12] == null ? null : RefundAppliesTo.valueOf((String) r[12])));
     }
 
     private static PayableTransaction toPayable(Transaction t) {

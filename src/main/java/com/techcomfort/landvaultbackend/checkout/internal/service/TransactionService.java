@@ -28,6 +28,7 @@ import com.techcomfort.landvaultbackend.common.PostalAddress;
 import com.techcomfort.landvaultbackend.identity.IdentityApi;
 import com.techcomfort.landvaultbackend.marketplace.MarketplaceApi;
 import com.techcomfort.landvaultbackend.marketplace.OfferedPlan;
+import com.techcomfort.landvaultbackend.marketplace.OfferedRefundTerms;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -143,6 +144,12 @@ public class TransactionService {
                 .planTotal(chosen.map(c -> c.quote().planTotal()).orElse(null))
                 .planPremium(chosen.map(c -> c.quote().premium()).orElse(null))
                 .depositAmount(chosen.map(c -> c.quote().deposit()).orElse(null))
+                // 3c: the withdrawal deduction the buyer is offered now decides
+                // the developer's share of each payment; fixed like the price.
+                .escrowDeductionPct(chosen.flatMap(ChosenPlan::refundTerms).map(OfferedRefundTerms::deductionPct)
+                        .orElse(null))
+                .escrowAppliesTo(chosen.flatMap(ChosenPlan::refundTerms).map(OfferedRefundTerms::appliesTo)
+                        .orElse(null))
                 .buyerAddressLine1(address.line1())
                 .buyerAddressLine2(address.line2())
                 .buyerAddressCity(address.city())
@@ -205,7 +212,8 @@ public class TransactionService {
     }
 
     /** The plan chosen at Proceed to buy, as published, and its figures at the agreed price. */
-    private record ChosenPlan(OfferedPlan offered, InstalmentPlanCalculator.Quote quote) {
+    private record ChosenPlan(OfferedPlan offered, InstalmentPlanCalculator.Quote quote,
+                              Optional<OfferedRefundTerms> refundTerms) {
     }
 
     /**
@@ -236,7 +244,7 @@ public class TransactionService {
                         offered.terms())
                 .orElseThrow(() -> new CheckoutException.PlanNotOffered(
                         "That plan isn't available at this plot's price."));
-        return Optional.of(new ChosenPlan(offered, quote));
+        return Optional.of(new ChosenPlan(offered, quote, marketplaceApi.refundTermsOf(reservation.getEstateId())));
     }
 
     /** The schedule, with due dates counted from today in Lagos — the offer's date. */

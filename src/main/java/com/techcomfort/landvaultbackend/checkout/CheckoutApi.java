@@ -76,13 +76,14 @@ public interface CheckoutApi {
     FinanceDecision rejectPayment(UUID transactionId, UUID tenantId, UUID financeUserId, String reason);
 
     /**
-     * TR-1: every verified sale (the seller is owed its agreed price), oldest
-     * first. Platform scope only — the plot and estate joins run under the
-     * caller's row-level security.
+     * TR-1: every sale the seller is owed on — verified sales, and (3c)
+     * instalment purchases on their plan, paid from escrow — oldest first.
+     * Platform scope only — the plot and estate joins run under the caller's
+     * row-level security.
      */
     List<VerifiedSale> verifiedSales();
 
-    /** One verified sale, or empty when it isn't verified (or isn't visible). */
+    /** One such sale, or empty when nothing is owed on it yet (or it isn't visible). */
     Optional<VerifiedSale> verifiedSale(UUID transactionId);
 
     /**

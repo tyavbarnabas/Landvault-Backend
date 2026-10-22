@@ -2,15 +2,19 @@ package com.techcomfort.landvaultbackend.marketplace.internal.service;
 
 import com.techcomfort.landvaultbackend.marketplace.EstateEligibility;
 import com.techcomfort.landvaultbackend.marketplace.MarketplaceApi;
+import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
 import com.techcomfort.landvaultbackend.marketplace.OfferedPlan;
+import com.techcomfort.landvaultbackend.marketplace.OfferedRefundTerms;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.PlotView;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.EstateEligibilityViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.PaymentPlanViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.PlotViewRepository;
+import com.techcomfort.landvaultbackend.marketplace.internal.repository.RefundTermsViewRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -21,6 +25,7 @@ public class MarketplaceApiImpl implements MarketplaceApi {
     private final EstateEligibilityViewRepository eligibility;
     private final PlotViewRepository plots;
     private final PaymentPlanViewRepository paymentPlans;
+    private final RefundTermsViewRepository refundTerms;
 
     @Override
     @Transactional(readOnly = true)
@@ -42,5 +47,12 @@ public class MarketplaceApiImpl implements MarketplaceApi {
     public Optional<OfferedPlan> offeredPlan(UUID estateId, UUID planId) {
         return paymentPlans.findByPlanIdAndEstateId(planId, estateId)
                 .map(p -> new OfferedPlan(p.getPlanId(), p.getName(), p.terms()));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<OfferedRefundTerms> refundTermsOf(UUID estateId) {
+        return refundTerms.findByEstateIdIn(List.of(estateId)).stream().findFirst()
+                .map(t -> new OfferedRefundTerms(t.getDeductionPct(), RefundAppliesTo.fromValue(t.getAppliesTo())));
     }
 }

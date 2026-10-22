@@ -142,7 +142,7 @@ public class PayoutOutcomeService {
      */
     private Outcome moneyWentAfterAll(Payout payout, PaystackClient.Transfer transfer) {
         String previous = payout.getStatus().wire();
-        boolean anotherAttempt = payouts.existsOtherForPart(payout.getTransactionId(), payout.getPartNumber(),
+        boolean anotherAttempt = payouts.existsOtherForPart(payout.getTransactionId(), payout.getTranche(), payout.getPartNumber(),
                 payout.getId(), PayoutStatus.LIVE);
         String reason;
         if (anotherAttempt) {

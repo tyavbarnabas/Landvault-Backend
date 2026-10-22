@@ -68,6 +68,7 @@ public class PaymentExceptionHandler {
             case PaymentException.RefundOutcomeUnknown e -> body(HttpStatus.SERVICE_UNAVAILABLE, e, "REFUND_OUTCOME_UNKNOWN");
             case PaymentException.CompanyWideScopeRequired e -> body(HttpStatus.FORBIDDEN, e, "COMPANY_WIDE_SCOPE_REQUIRED");
             case PaymentException.SaleAlreadyPaid e -> body(HttpStatus.CONFLICT, e, "SALE_ALREADY_PAID");
+            case PaymentException.HeldInEscrow e -> body(HttpStatus.CONFLICT, e, "HELD_IN_ESCROW");
             case PaymentException.PayoutInProgress e -> body(HttpStatus.CONFLICT, e, "PAYOUT_IN_PROGRESS");
             case PaymentException.CompanyNotActive e -> body(HttpStatus.CONFLICT, e, "COMPANY_NOT_ACTIVE");
             case PaymentException.NoApprovedPayoutAccount e -> body(HttpStatus.CONFLICT, e, "NO_APPROVED_PAYOUT_ACCOUNT");

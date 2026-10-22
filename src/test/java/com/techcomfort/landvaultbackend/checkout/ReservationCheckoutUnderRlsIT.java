@@ -2111,7 +2111,10 @@ class ReservationCheckoutUnderRlsIT {
         assertThat(get("/api/portal/finance/transactions", officer, String.class).getBody())
                 .contains("\"paymentFor\":\"deposit\"", "\"planName\":\"12-month plan\"", "\"expectedAmount\":6600000",
                         "\"amountsMatch\":true");
-        assertThat(financeAction(officer, purchase.id(), "verify", null).getStatusCode()).isEqualTo(HttpStatus.OK);
+        ResponseEntity<String> verified = financeAction(officer, purchase.id(), "verify", null);
+        assertThat(verified.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(verified.getBody()).as("finance is told the plan is running, not that the plot is sold")
+                .contains("\"status\":\"on_plan\"").containsPattern("\"allocationLetterNumber\":\"HT-PAL-");
 
         assertThat(plotStatus(plotId)).as("held on the plan, not sold").isEqualTo("ON_PLAN");
         assertThat(queryString("SELECT status FROM transactions WHERE id = '" + purchase.id() + "'")).isEqualTo("ON_PLAN");
@@ -2198,7 +2201,77 @@ class ReservationCheckoutUnderRlsIT {
         assertThat(owned.nextDueDate()).isNull();
         assertThat(pay(buyer, purchase.id()).getBody()).contains("TRANSACTION_NOT_PAYABLE");
         assertThat(get("/api/admin/payouts/ready", payoutAdmin(true), String.class).getBody())
-                .as("instalment sales wait for escrow payouts (3c)").doesNotContain(purchase.id().toString());
+                .as("owed from escrow (3c): the deposit's share first, nothing paid out yet")
+                .contains(purchase.id().toString(), "\"tranche\":\"share\"", "\"amountOwed\":22000000");
+    }
+
+    // --- instalment plans, phase 3c: escrow payouts (changeset 103) ---
+
+    /**
+     * The estate's refund terms (20% of the land price) are copied onto the
+     * purchase. The developer is paid that ₦4M from the deposit as soon as
+     * finance verifies it; the rest is held, and released when the plan
+     * completes — ₦18M, over the cap, so in two parts.
+     */
+    @Test
+    void escrowPaysTheDevelopersShareAsItIsVerifiedAndReleasesTheRestAtCompletion() {
+        TransactionDto purchase = onPlanPurchase(SHORT_PLAN);
+        assertThat(queryString("SELECT escrow_deduction_pct || '/' || escrow_applies_to FROM transactions WHERE id = '"
+                + purchase.id() + "'")).as("the refund terms offered, fixed on the purchase").isEqualTo("20.00/TOTAL_PRICE");
+        approvedPayoutAccount(seller.id(), "RCP_seller");
+        String admin = payoutAdmin(true);
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+
+        String ready = get("/api/admin/payouts/ready", admin, String.class).getBody();
+        assertThat(ready).contains(purchase.id().toString(), "\"tranche\":\"share\"",
+                "\"trancheLabel\":\"Developer's share of the deposit\"", "\"trancheAmount\":4000000",
+                "\"heldInEscrow\":2600000", "\"blockers\":[]");
+        payPart(admin, purchase.id(), "TRF_share");
+        verify(paystack).initiateTransfer(eq(400_000_000L), eq("RCP_seller"), anyString(), any());
+        assertThat(get("/api/admin/payouts/ready", admin, String.class).getBody())
+                .as("nothing more is owed while the plan runs").doesNotContain(purchase.id().toString());
+        ResponseEntity<String> held = sendPayout(admin, purchase.id());
+        assertThat(held.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(held.getBody()).contains("HELD_IN_ESCROW");
+
+        for (int i = 0; i < 2; i++) {
+            String instalment = payPlan(purchase, false);
+            paystackSays(instalment, "success", 770_000_000L, "NGN", "Approved");
+            confirm(buyer, instalment);
+            assertThat(financeAction(officer, purchase.id(), "verify", null).getStatusCode()).isEqualTo(HttpStatus.OK);
+            if (i == 0) {
+                assertThat(get("/api/admin/payouts/ready", admin, String.class).getBody())
+                        .as("the ₦4M is already paid: the instalment is held").doesNotContain(purchase.id().toString());
+            }
+        }
+
+        assertThat(get("/api/admin/payouts/ready", admin, String.class).getBody())
+                .contains(purchase.id().toString(), "\"tranche\":\"release\"", "\"trancheAmount\":18000000",
+                        "\"amountOwed\":18000000", "\"partCount\":2");
+        payPart(admin, purchase.id(), "TRF_release1");
+        payPart(admin, purchase.id(), "TRF_release2");
+        verify(paystack, times(2)).initiateTransfer(eq(900_000_000L), eq("RCP_seller"), anyString(), any());
+
+        assertThat(queryString("SELECT string_agg(split_part(tranche, ':', 1) || '/' || part_number || '/' || amount_kobo, "
+                + "',' ORDER BY created_at) FROM payouts WHERE status = 'SUCCESS' AND transaction_id = '" + purchase.id()
+                + "'")).as("everything the buyer paid, and no more").isEqualTo(
+                        "SHARE/1/400000000,RELEASE/1/900000000,RELEASE/2/900000000");
+        ResponseEntity<String> again = sendPayout(admin, purchase.id());
+        assertThat(again.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(again.getBody()).contains("SALE_ALREADY_PAID");
+    }
+
+    /** A plan payment finance hasn't verified owes the developer nothing yet. */
+    @Test
+    void anUnverifiedPlanPaymentIsNotPaidOut() {
+        TransactionDto purchase = paidDeposit();
+        approvedPayoutAccount(seller.id(), "RCP_seller");
+
+        assertThat(get("/api/admin/payouts/ready", payoutAdmin(true), String.class).getBody())
+                .doesNotContain(purchase.id().toString());
+        ResponseEntity<String> refused = sendPayout(payoutAdmin(true), purchase.id());
+        assertThat(refused.getBody()).contains("SALE_NOT_PAYABLE");
+        verify(paystack, never()).initiateTransfer(anyLong(), anyString(), anyString(), any());
     }
 
     /** Decision 7: everything still owed in one payment completes the plan. */

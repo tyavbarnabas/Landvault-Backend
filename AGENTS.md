@@ -6287,13 +6287,14 @@ payouts. Decided with the user before 3a: a refund term's "% of the total price"
   conditions plus HomeTrue's fixed provisional clause naming the offer. `ON_PLAN` is in `chk_plots_status`; the public
   map shows it as unavailable and the reserve function won't take it; developers can't withhold, change or withdraw
   it (the status writers use allow-lists; `withdrawPlot` and the skip reasons name it).
+- **Finance's response says `on_plan`** (not `verified`), with the provisional letter's id and number — fixed in
+  3c after the walkthrough showed "verified" for a deposit.
 - **The buyer's email** says the deposit is verified and the plot is held on the plan, with the provisional letter —
   never "is yours" (`PurchaseDecisionAlert.planName`).
 - **Portfolio**: an active plan shows the plan total as `totalPrice`, the deposit as `paidAmount`, `installmentMonths`,
   `installmentsPaid` 0, and the first instalment as `nextDueDate`/`nextDueAmount` (`CheckoutApi.schedulesOf`); the
   payment history types it `deposit`. Vault and verify page: `provisional_allocation_letter`.
-- **No payout**: payouts read `VERIFIED` sales; an `on_plan` purchase isn't one, so HomeTrue holds the deposit until
-  3c.
+- **No payout** in 3a; since 3c the developer's escrow share of the deposit is paid out (see 3c).
 - **Late money**: a deposit that arrives after the purchase was abandoned can only be refunded for now —
   `LATE_DEPOSIT_NOT_SUPPORTED` (409), checked on the payment's purpose before the amount.
 
@@ -6325,11 +6326,41 @@ Proven red: treating a verified deposit as a full payment (the sale rolls back w
 - **Portfolio** (plans): `paidAmount` = verified payments, `installmentsPaid`, next unpaid instalment, and every
   succeeded payment in the history (`deposit`/`instalment`/`balance`, confirmed or pending_verification), via
   `PaymentSummaryProvider.succeededPaymentsFor`.
-- **Payouts**: completed instalment sales are **kept off the payout list** (`findVerifiedSales` excludes
-  `INSTALLMENT`) until escrow payouts (3c) — otherwise they'd pay the plain agreed price.
+- **Payouts**: superseded by 3c (escrow payouts, below).
 
 Proven red: paying the next instalment before the current one is verified, and a last instalment that doesn't
 complete the plan.
+
+### Phase 3c: escrow payouts (changeset 103)
+
+Decided with the user (decision 6, revised to escrow): a buyer who withdraws on the declared terms must get their
+refund from money HomeTrue still holds, never from a developer who may not pay it back. So from each verified plan
+payment the developer is paid **only what they'd keep on a withdrawal**, and HomeTrue holds the rest until the plan
+completes.
+
+- **The terms are copied onto the purchase** at "Proceed to buy" (`transactions.escrow_deduction_pct`,
+  `escrow_applies_to`, from the published refund terms via `MarketplaceApi.refundTermsOf`), like the price — a
+  later change can't move an escrow already agreed. Outright purchases carry none. Purchases opened before 103 have
+  none: everything is held to completion.
+- **Shares** (`PayoutTranches`, payments), per finance-verified payment in verification order: `AMOUNT_PAID` →
+  the deduction % of that payment; `TOTAL_PRICE` → a fixed sum, the deduction % of the **land price** (agreed price,
+  not the plan total), taken from the first payments until reached, nothing after. Rounded **down** to the kobo.
+  Unverified payments owe nothing. **Release** at completion = verified payments − shares (plan premium included:
+  it's the developer's).
+- **Tranches**: a payout row pays one — `SALE` (outright, as before), `SHARE:<payment id>` or `RELEASE`
+  (`payouts.tranche`). Each tranche is split under the transfer cap as before, the split fixed by its own first paid
+  part; one live attempt per tranche part (`uq_payouts_one_live_per_tranche_part`, replacing 077's index); the
+  double-payment check (8c) compares tranche and part. Still **one payout in flight per sale**, so tranches go out in
+  order: shares, then the release. The ready list shows the next tranche (`tranche` share/release/sale,
+  `trancheLabel`, `sharePaymentId`, `trancheAmount`, `heldInEscrow`); `amountOwed` is everything owed now and unpaid.
+- **Checkout** lists sales owed on (`CheckoutApi.verifiedSales`) as verified sales **plus `ON_PLAN` instalment
+  purchases**, with `VerifiedSale.escrow` (null for outright). An instalment plan with every share so far paid
+  refuses with 409 `HELD_IN_ESCROW` (not `SALE_ALREADY_PAID`).
+- **Not yet**: withdrawal and revocation (phase 4–5) will stop the shares, refund from what is held and, for a
+  withdrawal, leave the developer's paid share as their deduction.
+
+Proven red: tranches not kept apart (the release counted as paid by the share's part), and terms not copied onto the
+purchase.
 
 ## A buyer's address (changeset 097)
 

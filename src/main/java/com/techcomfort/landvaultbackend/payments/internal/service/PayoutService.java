@@ -10,6 +10,7 @@ import com.techcomfort.landvaultbackend.common.TenantScope;
 import com.techcomfort.landvaultbackend.identity.IdentityApi;
 import com.techcomfort.landvaultbackend.payments.dto.PayoutDto;
 import com.techcomfort.landvaultbackend.payments.dto.ReadyPayoutDto;
+import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payout;
 import com.techcomfort.landvaultbackend.payments.internal.domain.SettlementAccount;
 import com.techcomfort.landvaultbackend.payments.internal.enums.PayoutStatus;
@@ -17,6 +18,7 @@ import com.techcomfort.landvaultbackend.payments.internal.enums.SettlementAccoun
 import com.techcomfort.landvaultbackend.payments.internal.exceptions.PaymentException;
 import com.techcomfort.landvaultbackend.payments.internal.paystack.PaystackAmounts;
 import com.techcomfort.landvaultbackend.payments.internal.paystack.PaystackClient;
+import com.techcomfort.landvaultbackend.payments.internal.repository.PaymentRepository;
 import com.techcomfort.landvaultbackend.payments.internal.repository.PayoutRepository;
 import com.techcomfort.landvaultbackend.payments.internal.repository.SettlementAccountRepository;
 import com.techcomfort.landvaultbackend.tenancy.TenancyApi;
@@ -25,6 +27,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -52,6 +55,7 @@ public class PayoutService {
 
     private final PayoutRecorder recorder;
     private final PayoutRepository payouts;
+    private final PaymentRepository salePayments;
     private final SettlementAccountRepository accounts;
     private final PaystackClient paystack;
     private final CheckoutApi checkoutApi;
@@ -60,8 +64,9 @@ public class PayoutService {
     private final AuditApi auditApi;
 
     /**
-     * Verified sales not yet paid in full and with nothing in flight, each
-     * with what is left, the next part, and what (if anything) stops it now.
+     * Sales with money owed and nothing in flight, each with what is left, the
+     * next tranche and part, and what (if anything) stops it now. One payout
+     * at a time per sale, so its tranches go out in order.
      */
     @Transactional(readOnly = true)
     public List<ReadyPayoutDto> ready() {
@@ -76,6 +81,10 @@ public class PayoutService {
         Map<UUID, String> names = tenancyApi.organizationNamesFor(tenants);
         Map<UUID, SettlementAccount> byId = accountsById(attemptsBySale.values().stream().flatMap(List::stream).toList());
 
+        Map<UUID, List<Payment>> paymentsBySale = salePayments.findAllByTransactionIdIn(sales.stream()
+                        .filter(s -> s.escrow() != null).map(VerifiedSale::transactionId).toList()).stream()
+                .collect(Collectors.groupingBy(Payment::getTransactionId));
+
         List<ReadyPayoutDto> ready = new ArrayList<>();
         for (VerifiedSale sale : sales) {
             List<Payout> attempts = attemptsBySale.getOrDefault(sale.transactionId(), List.of());
@@ -84,14 +93,27 @@ public class PayoutService {
             if (inFlight) {
                 continue;
             }
+            List<Payment> salePaymentsOf = paymentsBySale.getOrDefault(sale.transactionId(), List.of());
             List<String> blockers = new ArrayList<>();
+            PayoutTranches.Owed owed;
+            PayoutTranches.Tranche next;
             PayoutRecorder.Plan plan = null;
+            BigDecimal amountOwed = null;
             if (sale.currency() == Currency.NGN) {
-                plan = recorder.plan(sale, attempts);
-                if (plan.nextPart() == null) {
+                PayoutRecorder.Owing owing = recorder.owing(sale, attempts, salePaymentsOf);
+                if (owing.next() == null) {
                     continue;
                 }
+                owed = owing.owed();
+                next = owing.next();
+                plan = owing.nextPlan();
+                amountOwed = owing.amountOwed();
             } else {
+                owed = PayoutTranches.of(sale, salePaymentsOf);
+                next = owed.tranches().isEmpty() ? null : owed.tranches().getFirst();
+                if (next == null) {
+                    continue;
+                }
                 blockers.add(CURRENCY_NOT_SUPPORTED);
             }
             Optional<SettlementAccount> account = accounts.findByTenantIdAndStatus(sale.sellerTenantId(),
@@ -107,8 +129,8 @@ public class PayoutService {
                     .orElse(null);
             ready.add(new ReadyPayoutDto(sale.transactionId(), sale.transactionReference(), sale.sellerTenantId(),
                     names.get(sale.sellerTenantId()), sale.estateName(), sale.plotLabel(), sale.totalPrice(),
-                    sale.currency().name(),
-                    plan == null ? null : PaystackAmounts.fromKobo(plan.totalKobo() - plan.paidKobo()),
+                    sale.currency().name(), amountOwed, PayoutTranches.kind(next.key()), PayoutTranches.label(next),
+                    PayoutTranches.sharePaymentId(next.key()), next.amount(), owed.heldInEscrow(),
                     plan == null ? null : plan.partCount(), plan == null ? null : plan.paidParts().size(),
                     plan == null ? null : plan.nextPart(),
                     plan == null ? null : PaystackAmounts.fromKobo(plan.nextPartKobo()), sale.verifiedAt(),
@@ -268,7 +290,7 @@ public class PayoutService {
 
     private static PayoutDto toDto(Payout p, SettlementAccount account, String companyName) {
         return new PayoutDto(p.getId(), p.getTransactionId(), p.getTenantId(), companyName, p.getAmount(), p.getCurrency().name(),
-                p.getPartNumber(), p.getPartCount(), p.getStatus().wire(), p.getReference(), p.getGatewayMessage(),
+                PayoutTranches.kind(p.getTranche()), PayoutTranches.sharePaymentId(p.getTranche()), p.getPartNumber(), p.getPartCount(), p.getStatus().wire(), p.getReference(), p.getGatewayMessage(),
                 account == null ? null : account.getBankName(),
                 account == null ? null : PayoutRecorder.last4(account.getAccountNumber()),
                 p.getCreatedAt(), p.getTransferredAt(), p.getReviewReason());

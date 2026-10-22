@@ -325,8 +325,9 @@ gets it without a new call.
   becomes **`on_plan`** (new `TransactionStatus`), the plot **`on-plan`** (new `PlotStatus`; public map: unavailable),
   the portfolio entry `installment_active` (`totalPrice` = plan total, `paidAmount` = deposit, `installmentMonths`,
   `installmentsPaid`, `nextDueDate`/`nextDueAmount`), and a **provisional allocation letter** is issued — Document
-  type **`provisional_allocation_letter`**, number `HT-PAL-…`. The buyer's email says the plot is held on the plan.
-  Nothing is paid out to the developer yet. Late money on a deposit can only be refunded: allocate answers 409
+  type **`provisional_allocation_letter`**, number `HT-PAL-…`. The verify response answers **`status: on_plan`** with
+  that letter's `allocationLetterId`/`allocationLetterNumber` (it said `verified` until 3c — don't show "sold").
+  The buyer's email says the plot is held on the plan. Payouts to the developer: see escrow payouts (3c). Late money on a deposit can only be refunded: allocate answers 409
   `LATE_DEPOSIT_NOT_SUPPORTED`.
   **Phase 3b built** (changeset 102): once `on_plan`, `POST /api/transactions/{id}/payments` charges the **next
   instalment**; `?balance=true` charges **everything still owed** in one payment. One at a time: 409
@@ -997,6 +998,16 @@ parts: each `PayoutDto` carries `partNumber`/`partCount` and `amount` is the par
 `/api/admin/payouts/ready` items add `amountOwed`, `partCount`, `partsPaid`, `nextPart`,
 `nextPartAmount` (null with blocker `CURRENCY_NOT_SUPPORTED` for non-NGN). Pressing pay
 out sends the next part (one OTP per part); 409 `SALE_ALREADY_PAID` once all are paid.
+
+**Escrow payouts (instalment plans, 3c).** What a sale owes comes in tranches, paid in
+order. Ready items add `tranche` (`sale` outright | `share` the developer's share of one
+verified plan payment | `release` what HomeTrue held, once the plan completes),
+`trancheLabel` (e.g. "Developer's share of the deposit"), `sharePaymentId` (share only),
+`trancheAmount`, and `heldInEscrow` (instalment plans still running; null for outright).
+`partCount`/`partsPaid`/`nextPart`/`nextPartAmount` refer to the tranche; `amountOwed`
+is everything owed now and unpaid. `PayoutDto` adds `tranche` and `sharePaymentId`.
+Instalment purchases appear while on their plan, as soon as a share is owed. 409
+`HELD_IN_ESCROW`: every share owed so far is paid; the rest waits for completion.
 
 **Payments, step 8c — payout outcomes.** `GET /api/portal/payouts` (`portal.payments.verify`,
 company-wide; 403 `COMPANY_WIDE_SCOPE_REQUIRED` when narrowed to a branch) → the company's
