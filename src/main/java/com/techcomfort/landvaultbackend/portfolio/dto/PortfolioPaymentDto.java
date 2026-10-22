@@ -14,7 +14,7 @@ public record PortfolioPaymentDto(
         LocalDate date,
         BigDecimal amount,
         String currency,
-        @Schema(description = "`outright` today.")
+        @Schema(description = "`outright`, or on an instalment plan `deposit`, `instalment` or `balance`.")
         String type,
         @Schema(description = "`pending_verification` (Paystack confirmed it, finance hasn't) or `confirmed` (finance verified it).")
         String status,

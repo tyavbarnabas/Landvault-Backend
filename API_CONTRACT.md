@@ -293,7 +293,7 @@ endpoints with no counterpart in `~/landvault/src/services/`. The public half
 arrives inside the existing marketplace payload (below), so a listing page
 gets it without a new call.
 
-### Instalment plans (portal + marketplace) — **phase 1 built** (changeset 099)
+### Instalment plans (portal + marketplace) — **phases 1–3 built** (changesets 099–103)
 
 | Method | Path | Request | Response |
 |---|---|---|---|
@@ -339,8 +339,9 @@ gets it without a new call.
   `verified`, the portfolio entry `completed`, and issues the final `allocation_letter` (answer `status: verified`).
   Portfolio plans: `paidAmount` is what finance verified, `installmentsPaid`, `nextDueDate`/`nextDueAmount` the first
   unpaid instalment, and `payments[]` every payment (`type` `deposit`/`instalment`/`balance`, `status` `confirmed` or
-  `pending_verification`). The buyer is emailed per verified instalment. Instalment sales aren't paid out to the
-  developer until escrow payouts (3c).
+  `pending_verification`). The buyer is emailed per verified instalment. The developer is paid out of escrow: see
+  "Escrow payouts" under Payments.
+  **Not built yet (phases 4–5)**: arrears, penalties charged, reminders, withdrawal, revocation and restructure.
 
 ### Publication now has SEVEN conditions, not five
 
@@ -440,7 +441,7 @@ WishlistItem {
 ## Checkout / transactions — `marketplaceCheckoutService.ts`
 | Method | Path | Request | Response |
 |---|---|---|---|
-| POST | `/api/checkout/transactions` | `{ reservationId, intent, plan, installmentMonths? }` | `Transaction` |
+| POST | `/api/checkout/transactions` | `{ reservationId, intent, plan, planId? }` | `Transaction` |
 | GET | `/api/checkout/transactions/mine?cursor&limit` | — | `Page<Transaction>` — the buyer's own, newest first (limit default 20, max 100) |
 | GET | `/api/checkout/transactions/{id}` | — | `Transaction` (another buyer's is 404) |
 
@@ -451,7 +452,7 @@ doesn't offer now is 409 `PLAN_NOT_OFFERED`. The response's **`schedule`** is `{
 planTotal, premium, deposit, instalments: [{ sequence, dueDate, amount }] }`, worked out from the agreed price and
 **fixed** — due dates count from today (Lagos), and the developer redeclaring plans later changes nothing. The offer
 letter states the whole plan, every due date, the total commitment on the plan (one-off fees included) and the
-late-payment rule. Paying an instalment purchase is still refused (`PAYMENT_PLAN_NOT_SUPPORTED`) until phase 3.
+late-payment rule. Paying it charges the deposit first (see "Instalment plans" above).
 
 **Opening a purchase issues the offer letter** (see Documents): the response's **`offer`** is `{ id, number, issuedAt, acceptedAt }`. Show it and let the buyer accept it (`POST /api/documents/offer-letters/{offer.id}/accept`) before the Pay button; paying is refused with 409 `OFFER_NOT_ACCEPTED` until then. If the estate's letter isn't approved and current, nothing is opened: 409 `LETTER_NOT_APPROVED` (the hold stays). `offer` is null on purchases opened before offer letters.
 
@@ -466,9 +467,11 @@ Paying, confirming and finance verification are **not** checkout routes — see 
 portal's `/api/portal/finance/...`). The old `/payment`, `/confirm` and `/finance-verify` routes in
 this table never existed and are gone.
 
-`TransactionStatus`: `pending_payment → awaiting_finance → verified`, or `rejected`, or `abandoned`
+`TransactionStatus`: `pending_payment → awaiting_finance → verified`, or `rejected`, or `abandoned`.
+On an instalment plan: `pending_payment → awaiting_finance → on_plan` (deposit verified) `→ verified` (last
+instalment or balance verified),
 (the hold ended with nothing paid). The backend never produces `payment_received`: a confirmed
-payment moves straight to `awaiting_finance`. **Only `verified` means the plot is the buyer's.**
+payment moves straight to `awaiting_finance`. **Only `verified` means the plot is the buyer's** — `on_plan` never does.
 
 Every `Transaction` carries **`payment`** — null until the buyer first presses pay:
 `{ reference, status, amountPaid, paidAt, underReview, reviewKind, refundStatus, receiptId, receiptNumber }`. It is the
@@ -510,7 +513,7 @@ The hold is acquired by a database-level compare-and-swap inside a
 one plot, and a buyer cannot read or write `plots` directly at all. Expiry is
 a scheduled sweep, not a client timer. **Holds cannot be extended.**
 
-## Portfolio (owned plots + payments) — `portfolioService.ts` — **outright purchases built** (changeset 088)
+## Portfolio (owned plots + payments) — `portfolioService.ts` — **outright and instalment purchases built** (changesets 088, 101–102)
 
 All need `client.portfolio.view` (every buyer has it). Read-only: **ownership only ever comes from finance verifying a sale**.
 
@@ -522,14 +525,14 @@ All need `client.portfolio.view` (every buyer has it). Read-only: **ownership on
 
 - **What is listed**: every plot the buyer owns, across every company, plus paid purchases finance hasn't verified yet (`pending_verification`, with `id` = the transaction id). An unpaid hold is **not** listed (it's a checkout, not ownership), nor is a rejected or abandoned purchase.
 - **When finance verifies**, the purchase becomes an owned plot with its own `id`; `transactionId` stays the same, and `GET /plots/{transactionId}` keeps working, so the frontend can follow it.
-- **Statuses today**: `pending_verification` and `completed` (an outright sale, verified = paid in full). `allocated` waits for issued documents; the installment, arrears, upgrade and resale statuses wait for those flows. Nothing fakes them.
+- **Statuses today**: `pending_verification`, `installment_active` (deposit verified, plan running) and `completed` (verified and paid in full — outright, or the plan's last instalment or balance). `allocated` waits for issued documents; the arrears, upgrade and resale statuses wait for those flows. Nothing fakes them.
 - **No money arithmetic in the frontend**: `paidAmount` is what finance verified (**zero while pending** — equity doesn't advance before verification), and `/summary` gives totals per currency, never added across currencies, counting only plots still owned (`transferred`/`superseded` are listed as history but never counted), with pending purchases counted separately. Use it instead of `groupPlotsByCurrency`, which only sees the page loaded.
 - **Title**: `titleType`, plus **`titleStatus`** (`pending` | `verified` | `rejected`, live from HomeTrue's review) and `titleVerified` (true only while verified). The frontend's mock always set `titleVerified: true`; that is no longer true.
 - `basePrice` is always the agreed pre-premium price; `cornerPremiumPct` only when a premium was applied. `sqm` is what it was sold as; `actualSqm` the survey, null when unsurveyed — never reconcile them.
 - `payments`: the purchase's payment, `pending_verification` then `confirmed`. **`receiptId` is HomeTrue's receipt id** (`/api/documents/receipts/{id}`), null until Paystack confirms the payment. *(Changed: it used to be the payment reference.)*
-- Installment fields (`nextDueDate`, `nextDueAmount`, `installmentMonths`, `installmentsPaid`, `arrears`, `restructureStatus`) and `supersedes` are null: nothing can be bought on a plan yet.
+- **Plans**: `plan` is `installment`, `totalPrice` the plan total, `paidAmount` what finance verified, `installmentMonths`, `installmentsPaid`, and `nextDueDate`/`nextDueAmount` the first unpaid instalment (null once paid off). `payments[]` lists every payment with `type` `deposit` | `instalment` | `balance`. `arrears`, `restructureStatus` and `supersedes` are still null (phases 4–5, upgrades).
 
-**Not built, and the frontend's live calls to them will 404/405**: `POST /api/portfolio/plots` and `PUT /api/portfolio/plots/{id}` (**never will be** — a client must not be able to create or change ownership), the schedule, installment payment and verify routes, and `restructure-requests`. They arrive with installment plans.
+**Not built, and the frontend's live calls to them will 404/405**: `POST /api/portfolio/plots` and `PUT /api/portfolio/plots/{id}` (**never will be** — a client must not be able to create or change ownership), and `restructure-requests` (phase 5). The schedule is on the transaction (`schedule`); instalments are paid with `POST /api/transactions/{id}/payments` and verified in the finance queue — there are no portfolio routes for either.
 
 ## Documents — `documentsService.ts` — **receipts (089), allocation letters (095) and offer letters (098) built**
 
@@ -919,7 +922,8 @@ authorizationUrl, createdAt }`. Redirect the buyer to `authorizationUrl`;
 Paystack returns them to `/payments/return?reference=…` on the frontend.
 **Showing "paid" on that page is wrong** — wait for the backend to verify
 (step 4). Errors: 404 `TRANSACTION_NOT_FOUND`, 409 `TRANSACTION_NOT_PAYABLE`,
-400 `PAYMENT_PLAN_NOT_SUPPORTED` / `CURRENCY_NOT_SUPPORTED`, 502
+400 `PAYMENT_PLAN_NOT_SUPPORTED` (milestone, or an instalment purchase opened before plans
+existed) / `CURRENCY_NOT_SUPPORTED`, 502
 `PAYMENT_PROVIDER_REFUSED`, 503 `PAYMENT_PROVIDER_UNAVAILABLE`.
 
 **Payments, step 4 — confirm**: the return page (`/payments/return?reference=…`)
@@ -949,7 +953,8 @@ contact you", never "you own this plot".
 → `[{ transactionId, transactionReference, estateName, plotLabel, buyerEmail,
 expectedAmount, currency, awaitingSince, payment: { reference, amountPaid,
 channel, paidAt, last4, gatewayResponse } | null, amountsMatch, letterApproved }]`.
-`POST …/{id}/verify` → `{ transactionId, status: "verified", allocationLetterId, allocationLetterNumber }` (plot sold, reservation
+`POST …/{id}/verify` → `{ transactionId, status: "verified", allocationLetterId, allocationLetterNumber }` (`status:
+"on_plan"` for a deposit or non-final instalment — see "Instalment plans") (plot sold, reservation
 `converted`, the buyer's allocation letter issued — only now may the buyer be told the plot is theirs). The two
 letter fields name the letter just issued; they are null on every other decision.
 `letterApproved: false` means verify will be refused with 409 `LETTER_NOT_APPROVED` until the Executive
