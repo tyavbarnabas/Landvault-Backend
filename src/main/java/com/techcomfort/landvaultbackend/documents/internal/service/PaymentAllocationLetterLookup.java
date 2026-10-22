@@ -19,6 +19,8 @@ public class PaymentAllocationLetterLookup implements AllocationLetterLookup {
     @Override
     @Transactional(readOnly = true)
     public Optional<LetterRef> letterFor(UUID transactionId) {
-        return letters.findByTransactionId(transactionId).map(l -> new LetterRef(l.getId(), l.getNumber()));
+        // The newest: the provisional letter after a deposit, the final one once paid in full.
+        return letters.findByTransactionIdOrderByIssuedAtDesc(transactionId).stream().findFirst()
+                .map(l -> new LetterRef(l.getId(), l.getNumber()));
     }
 }

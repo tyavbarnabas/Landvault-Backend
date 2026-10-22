@@ -475,6 +475,8 @@ public class InventoryEditService {
                     label + " is held by a buyer; it can't be changed until the hold ends.");
             case SOLD -> new PlotStatusChangeDto.Skipped(id, plot.getPlotNumber(), status, "SOLD",
                     label + " is sold.");
+            case ON_PLAN -> new PlotStatusChangeDto.Skipped(id, plot.getPlotNumber(), status, "ON_PLAN",
+                    label + " is held for a buyer paying by instalments.");
             case WITHHELD -> target == PlotStatusWriter.Target.RESTORE && plot.getWithheldFromStatus() == null
                     ? new PlotStatusChangeDto.Skipped(id, plot.getPlotNumber(), status, "NO_RECORDED_AVAILABILITY",
                     label + " has no recorded availability to return to. Use 'available-dev' or 'available-inv'.")
@@ -526,7 +528,8 @@ public class InventoryEditService {
         Plot plot = plotRepository.findForUpdate(plotId, estateId)
                 .orElseThrow(() -> new InventoryException.RelatedRecordNotFound(
                         "Plot " + plotId + " does not belong to this estate."));
-        if (plot.getStatus() == PlotStatus.RESERVED || plot.getStatus() == PlotStatus.SOLD) {
+        if (plot.getStatus() == PlotStatus.RESERVED || plot.getStatus() == PlotStatus.SOLD
+                || plot.getStatus() == PlotStatus.ON_PLAN) {
             throw new InventoryException.PlotNotEditable(plotLabel(plot), plot.getStatus().getValue());
         }
         if (plotHistory.hasPurchaseHistory(plotId) || conflictDetection.hasConflictHistory(plotId)) {

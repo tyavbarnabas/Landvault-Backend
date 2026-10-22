@@ -21,7 +21,13 @@ public record PayableTransaction(
         BigDecimal totalPrice,
         Currency currency,
         String plan,
-        String status
+        String status,
+        /**
+         * What the next payment must be: the full price outright, the deposit
+         * on an instalment plan. Null for an instalment purchase opened before
+         * plans were declared (it has no deposit to charge).
+         */
+        BigDecimal amountDue
 ) {
 
     public boolean isPendingPayment() {
@@ -30,5 +36,9 @@ public record PayableTransaction(
 
     public boolean isOutright() {
         return "outright".equals(plan);
+    }
+
+    public boolean isInstalment() {
+        return "installment".equals(plan);
     }
 }

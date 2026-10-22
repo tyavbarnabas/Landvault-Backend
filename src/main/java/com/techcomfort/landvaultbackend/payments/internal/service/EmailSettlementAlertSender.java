@@ -134,7 +134,8 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
 
                         %s
                     """.formatted(alert.amount(), alert.plotLabel(), alert.estateName(),
-                    letterParagraph(alert.letterNumber(), alert.letterUrl()), alert.purchaseUrl()));
+                    letterParagraph("allocation letter", alert.letterNumber(), alert.letterUrl()),
+                    alert.purchaseUrl()));
         } else {
             message.setSubject("Your payment for " + alert.plotLabel() + " is being returned");
             message.setText("""
@@ -158,7 +159,23 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
         SimpleMailMessage message = new SimpleMailMessage();
         message.setFrom(fromAddress);
         message.setTo(alert.to());
-        if (alert.verified()) {
+        if (alert.verified() && alert.planName() != null) {
+            // Phase 3a: a deposit holds the plot on the plan; it is the buyer's once every instalment is paid.
+            message.setSubject("Deposit verified: " + alert.plotLabel() + " at " + alert.estateName()
+                    + " is held for you");
+            message.setText("""
+                    Hello,
+
+                    The developer has verified your deposit of NGN %s on the %s. %s, %s is now held for you on \
+                    the plan, and becomes yours when every instalment is paid and verified.
+                    %s
+                    See your purchase and its schedule:
+
+                        %s
+                    """.formatted(alert.amount(), alert.planName(), alert.plotLabel(), alert.estateName(),
+                    letterParagraph("provisional allocation letter", alert.letterNumber(), alert.letterUrl()),
+                    alert.purchaseUrl()));
+        } else if (alert.verified()) {
             message.setSubject("Good news: " + alert.plotLabel() + " at " + alert.estateName() + " is yours");
             message.setText("""
                     Hello,
@@ -170,7 +187,7 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
 
                         %s
                     """.formatted(alert.amount(), alert.plotLabel(), alert.estateName(),
-                    letterParagraph(alert.letterNumber(), alert.letterUrl()), alert.purchaseUrl()));
+                    letterParagraph("allocation letter", alert.letterNumber(), alert.letterUrl()), alert.purchaseUrl()));
         } else {
             message.setSubject("Your payment for " + alert.plotLabel() + " is being returned");
             message.setText("""
@@ -189,15 +206,15 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
     }
 
     /** Names the allocation letter and links to it; a blank line when there is none (never expected once allocated). */
-    private static String letterParagraph(String letterNumber, String letterUrl) {
+    private static String letterParagraph(String kind, String letterNumber, String letterUrl) {
         if (letterUrl == null) {
             return "";
         }
         return """
 
-                Your allocation letter, %s, is ready. Sign in to view and download it:
+                Your %s, %s, is ready. Sign in to view and download it:
 
                     %s
-                """.formatted(letterNumber, letterUrl);
+                """.formatted(kind, letterNumber, letterUrl);
     }
 }

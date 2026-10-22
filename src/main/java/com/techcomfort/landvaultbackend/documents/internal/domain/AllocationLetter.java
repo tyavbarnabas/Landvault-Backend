@@ -1,8 +1,11 @@
 package com.techcomfort.landvaultbackend.documents.internal.domain;
 
 import com.techcomfort.landvaultbackend.common.AbstractAppendOnlyEntity;
+import com.techcomfort.landvaultbackend.documents.internal.enums.LetterKind;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -152,6 +155,11 @@ public class AllocationLetter extends AbstractAppendOnlyEntity {
 
     @Column(name = "default_terms_version", updatable = false)
     private Integer defaultTermsVersion;
+
+    /** Provisional (an instalment plan's deposit) or the final letter (changeset 101). */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "kind", nullable = false, updatable = false, length = 16)
+    private LetterKind kind;
 
     /** The accepted offer whose terms this letter copies; null for sales opened before offers (098). */
     @Column(name = "offer_letter_id", updatable = false)

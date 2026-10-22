@@ -8,6 +8,7 @@ import com.techcomfort.landvaultbackend.documents.dto.LetterheadImageDto;
 import com.techcomfort.landvaultbackend.documents.dto.PrintedLetterheadDto;
 import com.techcomfort.landvaultbackend.documents.internal.domain.AllocationLetter;
 import com.techcomfort.landvaultbackend.documents.internal.domain.OfferLetter;
+import com.techcomfort.landvaultbackend.documents.internal.enums.LetterKind;
 import com.techcomfort.landvaultbackend.documents.internal.render.DocumentFormats;
 import com.techcomfort.landvaultbackend.documents.internal.render.LetterClauses;
 import com.techcomfort.landvaultbackend.documents.internal.render.LetterPlaceholders;
@@ -62,7 +63,8 @@ public class AllocationLetterIssuer {
     @EventListener
     @Transactional(propagation = Propagation.MANDATORY)
     public void on(PlotAllocated event) {
-        if (letters.existsByTransactionId(event.transactionId())) {
+        LetterKind kind = event.provisional() ? LetterKind.PROVISIONAL : LetterKind.ALLOCATION;
+        if (letters.existsByTransactionIdAndKind(event.transactionId(), kind)) {
             return;
         }
         LetterApprovalService.IssuableLetter setup = approvals.issuable(event.estateId())
@@ -91,13 +93,18 @@ public class AllocationLetterIssuer {
                 "allocationDate", DocumentFormats.date(issuedAt));
         Optional<OfferLetter> offer = offers.findByTransactionId(event.transactionId())
                 .filter(o -> acceptances.findByOfferLetterId(o.getId()).isPresent());
-        List<String> clauses = offer.map(o -> List.of(o.getClauses())).orElseGet(() -> LetterClauses.of(
-                setup.template().standardClauses(), List.of(setup.terms().getClauses()), setup.facts()));
+        List<String> clauses = new ArrayList<>(offer.map(o -> List.of(o.getClauses())).orElseGet(() -> LetterClauses.of(
+                setup.template().standardClauses(), List.of(setup.terms().getClauses()), setup.facts())));
+        if (kind == LetterKind.PROVISIONAL) {
+            clauses.add(provisionalClause(offer.map(OfferLetter::getNumber).orElse(null)));
+        }
 
         PrintedLetterheadDto p = setup.letterhead();
         LetterVersionsDto v = setup.versions();
         AllocationLetter letter = letters.saveAndFlush(AllocationLetter.builder()
-                .number(number(issuedAt, letters.nextNumber()))
+                .kind(kind)
+                .number(kind == LetterKind.PROVISIONAL ? provisionalNumber(issuedAt, letters.nextProvisionalNumber())
+                        : number(issuedAt, letters.nextNumber()))
                 .verificationCode(VerificationCodes.generate())
                 .transactionId(event.transactionId())
                 .buyerUserId(event.buyerUserId())
@@ -140,8 +147,10 @@ public class AllocationLetterIssuer {
                 .defaultTermsVersion(offer.isPresent() ? offer.get().getDefaultTermsVersion() : v.defaultTerms())
                 .offerLetterId(offer.map(OfferLetter::getId).orElse(null))
                 .build());
-        auditApi.record(AuditEntryRequest.of(event.actorUserId(), "allocation_letter.issued", "allocation_letter",
-                letter.getId(), event.sellerTenantId(), "Allocation letter " + letter.getNumber() + " issued for "
+        auditApi.record(AuditEntryRequest.of(event.actorUserId(), kind == LetterKind.PROVISIONAL
+                        ? "allocation_letter.provisional_issued" : "allocation_letter.issued", "allocation_letter",
+                letter.getId(), event.sellerTenantId(), (kind == LetterKind.PROVISIONAL ? "Provisional allocation letter "
+                        : "Allocation letter ") + letter.getNumber() + " issued for "
                         + plot.label() + ", " + setup.facts().name() + offer.map(o -> " on the terms of offer "
                         + o.getNumber()).orElse("") + " (conditions v" + letter.getTermsVersion() + ", template "
                         + v.templateSource() + (v.template() == null ? "" : " v" + v.template()) + ")."));
@@ -151,6 +160,19 @@ public class AllocationLetterIssuer {
     /** {@code HT-ALC-2026-000123}: the year it was issued, in Nigeria, and a number that never repeats. */
     static String number(Instant issuedAt, long sequence) {
         return "HT-ALC-" + issuedAt.atZone(DocumentFormats.NIGERIA).getYear() + "-" + String.format("%06d", sequence);
+    }
+
+    /** {@code HT-PAL-2026-000123}: a provisional letter's own sequence, so neither numbering has gaps. */
+    static String provisionalNumber(Instant issuedAt, long sequence) {
+        return "HT-PAL-" + issuedAt.atZone(DocumentFormats.NIGERIA).getYear() + "-" + String.format("%06d", sequence);
+    }
+
+    /** HomeTrue's fixed line on a provisional letter (decision 4): what makes it final, and what ends it. */
+    static String provisionalClause(String offerNumber) {
+        return "That this allocation is provisional: it becomes final, and the letter of allocation is issued, when "
+                + "every instalment in your accepted offer" + (offerNumber == null ? "" : " (" + offerNumber + ")")
+                + " has been paid and verified. If the plan is revoked, the allocation ends on the terms of that "
+                + "offer.";
     }
 
     /** "Block A, Plot 7 of about 500 sqm" — the sample's "Plot [number] of about [size] sqm", filled in. */

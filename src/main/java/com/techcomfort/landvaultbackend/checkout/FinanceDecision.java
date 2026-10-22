@@ -14,5 +14,7 @@ public enum FinanceDecision {
     /** A late payment: someone else reserved or bought the plot meanwhile — only a refund is left. */
     PLOT_NOT_AVAILABLE,
     /** The estate's allocation letter isn't approved (or lapsed), so the sale can't be allocated yet. */
-    LETTER_NOT_APPROVED
+    LETTER_NOT_APPROVED,
+    /** Late money on an instalment purchase: allocating a late deposit isn't supported yet — refund it. */
+    LATE_DEPOSIT_NOT_SUPPORTED
 }

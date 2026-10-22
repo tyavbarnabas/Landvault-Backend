@@ -27,7 +27,13 @@ public enum PlotStatus {
      * plot restores the available variant it had (see
      * {@code Plot.withheldFromStatus}).
      */
-    WITHHELD("withheld");
+    WITHHELD("withheld"),
+    /**
+     * Held for a buyer on an instalment plan once their deposit is verified:
+     * off the market for everyone else, SOLD only at the last instalment, back
+     * on sale if the plan is revoked. Reached only through checkout.
+     */
+    ON_PLAN("on-plan");
 
     private final String value;
 

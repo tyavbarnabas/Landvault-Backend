@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Instalment plans, phase 3a: the deposit. See AGENTS.md, "Instalment plans".
+
+        - plots gain ON_PLAN (decision 3): off the market for everyone else once
+          the deposit is verified; SOLD only at the last instalment. The public
+          map already shows anything not available as UNAVAILABLE, and the
+          reserve function only takes available plots, so neither changes.
+        - payments record what each one was for (purpose), so a deposit is never
+          mistaken for an outright payment.
+        - allocation_letters gain a kind: PROVISIONAL at the deposit (HT-PAL-…,
+          its own sequence), ALLOCATION at the end; one of each per sale.
+    -->
+    <changeSet id="101-plots-on-plan" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE plots DROP CONSTRAINT chk_plots_status;
+            ALTER TABLE plots ADD CONSTRAINT chk_plots_status
+                CHECK (status IN ('AVAILABLE_DEV', 'AVAILABLE_INV', 'RESERVED', 'SOLD', 'WITHHELD', 'ON_PLAN'));
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE plots DROP CONSTRAINT chk_plots_status;
+            ALTER TABLE plots ADD CONSTRAINT chk_plots_status
+                CHECK (status IN ('AVAILABLE_DEV', 'AVAILABLE_INV', 'RESERVED', 'SOLD', 'WITHHELD'));
+        ]]></rollback>
+    </changeSet>
+
+    <changeSet id="101-payment-purpose" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE payments
+                ADD COLUMN purpose varchar(16) NOT NULL DEFAULT 'OUTRIGHT',
+                ADD CONSTRAINT chk_payments_purpose CHECK (purpose IN ('OUTRIGHT', 'DEPOSIT'));
+            COMMENT ON COLUMN payments.purpose IS
+                'What the payment was for: the full price (OUTRIGHT) or an instalment plan''s DEPOSIT. Instalments come with phase 3b.';
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE payments DROP CONSTRAINT chk_payments_purpose, DROP COLUMN purpose;
+        ]]></rollback>
+    </changeSet>
+
+    <changeSet id="101-provisional-allocation-letters" author="landvault">
+        <sql><![CDATA[
+            CREATE SEQUENCE provisional_letter_number_seq;
+            GRANT USAGE ON SEQUENCE provisional_letter_number_seq TO ${appDbUsername};
+
+            ALTER TABLE allocation_letters
+                ADD COLUMN kind varchar(16) NOT NULL DEFAULT 'ALLOCATION',
+                ADD CONSTRAINT chk_allocation_letters_kind CHECK (kind IN ('ALLOCATION', 'PROVISIONAL')),
+                DROP CONSTRAINT uq_allocation_letters_transaction,
+                ADD CONSTRAINT uq_allocation_letters_transaction_kind UNIQUE (transaction_id, kind);
+            COMMENT ON COLUMN allocation_letters.kind IS
+                'PROVISIONAL: issued when an instalment plan''s deposit is verified (HT-PAL-…); ALLOCATION: the final letter (HT-ALC-…).';
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE allocation_letters
+                DROP CONSTRAINT uq_allocation_letters_transaction_kind,
+                ADD CONSTRAINT uq_allocation_letters_transaction UNIQUE (transaction_id),
+                DROP CONSTRAINT chk_allocation_letters_kind,
+                DROP COLUMN kind;
+            DROP SEQUENCE provisional_letter_number_seq;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

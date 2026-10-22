@@ -3,6 +3,7 @@ package com.techcomfort.landvaultbackend.checkout;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -15,6 +16,9 @@ public interface CheckoutApi {
 
     /** The buyer's own transaction, or empty — someone else's is indistinguishable from none. */
     Optional<PayableTransaction> transactionForBuyer(UUID transactionId, UUID buyerUserId);
+
+    /** Each instalment purchase's plan and fixed schedule, by transaction id; outright purchases have none. */
+    Map<UUID, PlanSchedule> schedulesOf(Collection<UUID> transactionIds);
 
     /** OL: the purchase's offer letter; empty for purchases opened before offers existed. */
     Optional<OfferSummary> offerFor(UUID transactionId);

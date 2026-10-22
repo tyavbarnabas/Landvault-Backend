@@ -56,10 +56,12 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
      * under the caller's own row-level security, so a branch-scoped finance
      * officer sees only their branch's sales without any branch condition here.
      * Rows: transaction id, reference, estate id, estate name, plot id, block
-     * name, plot number, buyer id, total price, currency, awaiting since.
+     * name, plot number, buyer id, total price, currency, awaiting since,
+     * the plan's deposit and name (null when paying in full).
      */
     @Query(value = "SELECT t.id, t.reference, e.id AS estate_id, e.name, p.id AS plot_id, b.name AS block_name, "
-            + "p.plot_number, t.buyer_user_id, t.total_price, t.currency, t.updated_at "
+            + "p.plot_number, t.buyer_user_id, t.total_price, t.currency, t.updated_at, t.deposit_amount, "
+            + "t.plan_name "
             + "FROM transactions t JOIN plots p ON p.id = t.plot_id JOIN estates e ON e.id = t.estate_id "
             + "LEFT JOIN blocks b ON b.id = p.block_id "
             + "WHERE t.status = 'AWAITING_FINANCE' AND t.seller_tenant_id = :tenantId "

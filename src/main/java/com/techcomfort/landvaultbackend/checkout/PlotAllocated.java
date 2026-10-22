@@ -20,6 +20,8 @@ import java.util.UUID;
  * @param reservedAt  when the buyer reserved the plot — the letter's "application" date
  * @param actorUserId the finance officer who allocated it
  * @param buyerAddress the address copied onto the purchase when it was opened; null before 097
+ * @param provisional  an instalment plan's deposit was verified: the plot is held on the plan, not
+ *                     sold — the provisional letter and an active plan, not ownership
  */
 public record PlotAllocated(
         UUID transactionId,
@@ -35,6 +37,7 @@ public record PlotAllocated(
         Currency currency,
         Instant reservedAt,
         UUID actorUserId,
-        PostalAddress buyerAddress
+        PostalAddress buyerAddress,
+        boolean provisional
 ) {
 }

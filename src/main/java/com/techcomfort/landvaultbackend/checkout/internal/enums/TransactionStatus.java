@@ -40,7 +40,13 @@ public enum TransactionStatus {
      * Nothing was paid after the hold ran out (plus a grace period); the plot
      * went back on sale. Backend-added — the frontend's union needs it too.
      */
-    ABANDONED("abandoned");
+    ABANDONED("abandoned"),
+    /**
+     * An instalment purchase whose deposit finance verified: the plot is held
+     * on the plan (ON_PLAN) while the instalments are paid; verified once the
+     * last one is. Backend-added — the frontend's union needs it too.
+     */
+    ON_PLAN("on_plan");
 
     private final String value;
 

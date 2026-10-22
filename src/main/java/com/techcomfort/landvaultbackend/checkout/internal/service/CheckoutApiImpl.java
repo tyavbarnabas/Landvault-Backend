@@ -6,6 +6,7 @@ import com.techcomfort.landvaultbackend.checkout.AbandonedSale;
 import com.techcomfort.landvaultbackend.checkout.AllocationLetterGate;
 import com.techcomfort.landvaultbackend.checkout.OfferLetters;
 import com.techcomfort.landvaultbackend.checkout.OfferSummary;
+import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
 import com.techcomfort.landvaultbackend.checkout.CheckoutApi;
 import com.techcomfort.landvaultbackend.checkout.FinanceDecision;
 import com.techcomfort.landvaultbackend.checkout.FinanceQueueRow;
@@ -15,6 +16,7 @@ import com.techcomfort.landvaultbackend.checkout.PlotAllocated;
 import com.techcomfort.landvaultbackend.checkout.VerifiedSale;
 import com.techcomfort.landvaultbackend.checkout.internal.domain.Reservation;
 import com.techcomfort.landvaultbackend.checkout.internal.domain.Transaction;
+import com.techcomfort.landvaultbackend.checkout.internal.enums.PaymentPlan;
 import com.techcomfort.landvaultbackend.checkout.internal.enums.ReservationStatus;
 import com.techcomfort.landvaultbackend.checkout.internal.enums.TransactionStatus;
 import com.techcomfort.landvaultbackend.common.Currency;
@@ -47,11 +49,19 @@ public class CheckoutApiImpl implements CheckoutApi {
     private final ApplicationEventPublisher events;
     private final AllocationLetterGate letterGate;
     private final OfferLetters offerLetters;
+    private final TransactionService transactionService;
 
     @Override
     @Transactional(readOnly = true)
     public Optional<PayableTransaction> transactionForBuyer(UUID transactionId, UUID buyerUserId) {
         return transactions.findByIdAndBuyerUserId(transactionId, buyerUserId).map(CheckoutApiImpl::toPayable);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Map<UUID, PlanSchedule> schedulesOf(Collection<UUID> transactionIds) {
+        return transactionIds.isEmpty() ? Map.of()
+                : transactionService.schedulesOf(transactions.findAllById(transactionIds));
     }
 
     @Override
@@ -110,7 +120,8 @@ public class CheckoutApiImpl implements CheckoutApi {
                 (UUID) r[0], (String) r[1], (UUID) r[2], (String) r[3], (UUID) r[4],
                 r[5] == null ? "Plot " + r[6] : "Block " + r[5] + ", Plot " + r[6],
                 (UUID) r[7], (BigDecimal) r[8], Currency.valueOf((String) r[9]), (Instant) r[10],
-                letters.computeIfAbsent((UUID) r[2], letterGate::letterReady))).toList();
+                letters.computeIfAbsent((UUID) r[2], letterGate::letterReady),
+                r[11] == null ? (BigDecimal) r[8] : (BigDecimal) r[11], (String) r[12])).toList();
     }
 
     @Override
@@ -137,11 +148,16 @@ public class CheckoutApiImpl implements CheckoutApi {
         if (!letterGate.letterReady(transaction.getEstateId())) {
             return FinanceDecision.LETTER_NOT_APPROVED;
         }
-        if (!plotLockGateway.sell(transaction.getPlotId())) {
+        // Phase 3a: an instalment plan's deposit holds the plot on the plan; the
+        // last instalment sells it (3b). Paying in full sells it now.
+        boolean deposit = transaction.getPlan() == PaymentPlan.INSTALLMENT;
+        if (!(deposit ? plotLockGateway.holdOnPlan(transaction.getPlotId())
+                : plotLockGateway.sell(transaction.getPlotId()))) {
             return FinanceDecision.PLOT_NOT_RESERVED;
         }
         // From here every step must happen: an exception rolls back the plot sale too.
-        if (transactions.moveFromAwaitingFinance(transactionId, TransactionStatus.VERIFIED.name()) != 1) {
+        TransactionStatus next = deposit ? TransactionStatus.ON_PLAN : TransactionStatus.VERIFIED;
+        if (transactions.moveFromAwaitingFinance(transactionId, next.name()) != 1) {
             throw new IllegalStateException("Transaction " + transactionId + " left awaiting_finance while locked");
         }
         Reservation reservation = locked.get();
@@ -149,10 +165,15 @@ public class CheckoutApiImpl implements CheckoutApi {
         reservation.setStatus(ReservationStatus.CONVERTED);
         reservation.setEndedAt(Instant.now());
         reservations.save(reservation);
-        auditApi.record(AuditEntryRequest.of(financeUserId, "transaction.verified", "transaction", transactionId,
+        auditApi.record(deposit
+                ? AuditEntryRequest.of(financeUserId, "transaction.deposit_verified", "transaction", transactionId,
+                tenantId, "Deposit for " + transaction.getReference() + " (" + transaction.getPlanName()
+                        + ") verified by finance; plot " + transaction.getPlotId()
+                        + " held on the plan and the reservation converted.")
+                : AuditEntryRequest.of(financeUserId, "transaction.verified", "transaction", transactionId,
                 tenantId, "Payment for " + transaction.getReference() + " verified by finance; plot "
                         + transaction.getPlotId() + " allocated (sold) and the reservation converted."));
-        publishAllocated(transaction, reservedAt, financeUserId);
+        publishAllocated(transaction, reservedAt, financeUserId, deposit);
         return FinanceDecision.DONE;
     }
 
@@ -200,6 +221,9 @@ public class CheckoutApiImpl implements CheckoutApi {
         if (transaction.getStatus() != TransactionStatus.ABANDONED) {
             return FinanceDecision.NOT_ABANDONED;
         }
+        if (transaction.getPlan() == PaymentPlan.INSTALLMENT) {
+            return FinanceDecision.LATE_DEPOSIT_NOT_SUPPORTED;
+        }
         // Checked before anything is written: if the plot is taken, nothing changes.
         if (!letterGate.letterReady(transaction.getEstateId())) {
             return FinanceDecision.LETTER_NOT_APPROVED;
@@ -214,7 +238,7 @@ public class CheckoutApiImpl implements CheckoutApi {
         auditApi.record(AuditEntryRequest.of(financeUserId, "transaction.verified", "transaction", transactionId,
                 tenantId, "Late payment for " + transaction.getReference() + " accepted by finance; plot "
                         + transaction.getPlotId() + " allocated (sold). The earlier hold stays expired."));
-        publishAllocated(transaction, locked.get().getCreatedAt(), financeUserId);
+        publishAllocated(transaction, locked.get().getCreatedAt(), financeUserId, false);
         return FinanceDecision.DONE;
     }
 
@@ -234,11 +258,11 @@ public class CheckoutApiImpl implements CheckoutApi {
      * and the allocation letter are written now, and a failure in either rolls
      * the sale back with it (FV-3).
      */
-    private void publishAllocated(Transaction t, Instant reservedAt, UUID financeUserId) {
+    private void publishAllocated(Transaction t, Instant reservedAt, UUID financeUserId, boolean provisional) {
         events.publishEvent(new PlotAllocated(t.getId(), t.getBuyerUserId(), t.getPlotId(), t.getEstateId(),
                 t.getSellerTenantId(), t.getPlan().getValue(), t.getIntent(), t.getBasePrice(),
                 t.getCornerPremiumPct(), t.getTotalPrice(), t.getCurrency(), reservedAt, financeUserId,
-                t.buyerAddress().orElse(null)));
+                t.buyerAddress().orElse(null), provisional));
     }
 
     /**
@@ -274,6 +298,7 @@ public class CheckoutApiImpl implements CheckoutApi {
     private static PayableTransaction toPayable(Transaction t) {
         return new PayableTransaction(t.getId(), t.getReference(), t.getBuyerUserId(), t.getReservationId(),
                 t.getPlotId(), t.getEstateId(), t.getSellerTenantId(), t.getTotalPrice(), t.getCurrency(),
-                t.getPlan() == null ? null : t.getPlan().getValue(), t.getStatus().getValue());
+                t.getPlan() == null ? null : t.getPlan().getValue(), t.getStatus().getValue(),
+                t.getPlan() == PaymentPlan.INSTALLMENT ? t.getDepositAmount() : t.getTotalPrice());
     }
 }

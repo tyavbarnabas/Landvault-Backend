@@ -13,6 +13,7 @@ import com.techcomfort.landvaultbackend.payments.dto.FinanceDecisionDto;
 import com.techcomfort.landvaultbackend.payments.dto.LatePaymentDto;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
 import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentStatus;
+import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentPurpose;
 import com.techcomfort.landvaultbackend.payments.internal.exceptions.PaymentException;
 import com.techcomfort.landvaultbackend.payments.internal.repository.PaymentRepository;
 import lombok.RequiredArgsConstructor;
@@ -72,6 +73,10 @@ public class LatePaymentService {
         UUID tenantId = company(scope);
         Payment payment = latePayment(transactionId, tenantId);
         FinanceVerificationService.refuseOwnPurchase(payment.getBuyerUserId(), scope.userId());
+        // Phase 3a: a late instalment deposit can only be refunded — say so, not "wrong amount".
+        if (payment.getPurpose() == PaymentPurpose.DEPOSIT) {
+            throw new PaymentException.LateDepositNotSupported();
+        }
         AbandonedSale sale = sale(transactionId, tenantId);
         if (!matches(payment, sale)) {
             throw new PaymentException.PaymentNotConfirmed();

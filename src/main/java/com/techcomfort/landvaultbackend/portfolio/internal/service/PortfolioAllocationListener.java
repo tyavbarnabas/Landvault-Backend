@@ -33,10 +33,13 @@ public class PortfolioAllocationListener {
     @EventListener
     @Transactional(propagation = Propagation.MANDATORY)
     public void on(PlotAllocated event) {
-        if (!"outright".equals(event.plan())) {
-            // Installments can't be paid for yet, so nothing can be allocated on one. If that changes
-            // without the portfolio learning schedules, refuse rather than record a plan it can't show.
-            throw new IllegalStateException("Allocated a " + event.plan() + " sale; the portfolio only knows outright ones.");
+        // Outright sales arrive paid in full; an instalment plan arrives at its
+        // verified deposit (phase 3a) and stays active until the last
+        // instalment. Anything else would be a plan the portfolio can't show.
+        boolean onPlan = event.provisional() && "installment".equals(event.plan());
+        if (!onPlan && !"outright".equals(event.plan())) {
+            throw new IllegalStateException("Allocated a " + event.plan() + " sale; the portfolio knows outright "
+                    + "sales and instalment plans at their deposit.");
         }
         OwnedPlot owned = ownedPlots.saveAndFlush(OwnedPlot.builder()
                 .buyerUserId(event.buyerUserId())
@@ -44,8 +47,8 @@ public class PortfolioAllocationListener {
                 .plotId(event.plotId())
                 .estateId(event.estateId())
                 .sellerTenantId(event.sellerTenantId())
-                // Outright and verified: paid in full. ALLOCATED waits for issued documents.
-                .status(OwnedPlotStatus.COMPLETED)
+                // Outright and verified: paid in full. On a plan: active until the last instalment.
+                .status(onPlan ? OwnedPlotStatus.INSTALLMENT_ACTIVE : OwnedPlotStatus.COMPLETED)
                 .plan(event.plan().toUpperCase(Locale.ROOT))
                 .intent(event.intent())
                 .basePrice(event.basePrice())
@@ -55,7 +58,8 @@ public class PortfolioAllocationListener {
                 .acquiredAt(Instant.now())
                 .build());
         auditApi.record(AuditEntryRequest.of(event.actorUserId(), "portfolio.plot_owned", "owned_plot", owned.getId(),
-                event.sellerTenantId(), "Plot " + event.plotId() + " is now owned by buyer " + event.buyerUserId()
+                event.sellerTenantId(), "Plot " + event.plotId() + (onPlan ? " is held on an instalment plan for buyer "
+                        : " is now owned by buyer ") + event.buyerUserId()
                         + " (sale " + event.transactionId() + ")."));
         log.info("Owned plot {} recorded for sale {}", owned.getId(), event.transactionId());
     }

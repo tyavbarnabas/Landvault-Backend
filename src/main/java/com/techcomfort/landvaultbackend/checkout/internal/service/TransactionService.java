@@ -42,6 +42,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -254,6 +255,16 @@ public class TransactionService {
                     .build());
         }
         return schedule(transaction, instalmentRepository.saveAll(rows)).orElseThrow();
+    }
+
+    /** Plan and schedule for each instalment purchase in {@code transactions}, in one query. */
+    Map<UUID, PlanSchedule> schedulesOf(List<Transaction> transactions) {
+        Map<UUID, List<TransactionInstalment>> instalments = instalmentsFor(transactions.stream()
+                .filter(t -> t.getPlanId() != null).map(Transaction::getId).toList());
+        Map<UUID, PlanSchedule> out = new HashMap<>();
+        transactions.forEach(t -> schedule(t, instalments.getOrDefault(t.getId(), List.of()))
+                .ifPresent(s -> out.put(t.getId(), s)));
+        return out;
     }
 
     private Map<UUID, List<TransactionInstalment>> instalmentsFor(List<UUID> transactionIds) {
