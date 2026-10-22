@@ -3,6 +3,7 @@ package com.techcomfort.landvaultbackend.marketplace.dto;
 import com.techcomfort.landvaultbackend.common.Currency;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -34,6 +35,11 @@ public record MarketplacePriceTierDto(
          * the figure FD-2 exists to make visible. Null only for an estate
          * grandfathered in before disclosure was required.
          */
-        TierCommitmentDto commitment
+        TierCommitmentDto commitment,
+        /**
+         * The estate's instalment plans at this tier's price (PL-2), worked out
+         * by HomeTrue. Empty when the estate is outright only.
+         */
+        List<MarketplacePaymentPlanDto> paymentPlans
 ) {
 }

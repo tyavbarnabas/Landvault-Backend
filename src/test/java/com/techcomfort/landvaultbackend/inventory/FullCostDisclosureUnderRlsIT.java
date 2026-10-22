@@ -91,6 +91,10 @@ class FullCostDisclosureUnderRlsIT {
     private static final BigDecimal TOP_RANK_LAND = new BigDecimal("4500000.0000");
 
     private static final AtomicInteger BAND = new AtomicInteger();
+    /** 30% deposit, 12 monthly instalments, 10% premium — the shape agreed with the user. */
+    private static final String TWELVE_MONTH_PLAN = """
+            [{"name":"12-month plan","depositPct":30,"instalmentCount":12,"frequency":"monthly","premiumPct":10}]
+            """;
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>(
@@ -315,18 +319,107 @@ class FullCostDisclosureUnderRlsIT {
         assertThat(exit.ifYouWithdraw().processingDays()).isEqualTo(90);
     }
 
+    /** Decided with the user: a penalty is a share of the overdue instalment, not of the whole price. */
     @Test
-    void latePaymentPenaltiesArePublishedAsAmountsNotPercentages() {
+    void latePaymentPenaltiesArePublishedAsAmountsOnOneInstalment() {
+        Listing listing = publishedListingWith(TOP_RANK_LAND, topRankFees(), TWELVE_MONTH_PLAN);
+
+        var exit = listingFor(listing.estateId()).costDisclosure().exitCosts();
+        var steps = exit.ifYouFallBehind();
+
+        assertThat(exit.penaltyBasisPlan()).isEqualTo("12-month plan");
+        assertThat(exit.penaltyBasisInstalment()).as("(₦4,950,000 − ₦1,485,000) ÷ 12").isEqualByComparingTo("288750");
+        assertThat(steps).extracting(s -> s.monthsLate()).containsExactly(3, 6, 12);
+        assertThat(steps.get(0).amount()).isEqualByComparingTo("14437.50");
+        assertThat(steps.get(1).amount()).isEqualByComparingTo("28875");
+        assertThat(steps.get(2).amount()).as("20% of one instalment").isEqualByComparingTo("57750");
+    }
+
+    @Test
+    void anOutrightOnlyEstateHasNothingToFallBehindOn() {
         Listing listing = publishedListingWith(TOP_RANK_LAND, topRankFees());
 
-        var steps = listingFor(listing.estateId()).costDisclosure().exitCosts().ifYouFallBehind();
+        MarketplaceListingDto found = listingFor(listing.estateId());
+        assertThat(found.costDisclosure().exitCosts().ifYouFallBehind()).isEmpty();
+        assertThat(found.costDisclosure().exitCosts().penaltyBasisPlan()).isNull();
+        assertThat(found.priceTiers().getFirst().paymentPlans()).isEmpty();
+    }
 
-        assertThat(steps).extracting(s -> s.monthsLate()).containsExactly(3, 6, 12);
-        assertThat(steps.get(0).amount()).isEqualByComparingTo("225000.0000");
-        assertThat(steps.get(1).amount()).isEqualByComparingTo("450000.0000");
-        assertThat(steps.get(2).amount())
-                .as("20% of ₦4,500,000 — the same as withdrawing costs")
-                .isEqualByComparingTo("900000.0000");
+    // ------------------------------------------------------------------
+    // Instalment plans (PL-1, PL-2)
+    // ------------------------------------------------------------------
+
+    /** The agreed rules: the premium on the whole price, the deposit a share of that total, worked out per tier. */
+    @Test
+    void declaredPlansAreWorkedOutByHomeTrueAndPublishedPerTier() {
+        Developer developer = verifiedDeveloper();
+        Listing listing = estateWithATier(developer, TOP_RANK_LAND);
+        declareFees(developer, listing.estateId(), topRankFees());
+        declareTerms(developer, listing.estateId());
+        assertThat(publish(developer, listing.estateId()).getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        ResponseEntity<String> declared = declarePlans(developer, listing.estateId(), TWELVE_MONTH_PLAN);
+        assertThat(declared.getStatusCode()).as(declared.getBody()).isEqualTo(HttpStatus.OK);
+        assertThat(declared.getBody()).contains("\"version\":1", "\"planTotal\":4950000",
+                "\"deposit\":1485000", "\"instalment\":288750", "\"premium\":450000");
+
+        var plan = listingFor(listing.estateId()).priceTiers().getFirst().paymentPlans().getFirst();
+        assertThat(plan.name()).isEqualTo("12-month plan");
+        assertThat(plan.frequency()).isEqualTo("monthly");
+        assertThat(plan.planTotal()).isEqualByComparingTo("4950000");
+        assertThat(plan.deposit()).isEqualByComparingTo("1485000");
+        assertThat(plan.instalmentCount()).isEqualTo(12);
+        assertThat(plan.instalment()).isEqualByComparingTo("288750");
+        assertThat(plan.premium()).isEqualByComparingTo("450000");
+        assertThat(plan.ifAnInstalmentIsLate()).extracting(s -> s.monthsLate()).containsExactly(3, 6, 12);
+
+        assertThat(query("SELECT count(*) FROM audit_log_entries WHERE action = 'estate.payment_plans_declared' "
+                + "AND target_id = '" + listing.estateId() + "'")).isEqualTo("1");
+    }
+
+    @Test
+    void redeclaringPlansWritesANewVersionAndAnEmptyListMeansOutrightOnly() {
+        Developer developer = verifiedDeveloper();
+        Listing listing = publishedListingWith(developer, TOP_RANK_LAND, topRankFees(), TWELVE_MONTH_PLAN);
+
+        ResponseEntity<String> outright = declarePlans(developer, listing.estateId(), "[]");
+        assertThat(outright.getBody()).contains("\"version\":2", "\"plans\":[]");
+        assertThat(listingFor(listing.estateId()).priceTiers().getFirst().paymentPlans()).isEmpty();
+        assertThat(query("SELECT count(*) FROM estate_payment_plans WHERE estate_id = '" + listing.estateId()
+                + "' AND version = 1")).as("the old version is kept").isEqualTo("1");
+    }
+
+    @Test
+    void aPlansTermsAreChecked() {
+        Developer developer = verifiedDeveloper();
+        Listing listing = estateWithATier(developer, TOP_RANK_LAND);
+
+        assertThat(declarePlans(developer, listing.estateId(), """
+                [{"name":"A","depositPct":30,"depositAmount":1000000,"instalmentCount":12,"frequency":"monthly"}]
+                """).getBody()).contains("either a percentage or a fixed amount");
+        assertThat(declarePlans(developer, listing.estateId(), """
+                [{"name":"A","depositPct":30,"instalmentCount":12,"frequency":"monthly"},
+                 {"name":"a","depositPct":20,"instalmentCount":6,"frequency":"monthly"}]
+                """).getBody()).contains("Two plans are called");
+        assertThat(declarePlans(developer, listing.estateId(), """
+                [{"name":"A","depositPct":30,"instalmentCount":12,"frequency":"weekly"}]
+                """).getBody()).contains("monthly' or 'quarterly");
+        assertThat(declarePlans(developer, listing.estateId(), """
+                [{"name":"A","depositPct":30,"instalmentCount":61,"frequency":"monthly"}]
+                """).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(query("SELECT count(*) FROM estate_payment_plans WHERE estate_id = '" + listing.estateId() + "'"))
+                .isEqualTo("0");
+    }
+
+    @Test
+    void anotherDevelopersPlansAreNotReadable() {
+        Developer owner = verifiedDeveloper();
+        Listing listing = publishedListingWith(owner, TOP_RANK_LAND, topRankFees(), TWELVE_MONTH_PLAN);
+
+        ResponseEntity<String> other = restTemplate.exchange(
+                "/api/portal/estates/" + listing.estateId() + "/payment-plans", HttpMethod.GET,
+                new HttpEntity<>(bearer(verifiedDeveloper().token())), String.class);
+        assertThat(other.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
 
     /**
@@ -336,7 +429,7 @@ class FullCostDisclosureUnderRlsIT {
      */
     @Test
     void bothExitsAreShownTogetherSoTheAbsenceOfACheapOneIsVisible() {
-        Listing listing = publishedListingWith(TOP_RANK_LAND, topRankFees());
+        Listing listing = publishedListingWith(TOP_RANK_LAND, topRankFees(), TWELVE_MONTH_PLAN);
 
         var exit = listingFor(listing.estateId()).costDisclosure().exitCosts();
 
@@ -497,6 +590,26 @@ class FullCostDisclosureUnderRlsIT {
         declareTerms(developer, listing.estateId());
         assertThat(publish(developer, listing.estateId()).getStatusCode()).isEqualTo(HttpStatus.OK);
         return listing;
+    }
+
+    private Listing publishedListingWith(BigDecimal landPrice, String feesJson, String plansJson) {
+        return publishedListingWith(verifiedDeveloper(), landPrice, feesJson, plansJson);
+    }
+
+    private Listing publishedListingWith(Developer developer, BigDecimal landPrice, String feesJson,
+                                         String plansJson) {
+        Listing listing = estateWithATier(developer, landPrice);
+        declareFees(developer, listing.estateId(), feesJson);
+        declareTerms(developer, listing.estateId());
+        assertThat(publish(developer, listing.estateId()).getStatusCode()).isEqualTo(HttpStatus.OK);
+        ResponseEntity<String> plans = declarePlans(developer, listing.estateId(), plansJson);
+        assertThat(plans.getStatusCode()).as(plans.getBody()).isEqualTo(HttpStatus.OK);
+        return listing;
+    }
+
+    private ResponseEntity<String> declarePlans(Developer developer, UUID estateId, String plansJson) {
+        return restTemplate.exchange("/api/portal/estates/" + estateId + "/payment-plans", HttpMethod.PUT,
+                entity(developer.token(), "{\"plans\":" + plansJson + "}"), String.class);
     }
 
     private FeeScheduleDto declareFees(Developer developer, UUID estateId, String feesJson) {

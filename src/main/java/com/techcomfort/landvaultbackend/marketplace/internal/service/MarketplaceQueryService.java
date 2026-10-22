@@ -1,52 +1,56 @@
 package com.techcomfort.landvaultbackend.marketplace.internal.service;
 
-import com.techcomfort.landvaultbackend.marketplace.dto.CostDisclosureDto;
-import com.techcomfort.landvaultbackend.marketplace.dto.ExitCostsDto;
-import com.techcomfort.landvaultbackend.marketplace.dto.MoneyRangeDto;
-import com.techcomfort.landvaultbackend.marketplace.dto.PublicFeeDto;
-import com.techcomfort.landvaultbackend.marketplace.dto.TierCommitmentDto;
-import com.techcomfort.landvaultbackend.marketplace.internal.domain.DefaultTermsView;
-import com.techcomfort.landvaultbackend.marketplace.internal.domain.FeeView;
-import com.techcomfort.landvaultbackend.marketplace.internal.domain.PenaltyTierView;
-import com.techcomfort.landvaultbackend.marketplace.internal.domain.RefundTermsView;
-import com.techcomfort.landvaultbackend.marketplace.internal.repository.DefaultTermsViewRepository;
-import com.techcomfort.landvaultbackend.marketplace.internal.repository.FeeViewRepository;
-import com.techcomfort.landvaultbackend.marketplace.internal.repository.PenaltyTierViewRepository;
-import com.techcomfort.landvaultbackend.marketplace.internal.repository.RefundTermsViewRepository;
 import com.techcomfort.landvaultbackend.common.CommitmentCalculator;
 import com.techcomfort.landvaultbackend.common.DueTrigger;
 import com.techcomfort.landvaultbackend.common.FeeType;
+import com.techcomfort.landvaultbackend.common.InstalmentPlanCalculator;
 import com.techcomfort.landvaultbackend.common.PageResponse;
-import org.springframework.data.domain.Sort;
-import org.springframework.data.domain.PageRequest;
-import com.techcomfort.landvaultbackend.marketplace.dto.MarketplacePlotDto;
 import com.techcomfort.landvaultbackend.common.PageResponses;
 import com.techcomfort.landvaultbackend.common.geojson.GeoJsonFeatureCollectionDto;
 import com.techcomfort.landvaultbackend.common.geojson.GeoJsonFeatureDto;
 import com.techcomfort.landvaultbackend.common.geojson.GeoJsonPolygonWriter;
+import com.techcomfort.landvaultbackend.marketplace.dto.BranchOfficeDto;
+import com.techcomfort.landvaultbackend.marketplace.dto.CostDisclosureDto;
+import com.techcomfort.landvaultbackend.marketplace.dto.ExitCostsDto;
 import com.techcomfort.landvaultbackend.marketplace.dto.MarketplaceListingDto;
+import com.techcomfort.landvaultbackend.marketplace.dto.MarketplacePaymentPlanDto;
+import com.techcomfort.landvaultbackend.marketplace.dto.MarketplacePhotoDto;
+import com.techcomfort.landvaultbackend.marketplace.dto.MarketplacePlotDto;
 import com.techcomfort.landvaultbackend.marketplace.dto.MarketplacePriceTierDto;
 import com.techcomfort.landvaultbackend.marketplace.dto.MarketplaceVerificationCheckDto;
-import com.techcomfort.landvaultbackend.marketplace.dto.BranchOfficeDto;
+import com.techcomfort.landvaultbackend.marketplace.dto.MoneyRangeDto;
+import com.techcomfort.landvaultbackend.marketplace.dto.PublicFeeDto;
 import com.techcomfort.landvaultbackend.marketplace.dto.SellerDto;
-import com.techcomfort.landvaultbackend.marketplace.dto.MarketplacePhotoDto;
+import com.techcomfort.landvaultbackend.marketplace.dto.TierCommitmentDto;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.AmenityView;
+import com.techcomfort.landvaultbackend.marketplace.internal.domain.DefaultTermsView;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.EstatePhotoView;
-import com.techcomfort.landvaultbackend.marketplace.internal.repository.EstatePhotoViewRepository;
-import com.techcomfort.landvaultbackend.storage.StorageApi;
+import com.techcomfort.landvaultbackend.marketplace.internal.domain.FeeView;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.ListingView;
+import com.techcomfort.landvaultbackend.marketplace.internal.domain.PaymentPlanView;
+import com.techcomfort.landvaultbackend.marketplace.internal.domain.PenaltyTierView;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.PlotView;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.PriceTierView;
+import com.techcomfort.landvaultbackend.marketplace.internal.domain.RefundTermsView;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.VerificationCheckView;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.AmenityViewRepository;
+import com.techcomfort.landvaultbackend.marketplace.internal.repository.DefaultTermsViewRepository;
+import com.techcomfort.landvaultbackend.marketplace.internal.repository.EstatePhotoViewRepository;
+import com.techcomfort.landvaultbackend.marketplace.internal.repository.FeeViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.ListingViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.ListingViewSpecifications;
+import com.techcomfort.landvaultbackend.marketplace.internal.repository.PaymentPlanViewRepository;
+import com.techcomfort.landvaultbackend.marketplace.internal.repository.PenaltyTierViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.PlotViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.PriceTierViewRepository;
+import com.techcomfort.landvaultbackend.marketplace.internal.repository.RefundTermsViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.VerificationCheckViewRepository;
+import com.techcomfort.landvaultbackend.storage.StorageApi;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -59,6 +63,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -91,6 +96,7 @@ public class MarketplaceQueryService {
     private final RefundTermsViewRepository refundTerms;
     private final DefaultTermsViewRepository defaultTerms;
     private final PenaltyTierViewRepository penaltyTiers;
+    private final PaymentPlanViewRepository paymentPlans;
     private final EstatePhotoViewRepository photos;
     private final StorageApi storage;
 
@@ -195,6 +201,9 @@ public class MarketplaceQueryService {
         Map<UUID, List<PenaltyTierView>> penaltiesByEstate = ids.isEmpty() ? Map.of()
                 : penaltyTiers.findByEstateIdInOrderByMonthsLateAsc(ids).stream()
                         .collect(Collectors.groupingBy(PenaltyTierView::getEstateId));
+        Map<UUID, List<PaymentPlanView>> plansByEstate = ids.isEmpty() ? Map.of()
+                : paymentPlans.findByEstateIdInOrderBySortOrderAsc(ids).stream()
+                        .collect(Collectors.groupingBy(PaymentPlanView::getEstateId));
 
         // Photos, then every photo's URL from storage, in two more queries.
         // Storage builds the public address, so it is built in one place.
@@ -221,6 +230,8 @@ public class MarketplaceQueryService {
         for (ListingView l : page) {
             List<FeeView> estateFees = feesByEstate.getOrDefault(l.getEstateId(), List.of());
             List<PriceTierView> estateTiers = tiersByEstate.getOrDefault(l.getEstateId(), List.of());
+            List<PaymentPlanView> estatePlans = plansByEstate.getOrDefault(l.getEstateId(), List.of());
+            List<PenaltyTierView> estatePenalties = penaltiesByEstate.getOrDefault(l.getEstateId(), List.of());
             result.put(l, new MarketplaceListingDto(
                     l.getEstateId(),
                     l.getName(),
@@ -235,7 +246,8 @@ public class MarketplaceQueryService {
                     l.getTitleVerifiedAt(),
                     l.getLastVerifiedAt(),
                     estateTiers.stream()
-                            .map(tier -> toDto(tier, estateFees, l.getCornerPremiumPct()))
+                            .map(tier -> toDto(tier, estateFees, l.getCornerPremiumPct(), estatePlans,
+                                    estatePenalties))
                             .toList(),
                     l.getCornerPremiumPct(),
                     l.getIntent() == null ? null : l.getIntent().getValue(),
@@ -251,7 +263,7 @@ public class MarketplaceQueryService {
                     costDisclosure(estateFees, estateTiers,
                             refundByEstate.get(l.getEstateId()),
                             defaultsByEstate.get(l.getEstateId()),
-                            penaltiesByEstate.getOrDefault(l.getEstateId(), List.of())),
+                            estatePenalties, estatePlans),
                     photosByEstate.getOrDefault(l.getEstateId(), List.of()).stream()
                             .filter(p -> urls.containsKey(p.getFileId()))
                             .map(p -> new MarketplacePhotoDto(urls.get(p.getFileId()), p.getCaption()))
@@ -261,12 +273,40 @@ public class MarketplaceQueryService {
     }
 
     private static MarketplacePriceTierDto toDto(
-            PriceTierView t, List<FeeView> estateFees, BigDecimal cornerPremiumPct) {
+            PriceTierView t, List<FeeView> estateFees, BigDecimal cornerPremiumPct, List<PaymentPlanView> plans,
+            List<PenaltyTierView> penalties) {
         String availability = t.getPlotsRemaining() == 0 ? "sold_out"
                 : t.getPlotsRemaining() <= LOW_STOCK_THRESHOLD ? "low_stock" : "available";
         return new MarketplacePriceTierDto(t.getTierId(), t.getSizeSqm(), t.getActualAreaSqm(), t.getLabel(),
                 t.getPrice(), t.getCurrency(), t.getPricePerSqm(), availability, t.getPlotsRemaining(),
-                commitmentFor(t, estateFees, cornerPremiumPct));
+                commitmentFor(t, estateFees, cornerPremiumPct), plansAt(t.getPrice(), plans, penalties));
+    }
+
+    /**
+     * PL-2: each declared plan at this price, worked out by HomeTrue; a plan a
+     * fixed deposit makes impossible at this price is left out.
+     */
+    private static List<MarketplacePaymentPlanDto> plansAt(BigDecimal price, List<PaymentPlanView> plans,
+                                                           List<PenaltyTierView> penalties) {
+        if (price == null) {
+            return List.of();
+        }
+        return plans.stream()
+                .flatMap(plan -> InstalmentPlanCalculator.quote(price, plan.terms())
+                        .map(q -> new MarketplacePaymentPlanDto(plan.getPlanId(), plan.getName(),
+                                plan.getFrequency().getValue(), q.deposit(), q.instalmentCount(), q.instalment(),
+                                q.lastInstalment(), q.planTotal(), q.premium(), lateSteps(q.instalment(), penalties)))
+                        .stream())
+                .toList();
+    }
+
+    /** The declared steps on one instalment, in naira. */
+    private static List<ExitCostsDto.PenaltyStepDto> lateSteps(BigDecimal instalment,
+                                                               List<PenaltyTierView> penalties) {
+        return penalties.stream()
+                .map(p -> new ExitCostsDto.PenaltyStepDto(p.getMonthsLate(), p.getPenaltyPct(),
+                        InstalmentPlanCalculator.penaltyOn(instalment, p.getPenaltyPct())))
+                .toList();
     }
 
     private static MarketplaceVerificationCheckDto toDto(VerificationCheckView c) {
@@ -325,14 +365,15 @@ public class MarketplaceQueryService {
             List<PriceTierView> estateTiers,
             RefundTermsView refund,
             DefaultTermsView defaults,
-            List<PenaltyTierView> penalties) {
+            List<PenaltyTierView> penalties,
+            List<PaymentPlanView> plans) {
 
         if (estateFees.isEmpty() && refund == null && defaults == null) {
             return null;
         }
         return new CostDisclosureDto(
                 estateFees.stream().map(MarketplaceQueryService::toDto).toList(),
-                exitCosts(estateFees, estateTiers, refund, defaults, penalties));
+                exitCosts(estateFees, estateTiers, refund, defaults, penalties, plans));
     }
 
     /**
@@ -349,7 +390,8 @@ public class MarketplaceQueryService {
             List<PriceTierView> estateTiers,
             RefundTermsView refund,
             DefaultTermsView defaults,
-            List<PenaltyTierView> penalties) {
+            List<PenaltyTierView> penalties,
+            List<PaymentPlanView> plans) {
 
         PriceTierView basis = estateTiers.stream()
                 .filter(tier -> tier.getPrice() != null)
@@ -381,12 +423,13 @@ public class MarketplaceQueryService {
                     outcome.processingDays());
         }
 
-        List<ExitCostsDto.PenaltyStepDto> steps = penalties.stream()
-                .map(tier -> CommitmentCalculator.penaltyStep(
-                        tier.getMonthsLate(), tier.getPenaltyPct(), basis.getPrice()))
-                .map(step -> new ExitCostsDto.PenaltyStepDto(
-                        step.monthsLate(), step.penaltyPct(), step.amount()))
-                .toList();
+        // Decided with the user: a penalty is a share of the overdue instalment,
+        // so it's priced on one instalment of the estate's first plan at this
+        // tier. No plans: outright buyers have nothing to fall behind on.
+        Optional<MarketplacePaymentPlanDto> penaltyBasis = plansAt(basis.getPrice(), plans, penalties).stream()
+                .findFirst();
+        List<ExitCostsDto.PenaltyStepDto> steps = penaltyBasis
+                .map(MarketplacePaymentPlanDto::ifAnInstalmentIsLate).orElse(List.of());
 
         ExitCostsDto.RevocationDto revocation = defaults == null ? null
                 : new ExitCostsDto.RevocationDto(
@@ -402,7 +445,8 @@ public class MarketplaceQueryService {
 
         return new ExitCostsDto(
                 basis.getTierId(), basis.getLabel(), basis.getPrice(), basis.getCurrency().name(),
-                withdrawal, steps, revocation, bothCost);
+                withdrawal, steps, penaltyBasis.map(MarketplacePaymentPlanDto::name).orElse(null),
+                penaltyBasis.map(MarketplacePaymentPlanDto::instalment).orElse(null), revocation, bothCost);
     }
 
     private static CommitmentCalculator.DeclaredFee toDeclaredFee(FeeView fee) {

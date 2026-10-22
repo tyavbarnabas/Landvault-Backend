@@ -5,11 +5,15 @@ import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.DueTrigger;
 import com.techcomfort.landvaultbackend.common.FeeType;
+import com.techcomfort.landvaultbackend.common.InstalmentPlanCalculator;
+import com.techcomfort.landvaultbackend.common.PaymentFrequency;
 import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
 import com.techcomfort.landvaultbackend.common.TenantContext;
 import com.techcomfort.landvaultbackend.common.TenantScope;
 import com.techcomfort.landvaultbackend.inventory.dto.DeclareDefaultTermsRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.DeclareFeesRequest;
+import com.techcomfort.landvaultbackend.inventory.dto.DeclarePaymentPlansRequest;
+import com.techcomfort.landvaultbackend.inventory.dto.PaymentPlansDto;
 import com.techcomfort.landvaultbackend.inventory.dto.DeclareRefundTermsRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.DefaultTermsDto;
 import com.techcomfort.landvaultbackend.inventory.dto.FeeDto;
@@ -20,11 +24,15 @@ import com.techcomfort.landvaultbackend.inventory.internal.domain.Estate;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.EstateDefaultPenaltyTier;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.EstateDefaultTerms;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.EstateFee;
+import com.techcomfort.landvaultbackend.inventory.internal.domain.EstatePaymentPlan;
+import com.techcomfort.landvaultbackend.inventory.internal.domain.PriceTier;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.EstateRefundTerms;
 import com.techcomfort.landvaultbackend.inventory.internal.exceptions.InventoryException;
 import com.techcomfort.landvaultbackend.inventory.internal.repository.EstateDefaultPenaltyTierRepository;
 import com.techcomfort.landvaultbackend.inventory.internal.repository.EstateDefaultTermsRepository;
 import com.techcomfort.landvaultbackend.inventory.internal.repository.EstateFeeRepository;
+import com.techcomfort.landvaultbackend.inventory.internal.repository.EstatePaymentPlanRepository;
+import com.techcomfort.landvaultbackend.inventory.internal.repository.PriceTierRepository;
 import com.techcomfort.landvaultbackend.inventory.internal.repository.EstateRefundTermsRepository;
 import com.techcomfort.landvaultbackend.inventory.internal.repository.EstateRepository;
 import lombok.RequiredArgsConstructor;
@@ -32,11 +40,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -65,6 +75,8 @@ public class EstateDisclosureService {
     private final EstateRefundTermsRepository refundTermsRepository;
     private final EstateDefaultTermsRepository defaultTermsRepository;
     private final EstateDefaultPenaltyTierRepository penaltyTierRepository;
+    private final EstatePaymentPlanRepository paymentPlanRepository;
+    private final PriceTierRepository priceTierRepository;
     private final AuditApi auditApi;
 
     // ------------------------------------------------------------------
@@ -297,6 +309,103 @@ public class EstateDisclosureService {
                 "Default terms version " + version + " declared with " + tiers.size() + " penalty tier(s)"));
 
         return toDto(terms, tiers);
+    }
+
+    // ------------------------------------------------------------------
+    // Instalment plans (PL-1)
+    // ------------------------------------------------------------------
+
+    @Transactional(readOnly = true)
+    public PaymentPlansDto paymentPlans(UUID estateId) {
+        Estate estate = requireEstate(estateId);
+        return toDto(estate, paymentPlanRepository.findByEstateIdAndVersionOrderBySortOrderAsc(
+                estateId, estate.getPaymentPlansVersion()));
+    }
+
+    /**
+     * Replaces the estate's plans with a new version, as fees are. Terms only:
+     * every figure is worked out from them. An empty list means outright only.
+     * Buyers already on a plan keep the version they chose.
+     */
+    @Transactional
+    public PaymentPlansDto declarePaymentPlans(UUID estateId, DeclarePaymentPlansRequest request) {
+        Estate estate = requireEstate(estateId);
+        EstateWriteAccess.requireWritable(estate);
+        int version = estate.getPaymentPlansVersion() + 1;
+        List<EstatePaymentPlan> rows = new ArrayList<>();
+        Set<String> names = new HashSet<>();
+        int order = 0;
+        for (DeclarePaymentPlansRequest.Plan plan : request.plans()) {
+            String name = plan.name().trim();
+            if (!names.add(name.toLowerCase(Locale.ROOT))) {
+                throw new InventoryException.InvalidRequest("Two plans are called '" + name + "'.");
+            }
+            if ((plan.depositPct() == null) == (plan.depositAmount() == null)) {
+                throw new InventoryException.InvalidRequest(
+                        "Plan '" + name + "' needs a deposit as either a percentage or a fixed amount, not both.");
+            }
+            PaymentFrequency frequency;
+            try {
+                frequency = PaymentFrequency.fromValue(plan.frequency());
+            } catch (IllegalArgumentException e) {
+                throw new InventoryException.InvalidRequest(
+                        "Plan '" + name + "': frequency must be 'monthly' or 'quarterly'.");
+            }
+            rows.add(EstatePaymentPlan.builder()
+                    .tenantId(estate.getTenantId())
+                    .branchId(estate.getBranchId())
+                    .estateId(estateId)
+                    .version(version)
+                    .sortOrder(order++)
+                    .name(name)
+                    .depositPct(plan.depositPct())
+                    .depositAmount(plan.depositAmount())
+                    .instalmentCount(plan.instalmentCount())
+                    .frequency(frequency)
+                    .premiumPct(plan.premiumPct() == null ? BigDecimal.ZERO : plan.premiumPct())
+                    .build());
+        }
+        paymentPlanRepository.saveAll(rows);
+        estate.setPaymentPlansVersion(version);
+        estateRepository.save(estate);
+
+        log.info("Payment plans v{} declared for estate {} ({} plan(s)) by actor {}",
+                version, estateId, rows.size(), actorId());
+        auditApi.record(AuditEntryRequest.of(
+                actorId(), "estate.payment_plans_declared", "estate", estateId, estate.getTenantId(),
+                "Payment plans version " + version + " declared: " + (rows.isEmpty() ? "outright only"
+                        : String.join("; ", rows.stream().map(EstateDisclosureService::describe).toList()))));
+        return toDto(estate, rows);
+    }
+
+    private PaymentPlansDto toDto(Estate estate, List<EstatePaymentPlan> plans) {
+        List<PriceTier> tiers = priceTierRepository.findByEstateIdOrderBySizeSqmAsc(estate.getId()).stream()
+                .filter(t -> t.getRetiredAt() == null)
+                .toList();
+        return new PaymentPlansDto(estate.getPaymentPlansVersion(), plans.stream()
+                .map(plan -> new PaymentPlansDto.Plan(plan.getId(), plan.getName(), plan.getDepositPct(),
+                        plan.getDepositAmount(), plan.getInstalmentCount(), plan.getFrequency().getValue(),
+                        plan.getPremiumPct(), tiers.stream()
+                        .flatMap(tier -> InstalmentPlanCalculator.quote(tier.getPrice(), terms(plan))
+                                .map(q -> new PaymentPlansDto.Quote(tier.getId(), tier.getLabel(),
+                                        tier.getCurrency().name(), q.price(), q.planTotal(), q.premium(),
+                                        q.deposit(), q.instalmentCount(), q.instalment(), q.lastInstalment()))
+                                .stream())
+                        .toList()))
+                .toList());
+    }
+
+    static InstalmentPlanCalculator.Terms terms(EstatePaymentPlan plan) {
+        return new InstalmentPlanCalculator.Terms(plan.getDepositPct(), plan.getDepositAmount(),
+                plan.getInstalmentCount(), plan.getFrequency(), plan.getPremiumPct());
+    }
+
+    private static String describe(EstatePaymentPlan plan) {
+        return plan.getName() + " (" + (plan.getDepositPct() != null
+                ? plan.getDepositPct().stripTrailingZeros().toPlainString() + "% deposit"
+                : plan.getDepositAmount().stripTrailingZeros().toPlainString() + " deposit")
+                + ", " + plan.getInstalmentCount() + " " + plan.getFrequency().getValue() + ", premium "
+                + plan.getPremiumPct().stripTrailingZeros().toPlainString() + "%)";
     }
 
     // ------------------------------------------------------------------

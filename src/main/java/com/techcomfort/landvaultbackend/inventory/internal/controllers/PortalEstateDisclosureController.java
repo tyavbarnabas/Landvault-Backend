@@ -2,6 +2,8 @@ package com.techcomfort.landvaultbackend.inventory.internal.controllers;
 
 import com.techcomfort.landvaultbackend.common.OpenApiConfig;
 import com.techcomfort.landvaultbackend.inventory.dto.DeclareDefaultTermsRequest;
+import com.techcomfort.landvaultbackend.inventory.dto.DeclarePaymentPlansRequest;
+import com.techcomfort.landvaultbackend.inventory.dto.PaymentPlansDto;
 import com.techcomfort.landvaultbackend.inventory.dto.DeclareFeesRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.DeclareRefundTermsRequest;
 import com.techcomfort.landvaultbackend.inventory.dto.DefaultTermsDto;
@@ -171,5 +173,39 @@ public class PortalEstateDisclosureController {
     public ResponseEntity<DefaultTermsDto> declareDefaultTerms(
             @PathVariable UUID id, @Valid @RequestBody DeclareDefaultTermsRequest request) {
         return ResponseEntity.ok(disclosureService.declareDefaultTerms(id, request));
+    }
+
+    @Operation(
+            summary = "The estate's instalment plans",
+            description = """
+                    Requires `portal.estates.view`. The current plans as declared, each worked out for \
+                    every open price tier (a non-corner plot): plan total, premium, deposit and each \
+                    instalment. Version 0 with no plans means outright only.""")
+    @ApiResponse(responseCode = "200", description = "The current plans")
+    @GetMapping("/payment-plans")
+    @PreAuthorize("hasAuthority('portal.estates.view')")
+    public ResponseEntity<PaymentPlansDto> paymentPlans(@PathVariable UUID id) {
+        return ResponseEntity.ok(disclosureService.paymentPlans(id));
+    }
+
+    @Operation(
+            summary = "Declare the estate's instalment plans",
+            description = """
+                    Requires `portal.estates.manage`. Replaces the plans as a new version, like fees; an \
+                    empty list means outright only. Terms only — HomeTrue works out every figure: **the \
+                    premium applies to the whole price, a percentage deposit is a share of that total**, \
+                    the instalments split the rest evenly and the leftover kobo goes on the last. Buyers \
+                    already on a plan keep the version they chose. No HomeTrue review: the figures are \
+                    published to buyers in naira before anyone pays.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "The new version, worked out per tier"),
+            @ApiResponse(responseCode = "400", description = "`VALIDATION_ERROR` or `INVALID_REQUEST`: two "
+                    + "plans with one name, a deposit given both ways, an unknown frequency", content = @Content())
+    })
+    @PutMapping("/payment-plans")
+    @PreAuthorize("hasAuthority('portal.estates.manage')")
+    public ResponseEntity<PaymentPlansDto> declarePaymentPlans(
+            @PathVariable UUID id, @Valid @RequestBody DeclarePaymentPlansRequest request) {
+        return ResponseEntity.ok(disclosureService.declarePaymentPlans(id, request));
     }
 }

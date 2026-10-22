@@ -6213,6 +6213,37 @@ first Executive Director's phone comes from `POST /api/admin/tenants`'
 the admin tenant wizard's contract, so it waits for a frontend change. Branch
 and onboarding phones are business contact numbers with their own looser rule.
 
+## Instalment plans (changeset 099 onwards)
+
+Decided with the user 2026-10-22 (stories in `~/Documents/hometrue-instalment-plans-user-stories.md`, fourteen
+decisions, all A): declared plans worked out by HomeTrue; declared like fees with no review; a new `ON_PLAN` plot
+state after the deposit, `SOLD` at the last instalment; a provisional allocation letter at the deposit and the full
+one at the end; finance verifies every payment; each verified payment paid out on its own; one instalment at a time
+plus "pay off the balance"; a 7-day grace period; penalties a share of the overdue instalment at the highest declared
+step; reminders 7 and 1 days before, on the day overdue and on arrears; revocation started by the developer with the
+declared notice; restructures proposed by the developer and accepted by the buyer; due dates counted from the offer
+date. **The offer letter keeps one HomeTrue wording for every developer**; instalment buyers' offers gain a fixed plan
+section. Built in phases.
+
+### Phase 1: developers declare plans, listings show them (PL-1, PL-2)
+
+- `estate_payment_plans`, versioned like `estate_fees` (`estates.payment_plans_version` points at the current set; a
+  declaration replaces it; `[]` = outright only). **Terms only**: name, deposit (`deposit_pct` of the plan total, or a
+  fixed `deposit_amount`, exactly one — a CHECK), `instalment_count` 1–60, `frequency` MONTHLY/QUARTERLY,
+  `premium_pct` 0–100. Deposit percentages stop at 99.99: 100% is paying outright. RLS-policied in the same changeset
+  (044's shape); DELETE/TRUNCATE revoked. `GET|PUT /api/portal/estates/{id}/payment-plans` (`portal.estates.view` /
+  `.manage`, EB-2 write rule), audit `estate.payment_plans_declared`. Declaring plans does **not** lapse the letter
+  approval: the allocation letter doesn't print them.
+- **`common.InstalmentPlanCalculator` is the only place the figures are worked out**: the premium on the whole price,
+  a percentage deposit of that total, the rest split evenly in whole kobo, the remainder on the last instalment. A
+  fixed deposit that leaves nothing to pay makes the plan unavailable at that price (left out, never negative).
+- **Published** through `marketplace_payment_plans` (eligible estates, current version, SELECT only,
+  `security_barrier`) as `priceTiers[].paymentPlans`, each with `ifAnInstalmentIsLate` in naira.
+- **Penalty display moved to the instalment** (decision 9): `exitCosts.ifYouFallBehind` is now priced on one
+  instalment of the estate's first plan at the basis tier (`penaltyBasisPlan`, `penaltyBasisInstalment`), and empty
+  when there are no plans — before, it was a placeholder against the whole land price. Proven red by pricing on the
+  plan total.
+
 ## A buyer's address (changeset 097)
 
 Built 2026-10-21, decided with the user, so the allocation letter can name
