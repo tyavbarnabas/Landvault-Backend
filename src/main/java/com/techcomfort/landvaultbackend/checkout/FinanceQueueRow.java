@@ -19,6 +19,15 @@ public record FinanceQueueRow(
         Currency currency,
         Instant awaitingSince,
         /** The estate's allocation letter can be issued; when false, verifying is refused until it's approved. */
-        boolean letterApproved
+        boolean letterApproved,
+        /** What the payment being verified must be: the full price, or an instalment plan's deposit. */
+        BigDecimal amountDue,
+        /** The instalment plan's name, or null when paying in full. */
+        String planName
 ) {
+
+    /** True when the payment being verified is an instalment plan's deposit, not the full price. */
+    public boolean isDeposit() {
+        return planName != null;
+    }
 }

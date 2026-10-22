@@ -42,7 +42,7 @@ class BuyerEmailsTest {
     @Test
     void aVerifiedPurchaseSaysThePlotIsYoursAndLinksToItAndItsLetter() {
         sender.purchaseDecided(new SettlementAlertSender.PurchaseDecisionAlert("b@example.com", "Block A, Plot 7",
-                "Double King", "15000000.00", true, null, URL, "HT-ALC-2026-000012", LETTER_URL));
+                "Double King", "15000000.00", true, null, URL, "HT-ALC-2026-000012", LETTER_URL, null));
 
         SimpleMailMessage message = sent();
         assertThat(message.getSubject()).isEqualTo("Good news: Block A, Plot 7 at Double King is yours");
@@ -50,10 +50,24 @@ class BuyerEmailsTest {
                 .contains("Your allocation letter, HT-ALC-2026-000012, is ready").contains(LETTER_URL);
     }
 
+    /** Phase 3a: a verified deposit holds the plot on the plan — never "is yours". */
+    @Test
+    void aVerifiedDepositSaysThePlotIsHeldOnThePlanWithTheProvisionalLetter() {
+        sender.purchaseDecided(new SettlementAlertSender.PurchaseDecisionAlert("b@example.com", "Block A, Plot 7",
+                "Double King", "4950000.00", true, null, URL, "HT-PAL-2026-000001", LETTER_URL, "12-month plan"));
+
+        SimpleMailMessage message = sent();
+        assertThat(message.getSubject()).isEqualTo("Deposit verified: Block A, Plot 7 at Double King is held for you");
+        assertThat(message.getText()).contains("deposit of NGN 4950000.00 on the 12-month plan")
+                .contains("becomes yours when every instalment is paid and verified")
+                .contains("Your provisional allocation letter, HT-PAL-2026-000001, is ready").contains(LETTER_URL)
+                .doesNotContain("is yours");
+    }
+
     @Test
     void withoutALetterTheEmailSaysNothingAboutOne() {
         sender.purchaseDecided(new SettlementAlertSender.PurchaseDecisionAlert("b@example.com", "Block A, Plot 7",
-                "Double King", "15000000.00", true, null, URL, null, null));
+                "Double King", "15000000.00", true, null, URL, null, null, null));
 
         assertThat(sent().getText()).contains(URL).doesNotContain("letter").doesNotContain("null");
     }
@@ -61,7 +75,7 @@ class BuyerEmailsTest {
     @Test
     void aRejectedPurchaseSaysTheMoneyIsReturnedWithTheReasonAndNoDate() {
         sender.purchaseDecided(new SettlementAlertSender.PurchaseDecisionAlert("b@example.com", "Block A, Plot 7",
-                "Double King", "15000000.00", false, "Charged back by the bank.", URL, null, null));
+                "Double King", "15000000.00", false, "Charged back by the bank.", URL, null, null, null));
 
         SimpleMailMessage message = sent();
         assertThat(message.getSubject()).isEqualTo("Your payment for Block A, Plot 7 is being returned");

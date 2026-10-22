@@ -2,6 +2,7 @@ package com.techcomfort.landvaultbackend.payments.internal.domain;
 
 import com.techcomfort.landvaultbackend.common.AbstractEntity;
 import com.techcomfort.landvaultbackend.common.Currency;
+import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentPurpose;
 import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -55,6 +56,11 @@ public class Payment extends AbstractEntity {
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 16)
     private PaymentStatus status;
+
+    /** The full price, or an instalment plan's deposit (changeset 101). */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "purpose", nullable = false, updatable = false, length = 16)
+    private PaymentPurpose purpose;
 
     @Column(name = "authorization_url")
     private String authorizationUrl;

@@ -13,6 +13,7 @@ import com.techcomfort.landvaultbackend.documents.internal.domain.AllocationLett
 import com.techcomfort.landvaultbackend.documents.internal.domain.OfferLetter;
 import com.techcomfort.landvaultbackend.documents.internal.domain.OfferLetterAcceptance;
 import com.techcomfort.landvaultbackend.documents.internal.domain.Receipt;
+import com.techcomfort.landvaultbackend.documents.internal.enums.LetterKind;
 import com.techcomfort.landvaultbackend.documents.internal.exceptions.DocumentException;
 import com.techcomfort.landvaultbackend.documents.internal.render.AllocationLetterContent;
 import com.techcomfort.landvaultbackend.documents.internal.render.AllocationLetterRenderer;
@@ -60,6 +61,7 @@ public class DocumentService {
     public static final String RECEIPT = "receipt";
     public static final String ALLOCATION_LETTER = "allocation_letter";
     public static final String OFFER_LETTER = "offer_letter";
+    public static final String PROVISIONAL_ALLOCATION_LETTER = "provisional_allocation_letter";
     private static final String ISSUED = "issued";
     private static final String ACCEPTED = "accepted";
     private static final String LAPSED = "lapsed";
@@ -105,7 +107,7 @@ public class DocumentService {
         List<Receipt> found = receipts.findByBuyerUserIdAndTransactionIdOrderByIssuedAtDesc(buyer, transactionId);
         Map<UUID, Instant> refunded = refundedAt(found);
         List<DocumentDto> all = new ArrayList<>();
-        letters.findByBuyerUserIdAndTransactionId(buyer, transactionId).ifPresent(l -> all.add(toDto(l)));
+        letters.findByBuyerUserIdAndTransactionIdOrderByIssuedAtDesc(buyer, transactionId).forEach(l -> all.add(toDto(l)));
         found.forEach(r -> all.add(toDto(r, refunded.get(r.getPaymentId()))));
         offers.findByBuyerUserIdAndTransactionId(buyer, transactionId).ifPresent(o -> all.addAll(offerDtos(List.of(o))));
         return all;
@@ -220,7 +222,7 @@ public class DocumentService {
         Optional<AllocationLetter> letter = letters.findByVerificationCode(normalised);
         if (letter.isPresent()) {
             AllocationLetter l = letter.get();
-            return new DocumentVerificationDto(VALID, ALLOCATION_LETTER, l.getNumber(), l.getIssuedAt(), "HomeTrue",
+            return new DocumentVerificationDto(VALID, letterType(l), l.getNumber(), l.getIssuedAt(), "HomeTrue",
                     l.getCompanyName(), l.getEstateName(), l.getEstateLocation(), l.getPlotLabel(),
                     initials(l.getBuyerName()), null);
         }
@@ -312,6 +314,10 @@ public class DocumentService {
         return v == null ? "none" : "v" + v;
     }
 
+    private static String letterType(AllocationLetter l) {
+        return l.getKind() == LetterKind.PROVISIONAL ? PROVISIONAL_ALLOCATION_LETTER : ALLOCATION_LETTER;
+    }
+
     private Map<UUID, Instant> refundedAt(List<Receipt> found) {
         return paymentsApi.refundedAt(found.stream().map(Receipt::getPaymentId).toList());
     }
@@ -327,8 +333,9 @@ public class DocumentService {
 
     private DocumentDto toDto(AllocationLetter l) {
         String base = "/api/documents/allocation-letters/" + l.getId();
-        return new DocumentDto(l.getId(), ALLOCATION_LETTER,
-                "Allocation letter " + l.getNumber() + " — " + l.getPlotLabel() + ", " + l.getEstateName(),
+        return new DocumentDto(l.getId(), letterType(l),
+                (l.getKind() == LetterKind.PROVISIONAL ? "Provisional allocation letter " : "Allocation letter ")
+                        + l.getNumber() + " — " + l.getPlotLabel() + ", " + l.getEstateName(),
                 l.getNumber(), LocalDate.ofInstant(l.getIssuedAt(), DocumentFormats.NIGERIA), l.getIssuedAt(), VALID,
                 VerificationCodes.display(l.getVerificationCode()), properties.verifyUrlFor(l.getVerificationCode()),
                 null, l.getPlotId(), l.getTransactionId(), null, null, base + "/pdf", base + "/jpeg", null);
@@ -355,7 +362,8 @@ public class DocumentService {
                 l.getNumber(),
                 properties.verifyUrlFor(l.getVerificationCode()),
                 l.getVerificationCode(),
-                AllocationLetterContent.ALLOCATION_TITLE,
+                l.getKind() == LetterKind.PROVISIONAL ? AllocationLetterContent.PROVISIONAL_TITLE
+                        : AllocationLetterContent.ALLOCATION_TITLE,
                 null);
     }
 

@@ -9,6 +9,7 @@ import com.techcomfort.landvaultbackend.common.TenantScope;
 import com.techcomfort.landvaultbackend.identity.IdentityApi;
 import com.techcomfort.landvaultbackend.payments.dto.PaymentDto;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
+import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentPurpose;
 import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentStatus;
 import com.techcomfort.landvaultbackend.payments.internal.exceptions.PaymentException;
 import com.techcomfort.landvaultbackend.payments.internal.paystack.PaystackAmounts;
@@ -63,7 +64,10 @@ public class PaymentService {
         if (!transaction.isPendingPayment()) {
             throw new PaymentException.TransactionNotPayable(transaction.status());
         }
-        if (!transaction.isOutright()) {
+        // An instalment purchase pays its deposit first (phase 3a); its
+        // instalments come with phase 3b. Milestone plans aren't payable yet,
+        // nor an instalment purchase opened before plans were declared.
+        if (!transaction.isOutright() && !(transaction.isInstalment() && transaction.amountDue() != null)) {
             throw new PaymentException.PlanNotSupported(transaction.plan());
         }
         // OL: no money before the buyer has accepted the offer letter. Purchases
@@ -72,7 +76,7 @@ public class PaymentService {
             throw new PaymentException.OfferNotAccepted();
         }
         // NGN only, above zero, whole kobo — refused here before Paystack is ever called.
-        long amountKobo = PaystackAmounts.toKobo(transaction.totalPrice(), transaction.currency());
+        long amountKobo = PaystackAmounts.toKobo(transaction.amountDue(), transaction.currency());
 
         Optional<Payment> open = payments.findFirstByTransactionIdAndStatusOrderByCreatedAtDesc(
                 transactionId, PaymentStatus.INITIALIZED);
@@ -93,6 +97,7 @@ public class PaymentService {
                 .currency(transaction.currency())
                 .amountKobo(amountKobo)
                 .status(PaymentStatus.INITIALIZED)
+                .purpose(transaction.isInstalment() ? PaymentPurpose.DEPOSIT : PaymentPurpose.OUTRIGHT)
                 .build());
         String reference = payment.getReference();
         Map<String, Object> metadata = new LinkedHashMap<>();

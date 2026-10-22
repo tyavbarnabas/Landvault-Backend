@@ -523,14 +523,12 @@ class ReservationCheckoutUnderRlsIT {
     }
 
     @Test
-    void installmentsAndOtherCurrenciesAreRefusedBeforePaystackIsCalled() {
-        TransactionDto installment = instalmentPurchase();
-        assertThat(pay(buyer, installment.id()).getBody()).contains("PAYMENT_PLAN_NOT_SUPPORTED");
+    void milestonePlansAndOtherCurrenciesAreRefusedBeforePaystackIsCalled() {
+        TransactionDto milestone = createTransaction(buyer, reserve(buyer, plotId).id(), "milestone", null);
+        assertThat(pay(buyer, milestone.id()).getBody()).contains("PAYMENT_PLAN_NOT_SUPPORTED");
 
-        execute("UPDATE transactions SET plan = 'OUTRIGHT', installment_months = NULL, plan_id = NULL, "
-                + "plan_name = NULL, plan_frequency = NULL, plan_total = NULL, plan_premium = NULL, "
-                + "deposit_amount = NULL, currency = 'USD' WHERE id = '" + installment.id() + "'");
-        assertThat(pay(buyer, installment.id()).getBody()).contains("CURRENCY_NOT_SUPPORTED");
+        execute("UPDATE transactions SET plan = 'OUTRIGHT', currency = 'USD' WHERE id = '" + milestone.id() + "'");
+        assertThat(pay(buyer, milestone.id()).getBody()).contains("CURRENCY_NOT_SUPPORTED");
         verify(paystack, never()).initialize(any());
     }
 
@@ -2093,6 +2091,80 @@ class ReservationCheckoutUnderRlsIT {
         assertThat(second.getBody()).contains("TRANSACTION_ALREADY_EXISTS");
     }
 
+    // --- instalment plans, phase 3a: the deposit (changeset 101) ---
+
+    /**
+     * The deposit is charged, verified by finance like any payment, and holds
+     * the plot on the plan: ON_PLAN (not sold), the purchase on_plan, an active
+     * plan in the portfolio and a provisional letter — no final letter, no payout.
+     */
+    @Test
+    void aVerifiedDepositHoldsThePlotOnThePlanAndIssuesTheProvisionalLetter() {
+        TransactionDto purchase = paidDeposit();
+        String payment = "FROM payments WHERE transaction_id = '" + purchase.id() + "'";
+        assertThat(queryString("SELECT purpose || '/' || amount_kobo " + payment)).isEqualTo("DEPOSIT/660000000");
+
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        assertThat(get("/api/portal/finance/transactions", officer, String.class).getBody())
+                .contains("\"paymentFor\":\"deposit\"", "\"planName\":\"12-month plan\"", "\"expectedAmount\":6600000",
+                        "\"amountsMatch\":true");
+        assertThat(financeAction(officer, purchase.id(), "verify", null).getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        assertThat(plotStatus(plotId)).as("held on the plan, not sold").isEqualTo("ON_PLAN");
+        assertThat(queryString("SELECT status FROM transactions WHERE id = '" + purchase.id() + "'")).isEqualTo("ON_PLAN");
+        assertThat(reservationStatus(purchase.reservationId())).isEqualTo("CONVERTED");
+        assertThat(queryString("SELECT status FROM owned_plots WHERE transaction_id = '" + purchase.id() + "'"))
+                .isEqualTo("INSTALLMENT_ACTIVE");
+
+        String letters = "FROM allocation_letters WHERE transaction_id = '" + purchase.id() + "'";
+        assertThat(queryString("SELECT string_agg(kind, ',') " + letters)).as("no final letter yet").isEqualTo("PROVISIONAL");
+        assertThat(queryString("SELECT number " + letters)).matches("HT-PAL-\\d{4}-\\d{6}");
+        String offerNumber = queryString("SELECT number FROM offer_letters WHERE transaction_id = '" + purchase.id() + "'");
+        assertThat(queryString("SELECT clauses[array_length(clauses, 1)] " + letters))
+                .startsWith("That this allocation is provisional").contains(offerNumber);
+        assertThat(documents(buyer).items()).extracting(DocumentDto::type).contains("provisional_allocation_letter")
+                .doesNotContain("allocation_letter");
+
+        OwnedPlotDto onPlan = portfolio(buyer).items().getFirst();
+        assertThat(onPlan.status()).isEqualTo("installment_active");
+        assertThat(onPlan.plan()).isEqualTo("installment");
+        assertThat(onPlan.totalPrice()).as("what the plan costs").isEqualByComparingTo("22000000");
+        assertThat(onPlan.paidAmount()).as("the deposit").isEqualByComparingTo("6600000");
+        assertThat(onPlan.installmentMonths()).isEqualTo(12);
+        assertThat(onPlan.installmentsPaid()).isZero();
+        assertThat(onPlan.nextDueAmount()).isEqualByComparingTo("1283333.33");
+        assertThat(onPlan.nextDueDate()).isEqualTo(LocalDate.now(ZoneId.of("Africa/Lagos")).plusMonths(1));
+
+        assertThat(queryString("SELECT count(*) FROM transactions WHERE status = 'VERIFIED' AND id = '"
+                + purchase.id() + "'")).as("not a verified sale, so nothing is owed for payout").isEqualTo("0");
+        ResponseEntity<String> again = restTemplate.exchange("/api/reservations", HttpMethod.POST,
+                entity(verifiedBuyer().token(), new CreateReservationRequest(plotId)), String.class);
+        assertThat(again.getBody()).as("nobody else can reserve it").contains("PLOT_NOT_AVAILABLE");
+    }
+
+    /** Phase 3a: a deposit that arrives after the purchase was abandoned can only be refunded. */
+    @Test
+    void aLateDepositCanOnlyBeRefunded() {
+        TransactionDto purchase = instalmentPurchase();
+        paystackReturnsALink();
+        assertThat(pay(buyer, purchase.id()).getStatusCode().is2xxSuccessful()).isTrue();
+        String reference = queryString("SELECT reference FROM payments WHERE transaction_id = '" + purchase.id() + "'");
+        paystackSays(reference, "abandoned", 660_000_000L, "NGN", "The customer left");
+        holdEndedMinutesAgo(purchase, 20);
+        paymentSweeper.sweep();
+        paystackSays(reference, "success", 660_000_000L, "NGN", "Approved");
+        String body = "{\"event\":\"charge.success\",\"data\":{\"reference\":\"" + reference + "\"}}";
+        webhook(body, PaystackSignature.sign(body.getBytes(StandardCharsets.UTF_8), paystackSecretKey));
+        assertThat(queryString("SELECT status FROM transactions WHERE id = '" + purchase.id() + "'")).isEqualTo("ABANDONED");
+
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        ResponseEntity<String> refused = restTemplate.exchange("/api/portal/finance/late-payments/" + purchase.id()
+                + "/allocate", HttpMethod.POST, entity(officer, null), String.class);
+        assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(refused.getBody()).contains("LATE_DEPOSIT_NOT_SUPPORTED");
+        assertThat(plotStatus(plotId)).startsWith("AVAILABLE");
+    }
+
     /** IC-1: an instalment purchase names one of the estate's declared plans; the buyer never picks a month count. */
     @Test
     void anInstalmentPurchaseMustNameAPlanTheEstateOffersNow() {
@@ -2152,8 +2224,10 @@ class ReservationCheckoutUnderRlsIT {
                         "your total commitment on this plan is ₦22,000,000.00",
                         "is in arrears; no late-payment penalty is declared");
         assertThat(acceptOffer(buyer, purchase.offer().id()).getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(pay(buyer, purchase.id()).getBody()).as("paying instalments is phase 3")
-                .contains("PAYMENT_PLAN_NOT_SUPPORTED");
+        paystackReturnsALink();
+        assertThat(pay(buyer, purchase.id()).getStatusCode().is2xxSuccessful()).as("the deposit is payable").isTrue();
+        assertThat(queryString("SELECT amount FROM payments WHERE transaction_id = '" + purchase.id() + "'"))
+                .as("the deposit, not the full price").startsWith("6600000.");
     }
 
     // ------------------------------------------------------------------
@@ -2326,7 +2400,16 @@ class ReservationCheckoutUnderRlsIT {
         return response.getBody();
     }
 
-    /** Opened on the 12-month plan with its offer accepted — as far as phase 2 goes. */
+    /** The 12-month plan's deposit, ₦6,600,000 on a ₦20M plot, paid and confirmed by Paystack. */
+    private TransactionDto paidDeposit() {
+        TransactionDto purchase = instalmentPurchase();
+        String reference = startPayment(purchase);
+        paystackSays(reference, "success", 660_000_000L, "NGN", "Approved");
+        assertThat(confirm(buyer, reference).getBody()).contains("\"status\":\"succeeded\"");
+        return purchase;
+    }
+
+    /** Opened on the 12-month plan with its offer accepted. */
     private TransactionDto instalmentPurchase() {
         TransactionDto purchase = openOnPlan(buyer, reserve(buyer, plotId).id(), declareTwelveMonthPlan());
         assertThat(acceptOffer(buyer, purchase.offer().id()).getStatusCode()).isEqualTo(HttpStatus.OK);

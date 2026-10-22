@@ -319,7 +319,15 @@ gets it without a new call.
   estate's first plan at the basis tier — named in the new `penaltyBasisPlan` and `penaltyBasisInstalment`), not of
   the whole price. It is **empty when the estate has no plans** (an outright buyer has nothing to fall behind on).
 - **Phase 2 built** (changeset 100): choosing a plan at checkout and the plan on the offer letter — see Checkout.
-  Paying instalments is not built yet.
+  **Phase 3a built** (changeset 101): the deposit. Pay (`POST /api/transactions/{id}/payments`) charges an
+  instalment purchase's **deposit** from its schedule. The finance queue item gains `paymentFor` (`full_price` |
+  `deposit`) and `planName`, with `expectedAmount` the deposit. Verifying a deposit **doesn't sell**: the purchase
+  becomes **`on_plan`** (new `TransactionStatus`), the plot **`on-plan`** (new `PlotStatus`; public map: unavailable),
+  the portfolio entry `installment_active` (`totalPrice` = plan total, `paidAmount` = deposit, `installmentMonths`,
+  `installmentsPaid`, `nextDueDate`/`nextDueAmount`), and a **provisional allocation letter** is issued — Document
+  type **`provisional_allocation_letter`**, number `HT-PAL-…`. The buyer's email says the plot is held on the plan.
+  Nothing is paid out to the developer yet. Late money on a deposit can only be refunded: allocate answers 409
+  `LATE_DEPOSIT_NOT_SUPPORTED`. Paying the instalments themselves is phase 3b.
 
 ### Publication now has SEVEN conditions, not five
 

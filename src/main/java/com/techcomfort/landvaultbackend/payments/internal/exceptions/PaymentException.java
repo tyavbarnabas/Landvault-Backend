@@ -289,6 +289,14 @@ public abstract class PaymentException extends RuntimeException {
         }
     }
 
+    /** Phase 3a: a deposit that arrived after the purchase was abandoned can only be refunded for now. */
+    public static class LateDepositNotSupported extends PaymentException {
+        public LateDepositNotSupported() {
+            super("This late payment is an instalment plan's deposit, which can't be allocated yet. Refund the buyer "
+                    + "instead. Nothing was changed.");
+        }
+    }
+
     /** Someone else reserved, bought or withheld the plot meanwhile: refund is the only ending left. */
     public static class PlotNoLongerAvailable extends PaymentException {
         public PlotNoLongerAvailable() {

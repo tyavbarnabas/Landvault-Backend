@@ -116,6 +116,19 @@ public class PlotLockGateway {
     }
 
     /**
+     * Phase 3a: an instalment plan's deposit is verified — the held plot is
+     * kept for this buyer on the plan, not sold. Same reasoning as
+     * {@link #sell}: the selling company's own finance staff, under their RLS.
+     */
+    public boolean holdOnPlan(UUID plotId) {
+        int updated = entityManager.createNativeQuery("UPDATE plots SET status = 'ON_PLAN', updated_at = now() "
+                        + "WHERE id = :plotId AND status = 'RESERVED' AND deleted = false")
+                .setParameter("plotId", plotId)
+                .executeUpdate();
+        return updated == 1;
+    }
+
+    /**
      * Late money: a plot still for sale becomes sold, under the selling
      * company's own row-level security — the same reasoning as {@link #sell}.
      * Only from an available status: if anyone reserved, bought or withheld

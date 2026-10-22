@@ -126,7 +126,8 @@ public class FinanceVerificationService {
                         row.estateName(), amount.toPlainString(), verified, reason,
                         buyerNotifier.purchaseUrl(row.transactionId()),
                         letter.map(AllocationLetterLookup.LetterRef::number).orElse(null),
-                        letter.map(l -> buyerNotifier.letterUrl(l.id())).orElse(null)))));
+                        letter.map(l -> buyerNotifier.letterUrl(l.id())).orElse(null),
+                        verified && row.isDeposit() ? row.planName() : null))));
     }
 
     private FinanceQueueItemDto toItem(FinanceQueueRow row) {
@@ -136,8 +137,9 @@ public class FinanceVerificationService {
                 p.getLast4(), p.getGatewayResponse())).orElse(null);
         return new FinanceQueueItemDto(row.transactionId(), row.transactionReference(), row.estateId(),
                 row.estateName(), row.plotId(), row.plotLabel(), identityApi.emailOf(row.buyerUserId()).orElse(null),
-                row.totalPrice(), row.currency().name(), row.awaitingSince(), record,
-                payment.isPresent() && matches(payment.get(), row), row.letterApproved());
+                row.amountDue(), row.currency().name(), row.awaitingSince(), record,
+                payment.isPresent() && matches(payment.get(), row), row.letterApproved(),
+                row.isDeposit() ? "deposit" : "full_price", row.planName());
     }
 
     private Optional<Payment> confirmedPaymentFor(UUID transactionId) {
@@ -145,7 +147,7 @@ public class FinanceVerificationService {
     }
 
     private static boolean matches(Payment payment, FinanceQueueRow row) {
-        return payment.getAmount().compareTo(row.totalPrice()) == 0 && payment.getCurrency() == row.currency();
+        return payment.getAmount().compareTo(row.amountDue()) == 0 && payment.getCurrency() == row.currency();
     }
 
     /**
@@ -168,6 +170,7 @@ public class FinanceVerificationService {
             case NOT_ABANDONED -> new PaymentException.LatePaymentNotFound();
             case PLOT_NOT_AVAILABLE -> new PaymentException.PlotNoLongerAvailable();
             case LETTER_NOT_APPROVED -> new PaymentException.LetterNotApproved();
+            case LATE_DEPOSIT_NOT_SUPPORTED -> new PaymentException.LateDepositNotSupported();
             case DONE -> new IllegalStateException("DONE is not a failure");
         };
     }

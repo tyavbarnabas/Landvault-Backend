@@ -6267,6 +6267,38 @@ section. Built in phases.
 
 Proven red: an offer that ignores the plan, and accepting a month count from the buyer.
 
+### Phase 3a: the deposit (changeset 101)
+
+Phase 3 is split: 3a the deposit, 3b the instalments (last one sells the plot, full letter, pay off), 3c escrow
+payouts. Decided with the user before 3a: a refund term's "% of the total price" on a plan means the **land
+(agreed) price**, not the plan total — also the developer's escrow share.
+
+- **Pay charges the deposit**: `PayableTransaction.amountDue` is the deposit for an instalment purchase (the full price
+  otherwise); `payments.purpose` records `DEPOSIT` or `OUTRIGHT`. Milestone stays refused, and so does an instalment
+  purchase opened before plans existed (no deposit to charge). Paystack confirmation is unchanged — it compares
+  against the payment row's own amount.
+- **Finance verifies the deposit like any payment**: the queue row carries `amountDue`/`planName`
+  (`FinanceQueueItemDto.expectedAmount`, `paymentFor: deposit`, `planName`), and the amount check uses it.
+- **Verifying a deposit doesn't sell**: `verifyAndAllocate` moves the plot `RESERVED → ON_PLAN`
+  (`PlotLockGateway.holdOnPlan`, the finance officer's RLS) and the purchase `AWAITING_FINANCE → ON_PLAN`, converts
+  the hold, audits `transaction.deposit_verified`, and publishes `PlotAllocated(provisional = true)`: the portfolio
+  records `INSTALLMENT_ACTIVE` (it refused non-outright before), and the letter issuer writes a **PROVISIONAL**
+  letter (`allocation_letters.kind`, `HT-PAL-…` from its own sequence, one of each kind per sale) with the offer's
+  conditions plus HomeTrue's fixed provisional clause naming the offer. `ON_PLAN` is in `chk_plots_status`; the public
+  map shows it as unavailable and the reserve function won't take it; developers can't withhold, change or withdraw
+  it (the status writers use allow-lists; `withdrawPlot` and the skip reasons name it).
+- **The buyer's email** says the deposit is verified and the plot is held on the plan, with the provisional letter —
+  never "is yours" (`PurchaseDecisionAlert.planName`).
+- **Portfolio**: an active plan shows the plan total as `totalPrice`, the deposit as `paidAmount`, `installmentMonths`,
+  `installmentsPaid` 0, and the first instalment as `nextDueDate`/`nextDueAmount` (`CheckoutApi.schedulesOf`); the
+  payment history types it `deposit`. Vault and verify page: `provisional_allocation_letter`.
+- **No payout**: payouts read `VERIFIED` sales; an `on_plan` purchase isn't one, so HomeTrue holds the deposit until
+  3c.
+- **Late money**: a deposit that arrives after the purchase was abandoned can only be refunded for now —
+  `LATE_DEPOSIT_NOT_SUPPORTED` (409), checked on the payment's purpose before the amount.
+
+Proven red: treating a verified deposit as a full payment (the sale rolls back with a 500).
+
 ## A buyer's address (changeset 097)
 
 Built 2026-10-21, decided with the user, so the allocation letter can name

@@ -1,6 +1,7 @@
 package com.techcomfort.landvaultbackend.documents.internal.repository;
 
 import com.techcomfort.landvaultbackend.documents.internal.domain.AllocationLetter;
+import com.techcomfort.landvaultbackend.documents.internal.enums.LetterKind;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 
@@ -10,9 +11,10 @@ import java.util.UUID;
 
 public interface AllocationLetterRepository extends JpaRepository<AllocationLetter, UUID> {
 
-    boolean existsByTransactionId(UUID transactionId);
+    boolean existsByTransactionIdAndKind(UUID transactionId, LetterKind kind);
 
-    Optional<AllocationLetter> findByTransactionId(UUID transactionId);
+    /** A sale's letters, newest first: the final one, then the provisional one before it. */
+    List<AllocationLetter> findByTransactionIdOrderByIssuedAtDesc(UUID transactionId);
 
     Optional<AllocationLetter> findByIdAndBuyerUserId(UUID id, UUID buyerUserId);
 
@@ -20,8 +22,11 @@ public interface AllocationLetterRepository extends JpaRepository<AllocationLett
 
     List<AllocationLetter> findByBuyerUserIdOrderByIssuedAtDesc(UUID buyerUserId);
 
-    Optional<AllocationLetter> findByBuyerUserIdAndTransactionId(UUID buyerUserId, UUID transactionId);
+    List<AllocationLetter> findByBuyerUserIdAndTransactionIdOrderByIssuedAtDesc(UUID buyerUserId, UUID transactionId);
 
     @Query(value = "SELECT nextval('allocation_letter_number_seq')", nativeQuery = true)
     long nextNumber();
+
+    @Query(value = "SELECT nextval('provisional_letter_number_seq')", nativeQuery = true)
+    long nextProvisionalNumber();
 }

@@ -56,6 +56,7 @@ public class PaymentExceptionHandler {
             case PaymentException.LatePaymentNotFound e -> body(HttpStatus.NOT_FOUND, e, "LATE_PAYMENT_NOT_FOUND");
             case PaymentException.PlotNoLongerAvailable e -> body(HttpStatus.CONFLICT, e, "PLOT_NO_LONGER_AVAILABLE");
             case PaymentException.LetterNotApproved e -> body(HttpStatus.CONFLICT, e, "LETTER_NOT_APPROVED");
+            case PaymentException.LateDepositNotSupported e -> body(HttpStatus.CONFLICT, e, "LATE_DEPOSIT_NOT_SUPPORTED");
             case PaymentException.RefundNotDue e -> body(HttpStatus.NOT_FOUND, e, "REFUND_NOT_DUE");
             case PaymentException.RefundInProgress e -> body(HttpStatus.CONFLICT, e, "REFUND_IN_PROGRESS");
             case PaymentException.RefundNotFound e -> body(HttpStatus.NOT_FOUND, e, "REFUND_NOT_FOUND");

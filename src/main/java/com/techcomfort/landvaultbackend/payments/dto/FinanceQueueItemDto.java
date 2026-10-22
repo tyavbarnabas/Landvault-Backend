@@ -18,17 +18,23 @@ public record FinanceQueueItemDto(
         UUID plotId,
         @Schema(example = "Block A, Plot 10") String plotLabel,
         String buyerEmail,
-        @Schema(description = "The price agreed at reservation.") BigDecimal expectedAmount,
+        @Schema(description = "What this payment must be: the price agreed at reservation, or — for an "
+                + "instalment plan — the deposit from its fixed schedule.") BigDecimal expectedAmount,
         String currency,
         Instant awaitingSince,
         @Schema(description = "Paystack's record of the confirmed payment; null if none is on file.")
         GatewayRecord payment,
-        @Schema(description = "True when Paystack's confirmed amount and currency equal the agreed price.")
+        @Schema(description = "True when Paystack's confirmed amount and currency equal `expectedAmount`.")
         boolean amountsMatch,
         @Schema(description = """
                 The estate's allocation letter is approved, so verifying issues the buyer's letter. When false, \
                 verifying is refused (`LETTER_NOT_APPROVED`) until the Executive Director approves it.""")
-        boolean letterApproved
+        boolean letterApproved,
+        @Schema(description = "`full_price`, or `deposit` for an instalment plan: verifying a deposit holds the plot "
+                + "on the plan and issues the provisional allocation letter; it doesn't sell the plot.")
+        String paymentFor,
+        @Schema(description = "The instalment plan's name; null when paying in full.", nullable = true)
+        String planName
 ) {
 
     /**
