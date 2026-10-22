@@ -13,6 +13,7 @@ import com.techcomfort.landvaultbackend.checkout.FinanceQueueRow;
 import com.techcomfort.landvaultbackend.checkout.PayableTransaction;
 import com.techcomfort.landvaultbackend.checkout.PendingPurchase;
 import com.techcomfort.landvaultbackend.checkout.PlotAllocated;
+import com.techcomfort.landvaultbackend.checkout.RunningPlan;
 import com.techcomfort.landvaultbackend.checkout.VerifiedSale;
 import com.techcomfort.landvaultbackend.checkout.internal.domain.Reservation;
 import com.techcomfort.landvaultbackend.checkout.internal.domain.Transaction;
@@ -71,6 +72,15 @@ public class CheckoutApiImpl implements CheckoutApi {
                 (UUID) r[7], (BigDecimal) r[8], Currency.valueOf((String) r[9]), (Instant) r[10],
                 letters.computeIfAbsent((UUID) r[2], letterGate::letterReady),
                 (BigDecimal) r[11], (String) r[12])).toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<RunningPlan> runningPlans(UUID tenantId) {
+        return transactions.findRunningPlans(tenantId).stream().map(r -> new RunningPlan((UUID) r[0], (String) r[1],
+                (UUID) r[2], (UUID) r[3], (String) r[4], (UUID) r[5],
+                r[6] == null ? "Plot " + r[7] : "Block " + r[6] + ", Plot " + r[7], (UUID) r[8], (String) r[9],
+                Currency.valueOf((String) r[10]), (Instant) r[11])).toList();
     }
 
     @Override
@@ -338,7 +348,8 @@ public class CheckoutApiImpl implements CheckoutApi {
                 r[4] == null ? "Plot " + r[5] : "Block " + r[4] + ", Plot " + r[5],
                 (BigDecimal) r[6], Currency.valueOf((String) r[7]), (Instant) r[8],
                 !"INSTALLMENT".equals(r[9]) ? null : new VerifiedSale.Escrow("VERIFIED".equals(r[10]),
-                        (BigDecimal) r[11], r[12] == null ? null : RefundAppliesTo.valueOf((String) r[12])));
+                        (BigDecimal) r[11], r[12] == null ? null : RefundAppliesTo.valueOf((String) r[12]),
+                        !Boolean.FALSE.equals(r[13])));
     }
 
     private static PayableTransaction toPayable(Transaction t) {

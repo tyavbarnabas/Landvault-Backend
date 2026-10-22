@@ -446,7 +446,8 @@ public class MarketplaceQueryService {
         return new ExitCostsDto(
                 basis.getTierId(), basis.getLabel(), basis.getPrice(), basis.getCurrency().name(),
                 withdrawal, steps, penaltyBasis.map(MarketplacePaymentPlanDto::name).orElse(null),
-                penaltyBasis.map(MarketplacePaymentPlanDto::instalment).orElse(null), revocation, bothCost);
+                penaltyBasis.map(MarketplacePaymentPlanDto::instalment).orElse(null),
+                penalties.isEmpty() || defaults == null ? null : defaults.isPenaltiesRefundable(), revocation, bothCost);
     }
 
     private static CommitmentCalculator.DeclaredFee toDeclaredFee(FeeView fee) {

@@ -57,6 +57,10 @@ public record ExitCostsDto(
         @Schema(description = "The instalment those penalties are a share of.", nullable = true)
         BigDecimal penaltyBasisInstalment,
 
+        @Schema(description = "Whether late-payment penalties are refunded, on the refund terms, to a buyer "
+                + "who withdraws — declared by the developer. Null when no penalty is declared.", nullable = true)
+        Boolean penaltiesRefundable,
+
         @Schema(description = "What triggers revocation, the notice given, and what happens to money "
                 + "already paid.")
         RevocationDto revocation,

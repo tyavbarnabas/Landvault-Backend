@@ -55,8 +55,9 @@ public record OwnedPlotDto(
         String currency,
         @Schema(description = "When finance verified the sale. Null while pending verification.")
         LocalDate acquiredDate,
-        @Schema(description = "`pending_verification`, `installment_active` (deposit verified, plan running) or `completed` "
-                + "(paid in full) today; the other statuses arrive with arrears, documents, upgrades and resale.")
+        @Schema(description = "`pending_verification`, `installment_active` (deposit verified, plan running), "
+                + "`in_arrears` (a plan instalment more than 7 days late — worked out today, never stored) or "
+                + "`completed` (paid in full); the other statuses arrive with documents, upgrades and resale.")
         String status,
         @Schema(description = "On an active plan: the first unpaid instalment's due date. Null otherwise.", nullable = true)
         LocalDate nextDueDate,
@@ -65,7 +66,9 @@ public record OwnedPlotDto(
         List<PortfolioPaymentDto> payments,
         Integer installmentMonths,
         Integer installmentsPaid,
-        @Schema(description = "Only while `in_arrears`; null today.")
+        @Schema(description = "On a plan with an instalment late — from the first day overdue, through the 7-day "
+                + "grace and into arrears: what's late, the penalty reached and the total due now. Null otherwise.",
+                nullable = true)
         ArrearsDto arrears,
         @Schema(description = "Null: restructuring isn't built yet.")
         String restructureStatus,

@@ -6362,6 +6362,55 @@ completes.
 Proven red: tranches not kept apart (the release counted as paid by the share's part), and terms not copied onto the
 purchase.
 
+### Phase 4: arrears, penalties and reminders (changeset 104)
+
+Decided with the user (2026-10-22): statuses worked out on read, never stored; the **developer declares whether
+penalties are refunded** on withdrawal, HomeTrue fixes how they work; a penalty is **fixed when the buyer starts
+paying**; paying off the balance includes the penalties already reached.
+
+- **HomeTrue's rules, one place** (`common.LatePaymentTerms`): an unpaid instalment is `due_today` on its date,
+  `overdue` days 1–7 after it, `in_arrears` from day 8 (`GRACE_DAYS` = 7, every estate). Months late are whole months
+  from the due date; the **highest declared step reached applies** (steps replace, never add); the penalty is that
+  step's % of the overdue instalment (`InstalmentPlanCalculator.penaltyOn`, the same rounding the listing and offer
+  print). No steps, or a 0% step: no penalty. **Paid means verified, but a finance delay never makes anyone late**:
+  an instalment with a Paystack-confirmed payment waiting for finance is `awaiting_verification`, never late.
+- **The developer declares `penaltiesRefundable`** with the default terms — required whenever penalty tiers are
+  declared (`INVALID_REQUEST` otherwise); with none it doesn't arise (stored true). Published on the listing
+  (`exitCosts.penaltiesRefundable`, null when no penalty is declared) and printed in the offer's plan section.
+- **Copied onto the purchase at Proceed to buy**, like the price and escrow terms: `transactions.penalties_refundable`
+  and `transaction_penalty_steps` (append-only). Redeclaring an estate's terms reaches new buyers only (tested: a
+  later 50% step leaves an open purchase at 5%). `PlanSchedule.lateTerms` carries them, and **the offer letter's plan
+  clause now reads the purchase's copy**, not the estate's current terms. Existing dev purchases have no steps (no
+  penalty) and default to refundable — still in development, so no backfill was wanted.
+- **Statuses are never stored.** `PlanProgress.standings(day)` gives each instalment's standing and penalty;
+  `PlanStandings` (payments) is the one reader — the buyer's purchase (`TransactionDto.standing`, once `on_plan` or
+  paid off), the portfolio (`status: in_arrears` past the grace, `arrears` from the first day late, `paidAmount`
+  excluding penalties), the developer's list and the reminders all go through it, so none can disagree. Checkout
+  reaches it through `PaymentSummaryProvider.standingsFor(schedules)` (schedules passed in — calling checkout back
+  would be a bean cycle).
+- **Charging**: `PaymentService` adds the penalty reached **today** (Lagos) to the next instalment, or every overdue
+  instalment's to a pay-off, as lines in `payment_penalties` (append-only) and the sum in `payments.penalty_amount`
+  (part of `amount`). **Finance checks the payment's own total** (instalment or balance + its recorded penalty), never
+  a recomputed one — the queue shows `penaltyAmount` and `penalties[]`. A link reopened within 30 minutes keeps the
+  same amount.
+- **Escrow** (`PayoutTranches`): a **refundable** penalty is shared and held like the instalment; a **non-refundable**
+  one is added to that payment's share in full and **doesn't count towards a TOTAL_PRICE cap**.
+- **Reminders** (AR-3): `InstalmentReminderJob`, daily at 08:00 Lagos (`landvault.instalments.reminder-cron`; `-` in
+  tests, which call `run(day)`), platform scope, **moves no money and changes no status**. Stages are windows —
+  `SEVEN_DAYS_BEFORE` (2–7 days before), `ONE_DAY_BEFORE` (1 day before or on the day), `OVERDUE`, `IN_ARREARS` — so
+  a missed run catches up the next day. Each is **claimed once** per instalment and stage
+  (`instalment_reminders`, `INSERT … ON CONFLICT DO NOTHING`), and the email goes **after commit**; a failed email is
+  logged and never retried. Nothing while finance is verifying a payment. The wording is factual and calm (what's
+  due, by when, what happens next), like the conflict guidance; `penalty` appears only once one applies.
+- **Developer view**: `GET /api/portal/finance/plans?status=on_track|due_today|overdue|in_arrears|late`
+  (`portal.payments.verify`, own company, branch-walled by RLS): running plans, most urgent first, with the same
+  standing the buyer sees. Read-only — chasing a buyer or starting revocation (phase 5) is a person's decision.
+
+Proven red: the payment not charging the penalty (`7700000.00/0` instead of `8085000.00/385000`), and finance
+expecting the instalment without its penalty (`amountsMatch: false`).
+
+**Not built (phase 5)**: withdrawal, revocation (developer-started, declared notice), restructure, and penalty waivers.
+
 ## A buyer's address (changeset 097)
 
 Built 2026-10-21, decided with the user, so the allocation letter can name

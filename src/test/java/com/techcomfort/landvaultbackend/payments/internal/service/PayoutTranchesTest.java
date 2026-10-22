@@ -111,13 +111,60 @@ class PayoutTranchesTest {
                 .tranches().getFirst().amount()).isEqualByComparingTo("125000.00");
     }
 
+    /**
+     * Phase 4: a ₦100,000 penalty the buyer wouldn't get back goes to the
+     * developer in full; only the instalment itself is shared and held.
+     */
+    @Test
+    void aNonRefundablePenaltyIsPaidOutInFull() {
+        Payment late = paid(PaymentPurpose.INSTALMENT, 1, "1100000.00", 1);
+        late.setPenaltyAmount(new BigDecimal("100000.00"));
+
+        PayoutTranches.Owed owed = PayoutTranches.of(sale(new VerifiedSale.Escrow(false, new BigDecimal("20.00"),
+                RefundAppliesTo.AMOUNT_PAID, false)), List.of(late));
+
+        assertThat(owed.tranches()).singleElement()
+                .satisfies(t -> assertThat(t.amount()).isEqualByComparingTo("300000"));
+        assertThat(owed.heldInEscrow()).isEqualByComparingTo("800000");
+    }
+
+    /** A refundable penalty is part of what the buyer would get back, so it's shared and held like the rest. */
+    @Test
+    void aRefundablePenaltyIsHeldLikeTheInstalment() {
+        Payment late = paid(PaymentPurpose.INSTALMENT, 1, "1100000.00", 1);
+        late.setPenaltyAmount(new BigDecimal("100000.00"));
+
+        PayoutTranches.Owed owed = PayoutTranches.of(sale(escrow(false, "20.00", RefundAppliesTo.AMOUNT_PAID)),
+                List.of(late));
+
+        assertThat(owed.tranches().getFirst().amount()).isEqualByComparingTo("220000");
+        assertThat(owed.heldInEscrow()).isEqualByComparingTo("880000");
+    }
+
+    /** TOTAL_PRICE: a non-refundable penalty is paid out on top and never counts towards the ₦4M deduction. */
+    @Test
+    void aNonRefundablePenaltyDoesNotUseUpTheFixedDeduction() {
+        Payment deposit = paid(PaymentPurpose.DEPOSIT, null, "3000000.00", 1);
+        Payment late = paid(PaymentPurpose.INSTALMENT, 1, "1600000.00", 2);
+        late.setPenaltyAmount(new BigDecimal("100000.00"));
+        Payment next = paid(PaymentPurpose.INSTALMENT, 2, "1500000.00", 3);
+
+        PayoutTranches.Owed owed = PayoutTranches.of(sale(new VerifiedSale.Escrow(false, new BigDecimal("20.00"),
+                RefundAppliesTo.TOTAL_PRICE, false)), List.of(deposit, late, next));
+
+        assertThat(owed.tranches()).extracting(PayoutTranches.Tranche::amount)
+                .usingElementComparator(BigDecimal::compareTo)
+                .containsExactly(new BigDecimal("3000000"), new BigDecimal("1100000"));
+        assertThat(owed.heldInEscrow()).isEqualByComparingTo("2000000");
+    }
+
     private static VerifiedSale sale(VerifiedSale.Escrow escrow) {
         return new VerifiedSale(UUID.randomUUID(), "LV-TX", UUID.randomUUID(), "Estate", "Plot 1",
                 new BigDecimal("20000000.0000"), Currency.NGN, T0, escrow);
     }
 
     private static VerifiedSale.Escrow escrow(boolean complete, String pct, RefundAppliesTo appliesTo) {
-        return new VerifiedSale.Escrow(complete, pct == null ? null : new BigDecimal(pct), appliesTo);
+        return new VerifiedSale.Escrow(complete, pct == null ? null : new BigDecimal(pct), appliesTo, true);
     }
 
     private static Payment paid(PaymentPurpose purpose, Integer sequence, String amount, int verifiedDay) {

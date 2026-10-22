@@ -5,6 +5,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -20,7 +21,8 @@ public record FinanceQueueItemDto(
         @Schema(example = "Block A, Plot 10") String plotLabel,
         String buyerEmail,
         @Schema(description = "What this payment must be: the price agreed at reservation, or — for an "
-                + "instalment plan — the deposit from its fixed schedule.") BigDecimal expectedAmount,
+                + "instalment plan — the deposit, instalment or balance from its fixed schedule, plus any "
+                + "`penaltyAmount`.") BigDecimal expectedAmount,
         String currency,
         Instant awaitingSince,
         @Schema(description = "Paystack's record of the confirmed payment; null if none is on file.")
@@ -42,8 +44,18 @@ public record FinanceQueueItemDto(
         @Schema(description = "For an `instalment` or `balance`: how many the plan has, e.g. 12.", nullable = true)
         Integer instalmentCount,
         @Schema(description = "For an `instalment`: when it falls due.", nullable = true)
-        LocalDate dueDate
+        LocalDate dueDate,
+        @Schema(description = "Late-payment penalties included in `expectedAmount`, fixed when the buyer started "
+                + "paying (each line in `penalties`). Zero when nothing was late.")
+        BigDecimal penaltyAmount,
+        @Schema(description = "One line per late instalment the payment carries a penalty for.")
+        List<PenaltyLine> penalties
 ) {
+
+    /** A penalty charged on one instalment: the step reached and its amount. */
+    @Schema(name = "FinancePenaltyLine")
+    public record PenaltyLine(int instalmentSequence, int monthsLate, BigDecimal penaltyPct, BigDecimal amount) {
+    }
 
     /**
      * What Paystack recorded. {@code last4}: the last 4 digits of what paid — a

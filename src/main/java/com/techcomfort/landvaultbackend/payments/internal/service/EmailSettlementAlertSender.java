@@ -9,6 +9,8 @@ import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Service;
 
+import java.util.Locale;
+
 /** Sends the payout-account alert by SMTP — same arrangement as the invitation and OTP emails. */
 @Slf4j
 @Service
@@ -227,6 +229,60 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
                         + ".\n", alert.purchaseUrl()));
         mailSender.send(message);
         log.info("Instalment verification delivered to a buyer");
+    }
+
+    /**
+     * AR-3. Factual and calm, like the conflict guidance: what is due, by when,
+     * and what happens next — never a threat.
+     */
+    @Override
+    public void instalmentReminder(InstalmentReminderAlert alert) {
+        String instalment = "Instalment " + alert.sequence() + " of " + alert.instalmentCount();
+        String what = instalment + " for " + alert.plotLabel() + ", " + alert.estateName() + ", NGN " + alert.amount();
+        String subject;
+        String body;
+        switch (alert.stage()) {
+            case "SEVEN_DAYS_BEFORE", "ONE_DAY_BEFORE" -> {
+                subject = instalment + " is due on " + alert.dueDate();
+                body = "This is a reminder that " + what.substring(0, 1).toLowerCase(Locale.ROOT) + what.substring(1)
+                        + ", is due on " + alert.dueDate() + ".";
+            }
+            case "OVERDUE" -> {
+                subject = instalment + " was due on " + alert.dueDate();
+                body = what + ", was due on " + alert.dueDate() + " and we haven't received it yet. If you have "
+                        + "already paid, there is nothing to do. Otherwise, paying by " + alert.graceEnds()
+                        + " keeps your plan up to date; after that it is in arrears"
+                        + (alert.penaltiesDeclared() ? ", and the late-payment penalties set out in your offer letter "
+                        + "apply as it becomes later." : ".");
+            }
+            default -> {
+                subject = instalment + " is in arrears";
+                body = what + ", was due on " + alert.dueDate() + " and is now in arrears."
+                        + (alert.penalty() == null
+                        ? " Paying it now, NGN " + alert.totalDue() + ", brings your plan back up to date."
+                        : " A late-payment penalty of NGN " + alert.penalty() + " applies, as set out in your offer "
+                        + "letter, so paying it now is NGN " + alert.totalDue() + " and brings your plan back up "
+                        + "to date.")
+                        + " If it stays unpaid, the developer may take the steps set out in your offer letter.";
+            }
+        }
+        SimpleMailMessage message = new SimpleMailMessage();
+        message.setFrom(fromAddress);
+        message.setTo(alert.to());
+        message.setSubject(subject + ": " + alert.plotLabel());
+        message.setText("""
+                Hello,
+
+                %s
+
+                See your schedule and pay in your HomeTrue account:
+
+                    %s
+
+                Payments are only ever made through HomeTrue.
+                """.formatted(body, alert.purchaseUrl()));
+        mailSender.send(message);
+        log.info("Instalment reminder ({}) delivered to a buyer", alert.stage());
     }
 
     /** Names the allocation letter and links to it; a blank line when there is none (never expected once allocated). */

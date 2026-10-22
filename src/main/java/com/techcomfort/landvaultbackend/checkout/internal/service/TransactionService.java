@@ -8,19 +8,23 @@ import com.techcomfort.landvaultbackend.checkout.OfferSummary;
 import com.techcomfort.landvaultbackend.checkout.PaymentSummary;
 import com.techcomfort.landvaultbackend.checkout.PaymentSummaryProvider;
 import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
+import com.techcomfort.landvaultbackend.checkout.PlanStanding;
 import com.techcomfort.landvaultbackend.checkout.dto.CreateTransactionRequest;
 import com.techcomfort.landvaultbackend.checkout.dto.TransactionDto;
 import com.techcomfort.landvaultbackend.checkout.internal.domain.Reservation;
 import com.techcomfort.landvaultbackend.checkout.internal.domain.Transaction;
 import com.techcomfort.landvaultbackend.checkout.internal.domain.TransactionInstalment;
+import com.techcomfort.landvaultbackend.checkout.internal.domain.TransactionPenaltyStep;
 import com.techcomfort.landvaultbackend.checkout.internal.enums.PaymentPlan;
 import com.techcomfort.landvaultbackend.checkout.internal.enums.ReservationStatus;
 import com.techcomfort.landvaultbackend.checkout.internal.enums.TransactionStatus;
 import com.techcomfort.landvaultbackend.checkout.internal.exceptions.CheckoutException;
 import com.techcomfort.landvaultbackend.checkout.internal.repository.ReservationRepository;
 import com.techcomfort.landvaultbackend.checkout.internal.repository.TransactionInstalmentRepository;
+import com.techcomfort.landvaultbackend.checkout.internal.repository.TransactionPenaltyStepRepository;
 import com.techcomfort.landvaultbackend.checkout.internal.repository.TransactionRepository;
 import com.techcomfort.landvaultbackend.common.InstalmentPlanCalculator;
+import com.techcomfort.landvaultbackend.common.LatePaymentTerms;
 import com.techcomfort.landvaultbackend.common.PageResponse;
 import com.techcomfort.landvaultbackend.common.PageResponses;
 import com.techcomfort.landvaultbackend.common.PlotIntent;
@@ -83,6 +87,7 @@ public class TransactionService {
     private final OfferLetters offerLetters;
     private final TransactionInstalmentRepository instalmentRepository;
     private final MarketplaceApi marketplaceApi;
+    private final TransactionPenaltyStepRepository penaltyStepRepository;
 
     @Transactional
     public TransactionDto create(UUID buyerUserId, CreateTransactionRequest request) {
@@ -150,6 +155,8 @@ public class TransactionService {
                         .orElse(null))
                 .escrowAppliesTo(chosen.flatMap(ChosenPlan::refundTerms).map(OfferedRefundTerms::appliesTo)
                         .orElse(null))
+                // Phase 4: whether penalties are refunded, fixed like the price.
+                .penaltiesRefundable(chosen.map(c -> c.lateTerms().penaltiesRefundable()).orElse(null))
                 .buyerAddressLine1(address.line1())
                 .buyerAddressLine2(address.line2())
                 .buyerAddressCity(address.city())
@@ -181,7 +188,7 @@ public class TransactionService {
                 "Pending purchase opened (" + plan.getValue() + ")"));
 
         // Nothing paid yet on a purchase opened this instant.
-        return toDto(transaction, null, offer, schedule);
+        return toDto(transaction, null, offer, schedule, null);
     }
 
     /** A buyer's own transaction. Another buyer's is not found, not forbidden. */
@@ -199,21 +206,34 @@ public class TransactionService {
         List<UUID> ids = page.getContent().stream().map(Transaction::getId).toList();
         Map<UUID, PaymentSummary> summaries = paymentSummaries.summariesFor(ids);
         Map<UUID, OfferSummary> offers = offerLetters.forTransactions(ids);
-        Map<UUID, List<TransactionInstalment>> instalments = instalmentsFor(ids);
+        Map<UUID, PlanSchedule> schedules = schedulesOf(page.getContent());
+        Map<UUID, PlanStanding> standings = standingsOf(page.getContent(), schedules);
         return PageResponses.from(page, t -> toDto(t, summaries.get(t.getId()), offers.get(t.getId()),
-                schedule(t, instalments.getOrDefault(t.getId(), List.of()))));
+                Optional.ofNullable(schedules.get(t.getId())), standings.get(t.getId())));
     }
 
     private TransactionDto withPayment(Transaction transaction) {
         List<UUID> id = List.of(transaction.getId());
+        Map<UUID, PlanSchedule> schedules = schedulesOf(List.of(transaction));
         return toDto(transaction, paymentSummaries.summariesFor(id).get(transaction.getId()),
                 offerLetters.forTransactions(id).get(transaction.getId()),
-                schedule(transaction, instalmentsFor(id).getOrDefault(transaction.getId(), List.of())));
+                Optional.ofNullable(schedules.get(transaction.getId())),
+                standingsOf(List.of(transaction), schedules).get(transaction.getId()));
+    }
+
+    /** Phase 4: only once the plot is held on the plan (or paid off) — before that nothing is owed yet. */
+    private Map<UUID, PlanStanding> standingsOf(List<Transaction> transactions, Map<UUID, PlanSchedule> schedules) {
+        Map<UUID, PlanSchedule> running = new HashMap<>();
+        transactions.stream()
+                .filter(t -> t.getStatus() == TransactionStatus.ON_PLAN || t.getStatus() == TransactionStatus.VERIFIED)
+                .filter(t -> schedules.containsKey(t.getId()))
+                .forEach(t -> running.put(t.getId(), schedules.get(t.getId())));
+        return running.isEmpty() ? Map.of() : paymentSummaries.standingsFor(running);
     }
 
     /** The plan chosen at Proceed to buy, as published, and its figures at the agreed price. */
     private record ChosenPlan(OfferedPlan offered, InstalmentPlanCalculator.Quote quote,
-                              Optional<OfferedRefundTerms> refundTerms) {
+                              Optional<OfferedRefundTerms> refundTerms, LatePaymentTerms lateTerms) {
     }
 
     /**
@@ -244,7 +264,8 @@ public class TransactionService {
                         offered.terms())
                 .orElseThrow(() -> new CheckoutException.PlanNotOffered(
                         "That plan isn't available at this plot's price."));
-        return Optional.of(new ChosenPlan(offered, quote, marketplaceApi.refundTermsOf(reservation.getEstateId())));
+        return Optional.of(new ChosenPlan(offered, quote, marketplaceApi.refundTermsOf(reservation.getEstateId()),
+                marketplaceApi.latePaymentTermsOf(reservation.getEstateId()).orElse(LatePaymentTerms.NONE)));
     }
 
     /** The schedule, with due dates counted from today in Lagos — the offer's date. */
@@ -262,16 +283,25 @@ public class TransactionService {
                     .amount(amounts.get(i))
                     .build());
         }
-        return schedule(transaction, instalmentRepository.saveAll(rows)).orElseThrow();
+        // Phase 4: the late-payment steps offered now, copied and never changed.
+        penaltyStepRepository.saveAll(chosen.lateTerms().steps().stream()
+                .map(step -> TransactionPenaltyStep.builder()
+                        .transactionId(transaction.getId())
+                        .monthsLate(step.monthsLate())
+                        .penaltyPct(step.penaltyPct())
+                        .build())
+                .toList());
+        return schedule(transaction, instalmentRepository.saveAll(rows), chosen.lateTerms().steps()).orElseThrow();
     }
 
     /** Plan and schedule for each instalment purchase in {@code transactions}, in one query. */
     Map<UUID, PlanSchedule> schedulesOf(List<Transaction> transactions) {
-        Map<UUID, List<TransactionInstalment>> instalments = instalmentsFor(transactions.stream()
-                .filter(t -> t.getPlanId() != null).map(Transaction::getId).toList());
+        List<UUID> ids = transactions.stream().filter(t -> t.getPlanId() != null).map(Transaction::getId).toList();
+        Map<UUID, List<TransactionInstalment>> instalments = instalmentsFor(ids);
+        Map<UUID, List<LatePaymentTerms.Step>> steps = stepsFor(ids);
         Map<UUID, PlanSchedule> out = new HashMap<>();
-        transactions.forEach(t -> schedule(t, instalments.getOrDefault(t.getId(), List.of()))
-                .ifPresent(s -> out.put(t.getId(), s)));
+        transactions.forEach(t -> schedule(t, instalments.getOrDefault(t.getId(), List.of()),
+                steps.getOrDefault(t.getId(), List.of())).ifPresent(s -> out.put(t.getId(), s)));
         return out;
     }
 
@@ -281,7 +311,15 @@ public class TransactionService {
                 .collect(Collectors.groupingBy(TransactionInstalment::getTransactionId));
     }
 
-    private static Optional<PlanSchedule> schedule(Transaction t, List<TransactionInstalment> instalments) {
+    private Map<UUID, List<LatePaymentTerms.Step>> stepsFor(List<UUID> transactionIds) {
+        return transactionIds.isEmpty() ? Map.of()
+                : penaltyStepRepository.findByTransactionIdIn(transactionIds).stream()
+                .collect(Collectors.groupingBy(TransactionPenaltyStep::getTransactionId, Collectors.mapping(
+                        s -> new LatePaymentTerms.Step(s.getMonthsLate(), s.getPenaltyPct()), Collectors.toList())));
+    }
+
+    private static Optional<PlanSchedule> schedule(Transaction t, List<TransactionInstalment> instalments,
+                                                   List<LatePaymentTerms.Step> steps) {
         if (t.getPlanId() == null) {
             return Optional.empty();
         }
@@ -289,7 +327,7 @@ public class TransactionService {
                 t.getPlanTotal(), t.getPlanPremium(), t.getDepositAmount(), instalments.stream()
                 .sorted(Comparator.comparing(TransactionInstalment::getSequence))
                 .map(i -> new PlanSchedule.Instalment(i.getSequence(), i.getDueDate(), i.getAmount()))
-                .toList()));
+                .toList(), new LatePaymentTerms(steps, !Boolean.FALSE.equals(t.getPenaltiesRefundable()))));
     }
 
     private static String generateReference() {
@@ -301,7 +339,7 @@ public class TransactionService {
     }
 
     private static TransactionDto toDto(Transaction transaction, PaymentSummary payment, OfferSummary offer,
-                                        Optional<PlanSchedule> schedule) {
+                                        Optional<PlanSchedule> schedule, PlanStanding standing) {
         return new TransactionDto(
                 transaction.getId(),
                 transaction.getReference(),
@@ -320,6 +358,7 @@ public class TransactionService {
                 payment,
                 transaction.buyerAddress().orElse(null),
                 offer,
-                schedule.orElse(null));
+                schedule.orElse(null),
+                standing);
     }
 }

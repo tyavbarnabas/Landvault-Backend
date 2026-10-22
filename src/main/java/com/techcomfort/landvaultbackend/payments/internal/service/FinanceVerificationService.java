@@ -13,9 +13,11 @@ import com.techcomfort.landvaultbackend.payments.AllocationLetterLookup;
 import com.techcomfort.landvaultbackend.payments.dto.FinanceDecisionDto;
 import com.techcomfort.landvaultbackend.payments.dto.FinanceQueueItemDto;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
+import com.techcomfort.landvaultbackend.payments.internal.domain.PaymentPenalty;
 import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentPurpose;
 import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentStatus;
 import com.techcomfort.landvaultbackend.payments.internal.exceptions.PaymentException;
+import com.techcomfort.landvaultbackend.payments.internal.repository.PaymentPenaltyRepository;
 import com.techcomfort.landvaultbackend.payments.internal.repository.PaymentRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,6 +28,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -53,6 +56,7 @@ public class FinanceVerificationService {
     private final AuditApi auditApi;
     private final SettlementAlertSender alerts;
     private final BuyerNotifier buyerNotifier;
+    private final PaymentPenaltyRepository penalties;
 
     private static final List<PaymentPurpose> PLAN_PAYMENTS = List.of(PaymentPurpose.INSTALMENT, PaymentPurpose.BALANCE);
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.UK);
@@ -177,7 +181,7 @@ public class FinanceVerificationService {
                 row.estateName(), row.plotId(), row.plotLabel(), identityApi.emailOf(row.buyerUserId()).orElse(null),
                 row.amountDue(), row.currency().name(), row.awaitingSince(), record,
                 payment.isPresent() && matches(payment.get(), row), row.letterApproved(),
-                row.isDeposit() ? "deposit" : "full_price", row.planName(), null, null, null);
+                row.isDeposit() ? "deposit" : "full_price", row.planName(), null, null, null, BigDecimal.ZERO, List.of());
     }
 
     // ------------------------------------------------------------------ 3b: instalments
@@ -251,13 +255,16 @@ public class FinanceVerificationService {
         return FinanceDecisionDto.of(payment.getTransactionId(), "on_plan");
     }
 
-    /** What a plan payment must be: its instalment from the schedule, or everything still owed. */
+    /**
+     * What a plan payment must be: its instalment from the schedule, or
+     * everything still owed, plus the penalty it was charged when it started
+     * (phase 4: fixed then, never recomputed here).
+     */
     private static BigDecimal expectedAmount(Payment payment, PlanSchedule schedule, PlanProgress progress) {
-        if (payment.getPurpose() == PaymentPurpose.BALANCE) {
-            return progress.balance();
-        }
-        return schedule.instalments().stream().filter(i -> i.sequence() == payment.getInstalmentSequence())
+        BigDecimal owed = payment.getPurpose() == PaymentPurpose.BALANCE ? progress.balance()
+                : schedule.instalments().stream().filter(i -> i.sequence() == payment.getInstalmentSequence())
                 .map(PlanSchedule.Instalment::amount).findFirst().orElse(null);
+        return owed == null ? null : owed.add(payment.getPenaltyAmount());
     }
 
     private static String describe(Payment payment, PlanSchedule schedule) {
@@ -277,7 +284,12 @@ public class FinanceVerificationService {
                 expected != null && p.getAmount().compareTo(expected) == 0 && p.getCurrency() == row.currency(),
                 row.letterApproved(), p.getPurpose() == PaymentPurpose.BALANCE ? "balance" : "instalment",
                 row.planName(), p.getInstalmentSequence(), schedule.instalments().size(),
-                instalment.map(PlanSchedule.Instalment::dueDate).orElse(null));
+                instalment.map(PlanSchedule.Instalment::dueDate).orElse(null), p.getPenaltyAmount(),
+                penalties.findByPaymentIdIn(List.of(p.getId())).stream()
+                        .sorted(Comparator.comparing(PaymentPenalty::getInstalmentSequence))
+                        .map(l -> new FinanceQueueItemDto.PenaltyLine(l.getInstalmentSequence(), l.getMonthsLate(),
+                                l.getPenaltyPct(), l.getAmount()))
+                        .toList());
     }
 
     private void markVerified(Payment payment, UUID actor) {

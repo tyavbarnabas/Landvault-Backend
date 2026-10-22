@@ -143,6 +143,14 @@ public class Transaction extends AbstractEntity {
     @Column(name = "escrow_applies_to", updatable = false, length = 16)
     private RefundAppliesTo escrowAppliesTo;
 
+    /**
+     * Phase 4: whether this purchase's late-payment penalties are refunded on
+     * withdrawal, as declared when it opened. Null for outright purchases.
+     * The steps themselves are in {@code transaction_penalty_steps}.
+     */
+    @Column(name = "penalties_refundable", updatable = false)
+    private Boolean penaltiesRefundable;
+
     /** Empty on purchases opened before addresses were collected. */
     public Optional<PostalAddress> buyerAddress() {
         if (buyerAddressLine1 == null) {

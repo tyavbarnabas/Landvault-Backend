@@ -60,6 +60,18 @@ public interface SettlementAlertSender {
 
     void instalmentVerified(InstalmentAlert alert);
 
+    /**
+     * AR-3, phase 4. {@code stage} is a {@code ReminderStage} name. Amounts are
+     * plain naira strings; {@code penalty} is null when none applies yet, and
+     * {@code penaltiesDeclared} says whether the purchase has penalty steps at all.
+     */
+    record InstalmentReminderAlert(String to, String stage, String plotLabel, String estateName, int sequence,
+                                   int instalmentCount, String amount, String dueDate, String graceEnds,
+                                   String penalty, String totalDue, boolean penaltiesDeclared, String purchaseUrl) {
+    }
+
+    void instalmentReminder(InstalmentReminderAlert alert);
+
     void refundNeedsAccount(RefundNeedsAccountAlert alert);
 
     void refundProblem(RefundProblemAlert alert);

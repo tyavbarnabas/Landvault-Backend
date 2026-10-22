@@ -4,6 +4,7 @@ import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
 import com.techcomfort.landvaultbackend.common.CommitmentCalculator;
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.InstalmentPlanCalculator;
+import com.techcomfort.landvaultbackend.common.LatePaymentTerms;
 import com.techcomfort.landvaultbackend.inventory.EstateDocumentFacts;
 
 import java.math.BigDecimal;
@@ -21,8 +22,6 @@ public final class OfferClauses {
     public static final String SIGN_OFF = "We look forward to your acceptance.";
 
     /** Decided with the user: the same for every estate, for now. */
-    public static final int GRACE_DAYS = 7;
-
     public static final String CLOSING = "To accept this offer, press Accept in your HomeTrue account. Your "
             + "acceptance is recorded with its date and time, and payment can be made only after it, and only "
             + "through HomeTrue. This offer is not an allocation: the plot becomes yours only when your payment "
@@ -124,18 +123,22 @@ public final class OfferClauses {
             clauses.add(clause.toString());
         }
 
-        List<EstateDocumentFacts.PenaltyStep> steps = facts.defaultTerms() == null ? List.of()
-                : facts.defaultTerms().penaltySteps();
+        // Phase 4: the purchase's own late-payment terms, copied when it opened.
+        List<LatePaymentTerms.Step> steps = schedule.lateTerms().steps();
+        int grace = LatePaymentTerms.GRACE_DAYS;
         clauses.add(steps.isEmpty()
-                ? "That an instalment unpaid " + GRACE_DAYS + " days after its due date is in arrears; no "
+                ? "That an instalment unpaid " + grace + " days after its due date is in arrears; no "
                 + "late-payment penalty is declared for this estate."
-                : "That an instalment unpaid " + GRACE_DAYS + " days after its due date is in arrears, and a "
+                : "That an instalment unpaid " + grace + " days after its due date is in arrears, and a "
                 + "late-payment penalty applies to that instalment: " + String.join("; ", steps.stream()
                 .map(step -> step.penaltyPct().stripTrailingZeros().toPlainString() + "% ("
                         + DocumentFormats.money(InstalmentPlanCalculator.penaltyOn(regular, step.penaltyPct()), currency)
                         + " on a " + DocumentFormats.money(regular, currency) + " instalment) once it is "
                         + step.monthsLate() + " month" + (step.monthsLate() == 1 ? "" : "s") + " late")
-                .toList()) + ". The highest step reached applies; steps are not added together.");
+                .toList()) + ". The highest step reached applies; steps are not added together. A penalty is "
+                + "paid with the instalment it is charged on" + (schedule.lateTerms().penaltiesRefundable()
+                ? ", and is refunded on the same terms as your other payments if you withdraw."
+                : ", and is not refunded if you withdraw."));
         return clauses;
     }
 

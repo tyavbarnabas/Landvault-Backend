@@ -3,6 +3,8 @@ package com.techcomfort.landvaultbackend.payments.internal.service;
 import com.techcomfort.landvaultbackend.checkout.PaymentSummary;
 import com.techcomfort.landvaultbackend.checkout.PlanPayment;
 import com.techcomfort.landvaultbackend.checkout.PaymentSummaryProvider;
+import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
+import com.techcomfort.landvaultbackend.checkout.PlanStanding;
 import com.techcomfort.landvaultbackend.payments.ReceiptLookup;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Refund;
@@ -39,6 +41,12 @@ public class CheckoutPaymentSummaries implements PaymentSummaryProvider {
     private final PaymentRepository payments;
     private final RefundRepository refunds;
     private final ReceiptLookup receiptLookup;
+    private final PlanStandings planStandings;
+
+    @Override
+    public Map<UUID, PlanStanding> standingsFor(Map<UUID, PlanSchedule> schedules) {
+        return planStandings.standingsOf(schedules, PlanStandings.today());
+    }
 
     @Override
     @Transactional(readOnly = true)
@@ -55,7 +63,7 @@ public class CheckoutPaymentSummaries implements PaymentSummaryProvider {
             ReceiptLookup.ReceiptRef receipt = receipts.get(p.getId());
             return new PlanPayment(p.getReference(), p.getPurpose().name().toLowerCase(Locale.ROOT),
                     p.getInstalmentSequence(), p.getAmount(), p.getPaidAt(), p.getFinanceVerifiedAt(),
-                    receipt == null ? null : receipt.id());
+                    receipt == null ? null : receipt.id(), p.getPenaltyAmount());
         }, Collectors.toList())));
     }
 

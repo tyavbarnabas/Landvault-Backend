@@ -124,6 +124,10 @@ landvault:
     sweep-interval: 15m
     stuck-sending-after: 5m
     stuck-pending-after: 30m
+  instalments:
+    # Phase 4: instalment reminders (7 days and 1 day before, first day overdue,
+    # entering arrears), once a day at 08:00 Lagos time. Moves no money.
+    reminder-cron: "0 0 8 * * *"
   refunds:
     # How often Paystack is asked about refunds it accepted but hasn't finished.
     sweep-interval: 15m

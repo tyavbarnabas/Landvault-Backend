@@ -22,6 +22,8 @@ public record PortfolioPaymentDto(
         String receiptId,
         String rejectionReason,
         @Schema(description = "When finance verified it; null until then.")
-        Instant verifiedAt
+        Instant verifiedAt,
+        @Schema(description = "The late-payment penalty included in `amount`; zero when nothing was late.")
+        BigDecimal penaltyAmount
 ) {
 }

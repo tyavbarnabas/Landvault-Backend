@@ -53,7 +53,9 @@ public class PaymentController {
                     - The amount is never sent by the client: the price **agreed at reservation**; on an \
                     instalment plan the **deposit**, then — once the deposit is verified (`on_plan`) — the \
                     **next instalment** from the fixed schedule, one at a time (the next only after the last is \
-                    verified). With `?balance=true`, everything still owed on the plan in one payment.
+                    verified). With `?balance=true`, everything still owed on the plan in one payment. A late \
+                    instalment carries the declared penalty it has reached today, fixed now and shown as \
+                    `penaltyAmount` (included in `amount`); a pay-off carries every late instalment's.
                     - Outright and instalment purchases; NGN only.
                     - Pressing pay again within 30 minutes returns **the same open link** (200) instead \
                     of opening a second payment (201).

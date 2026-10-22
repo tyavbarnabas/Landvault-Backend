@@ -11,6 +11,7 @@ import com.techcomfort.landvaultbackend.common.PageResponse;
 import com.techcomfort.landvaultbackend.testsupport.EstateTitleFixture;
 import com.techcomfort.landvaultbackend.portfolio.dto.PortfolioSummaryDto;
 import com.techcomfort.landvaultbackend.portfolio.dto.OwnedPlotDto;
+import com.techcomfort.landvaultbackend.checkout.PlanStanding;
 import com.techcomfort.landvaultbackend.checkout.dto.CreateReservationRequest;
 import com.techcomfort.landvaultbackend.checkout.dto.ReservationDto;
 import com.techcomfort.landvaultbackend.checkout.OfferSummary;
@@ -51,6 +52,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import com.techcomfort.landvaultbackend.payments.internal.paystack.PaystackSignature;
 import org.springframework.beans.factory.annotation.Value;
+import com.techcomfort.landvaultbackend.payments.internal.service.InstalmentReminderJob;
 import com.techcomfort.landvaultbackend.payments.internal.service.PaymentSweeper;
 import com.techcomfort.landvaultbackend.payments.internal.service.PayoutRecorder;
 import com.techcomfort.landvaultbackend.payments.internal.service.PayoutSweeper;
@@ -199,6 +201,10 @@ class ReservationCheckoutUnderRlsIT {
     /** Called directly: a lost transfer webhook must be testable without waiting on a clock. */
     @Autowired
     private PayoutSweeper payoutSweeper;
+
+    /** Called directly with a chosen day: reminders must be testable without waiting on a clock. */
+    @Autowired
+    private InstalmentReminderJob instalmentReminders;
 
     /** Called directly: a lost refund webhook must be testable without waiting on a clock. */
     @Autowired
@@ -2332,6 +2338,145 @@ class ReservationCheckoutUnderRlsIT {
         assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
         assertThat(refused.getBody()).contains("LATE_DEPOSIT_NOT_SUPPORTED");
         assertThat(plotStatus(plotId)).startsWith("AVAILABLE");
+    }
+
+    // --- instalment plans, phase 4: arrears, penalties and reminders (changeset 104) ---
+
+    /**
+     * An instalment 40 days late on an estate with a 5%-at-one-month step: the
+     * buyer and the developer see it in arrears, paying it charges the penalty
+     * as its own line (fixed when the payment starts), finance checks that
+     * total, and — declared not refundable — the penalty goes to the developer
+     * in full. The penalty is the purchase's own copy: redeclaring the estate's
+     * terms afterwards changes nothing for this buyer.
+     */
+    @Test
+    void aLateInstalmentIsInArrearsAndPayingItChargesTheDeclaredPenalty() {
+        declareDefaultTerms("[{\"monthsLate\":1,\"penaltyPct\":5.00}]", false);
+        TransactionDto purchase = onPlanPurchase(SHORT_PLAN);
+        assertThat(queryString("SELECT penalties_refundable || '/' || (SELECT string_agg(months_late || ':' || "
+                + "penalty_pct, ',') FROM transaction_penalty_steps WHERE transaction_id = t.id) FROM transactions t "
+                + "WHERE id = '" + purchase.id() + "'")).as("copied when the purchase opened").isEqualTo("false/1:5.00");
+        declareDefaultTerms("[{\"monthsLate\":1,\"penaltyPct\":50.00}]", true);
+        execute("UPDATE transaction_instalments SET due_date = current_date - 40 WHERE transaction_id = '"
+                + purchase.id() + "' AND sequence = 1");
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+
+        TransactionDto late = get("/api/checkout/transactions/" + purchase.id(), buyer.token(), TransactionDto.class)
+                .getBody();
+        assertThat(late.standing().status()).isEqualTo("in_arrears");
+        assertThat(late.standing().arrears()).satisfies(a -> {
+            assertThat(a.instalmentsLate()).isEqualTo(1);
+            assertThat(a.amountOverdue()).isEqualByComparingTo("7700000");
+            assertThat(a.penaltyAmount()).as("5% of the instalment, not 50%").isEqualByComparingTo("385000");
+            assertThat(a.totalDue()).isEqualByComparingTo("8085000");
+        });
+        assertThat(late.standing().instalments()).extracting(PlanStanding.InstalmentStatus::status)
+                .containsExactly("in_arrears", "upcoming");
+        OwnedPlotDto owned = portfolio(buyer).items().getFirst();
+        assertThat(owned.status()).isEqualTo("in_arrears");
+        assertThat(owned.arrears().penaltyAmount()).isEqualByComparingTo("385000");
+        assertThat(owned.arrears().penaltyReason())
+                .isEqualTo("Instalment 1 is 1 month late, so the declared 5% penalty applies to it.");
+        assertThat(get("/api/portal/finance/plans?status=late", officer, String.class).getBody())
+                .contains(purchase.id().toString(), "\"status\":\"in_arrears\"", "\"penaltyAmount\":385000");
+        assertThat(get("/api/portal/finance/plans?status=on_track", officer, String.class).getBody())
+                .doesNotContain(purchase.id().toString());
+
+        String reference = payPlan(purchase, false);
+        assertThat(queryString("SELECT amount || '/' || penalty_amount FROM payments WHERE reference = '" + reference
+                + "'")).isEqualTo("8085000.00/385000.0000");
+        assertThat(queryString("SELECT pp.instalment_sequence || '/' || pp.months_late || '/' || pp.penalty_pct || '/' "
+                + "|| pp.amount FROM payment_penalties pp JOIN payments p ON p.id = pp.payment_id WHERE p.reference = '" + reference
+                + "'")).isEqualTo("1/1/5.00/385000.0000");
+        paystackSays(reference, "success", 808_500_000L, "NGN", "Approved");
+        assertThat(confirm(buyer, reference).getBody()).contains("\"status\":\"succeeded\"", "\"penaltyAmount\":385000");
+        assertThat(get("/api/checkout/transactions/" + purchase.id(), buyer.token(), TransactionDto.class).getBody()
+                .standing().instalments().getFirst().status()).as("paid, finance not yet: never late")
+                .isEqualTo("awaiting_verification");
+        assertThat(get("/api/portal/finance/transactions", officer, String.class).getBody())
+                .contains("\"expectedAmount\":8085000", "\"penaltyAmount\":385000", "\"amountsMatch\":true",
+                        "\"monthsLate\":1");
+        assertThat(financeAction(officer, purchase.id(), "verify", null).getBody()).contains("\"status\":\"on_plan\"");
+
+        OwnedPlotDto after = portfolio(buyer).items().getFirst();
+        assertThat(after.status()).isEqualTo("installment_active");
+        assertThat(after.arrears()).isNull();
+        assertThat(after.paidAmount()).as("the penalty doesn't count towards the plan").isEqualByComparingTo("14300000");
+        assertThat(after.payments().getLast().penaltyAmount()).isEqualByComparingTo("385000");
+        approvedPayoutAccount(seller.id(), "RCP_seller");
+        assertThat(get("/api/admin/payouts/ready", payoutAdmin(true), String.class).getBody())
+                .as("the deposit's ₦4M share, plus the non-refundable penalty in full; the instalment itself is held")
+                .contains(purchase.id().toString(), "\"amountOwed\":4385000");
+    }
+
+    /** Declaring penalty steps means saying whether they're refunded; with none, the question doesn't arise. */
+    @Test
+    void penaltyStepsNeedARefundAnswer() {
+        ResponseEntity<String> refused = restTemplate.exchange("/api/portal/estates/" + estateId + "/default-terms",
+                HttpMethod.PUT, entity(seller.token(), defaultTermsJson("[{\"monthsLate\":1,\"penaltyPct\":5.00}]",
+                        null)), String.class);
+        assertThat(refused.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(refused.getBody()).contains("penaltiesRefundable");
+        declareDefaultTerms("[]", null);
+    }
+
+    /** AR-3: each reminder once per instalment and stage; nothing while finance is verifying a payment. */
+    @Test
+    void remindersGoOncePerInstalmentAndStage() {
+        TransactionDto purchase = onPlanPurchase(SHORT_PLAN);
+        LocalDate today = LocalDate.now(ZoneId.of("Africa/Lagos"));
+        execute("UPDATE transaction_instalments SET due_date = DATE '" + today.plusDays(7) + "' WHERE transaction_id = '"
+                + purchase.id() + "' AND sequence = 1");
+
+        instalmentReminders.run(today);
+        instalmentReminders.run(today);
+        assertThat(remindersFor(purchase)).as("the second run sends nothing new").containsExactly("SEVEN_DAYS_BEFORE");
+
+        instalmentReminders.run(today.plusDays(8));
+        instalmentReminders.run(today.plusDays(15));
+        assertThat(remindersFor(purchase)).containsExactly("SEVEN_DAYS_BEFORE", "OVERDUE", "IN_ARREARS");
+        ArgumentCaptor<SettlementAlertSender.InstalmentReminderAlert> sent =
+                ArgumentCaptor.forClass(SettlementAlertSender.InstalmentReminderAlert.class);
+        verify(alerts, atLeastOnce()).instalmentReminder(sent.capture());
+        assertThat(sent.getAllValues()).filteredOn(a -> a.purchaseUrl().contains(purchase.id().toString()))
+                .extracting(SettlementAlertSender.InstalmentReminderAlert::stage)
+                .containsExactly("SEVEN_DAYS_BEFORE", "OVERDUE", "IN_ARREARS");
+        assertThat(queryString("SELECT count(*) FROM instalment_reminders WHERE transaction_id = '" + purchase.id()
+                + "'")).isEqualTo("3");
+
+        String paid = payPlan(purchase, false);
+        paystackSays(paid, "success", 770_000_000L, "NGN", "Approved");
+        confirm(buyer, paid);
+        execute("UPDATE transaction_instalments SET due_date = DATE '" + today.plusDays(1) + "' WHERE transaction_id = '"
+                + purchase.id() + "' AND sequence = 2");
+        instalmentReminders.run(today);
+        assertThat(remindersFor(purchase)).as("instalment 2 has its own reminders").contains("ONE_DAY_BEFORE");
+        instalmentReminders.run(today.plusDays(30));
+        assertThat(queryString("SELECT count(*) FROM instalment_reminders WHERE transaction_id = '" + purchase.id()
+                + "' AND instalment_sequence = 1")).as("awaiting finance: never reminded as late").isEqualTo("3");
+    }
+
+    private List<String> remindersFor(TransactionDto purchase) {
+        String stages = queryString("SELECT string_agg(stage, ',' ORDER BY created_at) FROM instalment_reminders "
+                + "WHERE transaction_id = '" + purchase.id() + "'");
+        return stages == null ? List.of() : List.of(stages.split(","));
+    }
+
+    private void declareDefaultTerms(String tiersJson, Boolean refundable) {
+        ResponseEntity<String> response = restTemplate.exchange("/api/portal/estates/" + estateId + "/default-terms",
+                HttpMethod.PUT, entity(seller.token(), defaultTermsJson(tiersJson, refundable)), String.class);
+        assertThat(response.getStatusCode()).as(response.getBody()).isEqualTo(HttpStatus.OK);
+        // A disclosure change lapses the letter approval (and the listing); approve it again.
+        execute(LetterApprovalFixture.approvedLetterSql(estateId));
+    }
+
+    private static String defaultTermsJson(String tiersJson, Boolean refundable) {
+        return """
+                {"revocationTrigger":"Three instalments unpaid.","revocationNoticeDays":30,
+                 "onRevocationRefund":"Refunded less 20%%.","transferRequiresConsent":true,
+                 "penaltyTiers":%s%s}
+                """.formatted(tiersJson, refundable == null ? "" : ",\"penaltiesRefundable\":" + refundable);
     }
 
     /** IC-1: an instalment purchase names one of the estate's declared plans; the buyer never picks a month count. */

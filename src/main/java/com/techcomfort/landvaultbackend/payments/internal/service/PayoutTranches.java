@@ -20,7 +20,9 @@ import java.util.UUID;
  * escrow except the developer's share — what they'd keep if the buyer withdrew
  * now, by the refund terms copied onto the purchase — and releases the rest
  * when the plan completes. So a buyer who withdraws on the declared terms is
- * refunded from money HomeTrue still holds. See AGENTS.md, "Instalment plans".
+ * refunded from money HomeTrue still holds. A late-payment penalty the
+ * buyer wouldn't get back on withdrawal (phase 4) is paid out with its
+ * payment's share in full. See AGENTS.md, "Instalment plans".
  */
 final class PayoutTranches {
 
@@ -58,16 +60,24 @@ final class PayoutTranches {
         List<Tranche> tranches = new ArrayList<>();
         BigDecimal paid = BigDecimal.ZERO;
         BigDecimal shares = BigDecimal.ZERO;
+        BigDecimal deducted = BigDecimal.ZERO; // towards the TOTAL_PRICE cap; penalties don't count
         for (Payment p : verified) {
             paid = paid.add(p.getAmount());
+            // Phase 4: a penalty the buyer wouldn't get back on withdrawal isn't
+            // held — it's the developer's in full; a refundable one is escrowed
+            // like the rest of the payment.
+            BigDecimal kept = escrow.penaltiesRefundable() ? BigDecimal.ZERO : p.getPenaltyAmount();
+            BigDecimal escrowed = p.getAmount().subtract(kept);
             BigDecimal share;
             if (escrow.deductionPct() == null) {
                 share = BigDecimal.ZERO;
             } else if (cap == null) {
-                share = pctOf(escrow.deductionPct(), p.getAmount());
+                share = pctOf(escrow.deductionPct(), escrowed);
             } else {
-                share = p.getAmount().min(cap.subtract(shares).max(BigDecimal.ZERO));
+                share = escrowed.min(cap.subtract(deducted).max(BigDecimal.ZERO));
             }
+            deducted = deducted.add(share);
+            share = share.add(kept);
             if (share.signum() > 0) {
                 shares = shares.add(share);
                 tranches.add(new Tranche(SHARE_PREFIX + p.getId(), share, p));

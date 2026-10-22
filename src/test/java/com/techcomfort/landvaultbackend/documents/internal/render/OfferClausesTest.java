@@ -4,6 +4,7 @@ import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.DueTrigger;
 import com.techcomfort.landvaultbackend.common.FeeType;
+import com.techcomfort.landvaultbackend.common.LatePaymentTerms;
 import com.techcomfort.landvaultbackend.inventory.EstateDocumentFacts;
 import org.junit.jupiter.api.Test;
 
@@ -52,13 +53,24 @@ class OfferClausesTest {
                 due, false, true);
     }
 
-    /** PL-3, the agreed example: ₦15M, 30% deposit, 12 monthly, 10% premium; fees added; steps on one instalment. */
-    @Test
-    void anInstalmentOfferStatesThePlanEveryDueDateTheCommitmentAndThePenalties() {
-        PlanSchedule schedule = new PlanSchedule(UUID.randomUUID(), "12-month plan", "monthly",
+    private static PlanSchedule schedule(LatePaymentTerms late) {
+        return new PlanSchedule(UUID.randomUUID(), "12-month plan", "monthly",
                 new BigDecimal("16500000"), new BigDecimal("1500000"), new BigDecimal("4950000"),
                 IntStream.rangeClosed(1, 12).mapToObj(n -> new PlanSchedule.Instalment(n,
-                        LocalDate.of(2026, 10, 22).plusMonths(n), new BigDecimal("962500"))).toList());
+                        LocalDate.of(2026, 10, 22).plusMonths(n), new BigDecimal("962500"))).toList(), late);
+    }
+
+    private static final LatePaymentTerms TWO_STEPS = new LatePaymentTerms(List.of(
+            new LatePaymentTerms.Step(3, new BigDecimal("10")), new LatePaymentTerms.Step(1, new BigDecimal("5"))),
+            false);
+
+    /**
+     * PL-3, the agreed example: ₦15M, 30% deposit, 12 monthly, 10% premium; fees added; steps on one instalment.
+     * Phase 4: the steps are the purchase's own copy (not the estate's current terms), and whether they're refunded.
+     */
+    @Test
+    void anInstalmentOfferStatesThePlanEveryDueDateTheCommitmentAndThePenalties() {
+        PlanSchedule schedule = schedule(TWO_STEPS);
         EstateDocumentFacts facts = new EstateDocumentFacts(UUID.randomUUID(), UUID.randomUUID(), null, "Lugbe",
                 null, null, null,
                 new EstateDocumentFacts.Fees(1, List.of(fee(FeeType.APPLICATION, "10000", DueTrigger.AT_APPLICATION),
@@ -66,8 +78,7 @@ class OfferClausesTest {
                         fee(FeeType.FACILITY_MANAGEMENT, "60000", DueTrigger.ANNUAL))),
                 null,
                 new EstateDocumentFacts.DefaultTerms(1, "Three instalments unpaid.", 30, "Refunded less 15%.", null,
-                        false, List.of(new EstateDocumentFacts.PenaltyStep(1, new BigDecimal("5")),
-                        new EstateDocumentFacts.PenaltyStep(3, new BigDecimal("10")))));
+                        false, List.of(new EstateDocumentFacts.PenaltyStep(2, new BigDecimal("50")))));
 
         List<String> clauses = OfferClauses.plan(schedule, new BigDecimal("15000000"), null,
                 new BigDecimal("15000000"), Currency.NGN, facts);
@@ -85,6 +96,22 @@ class OfferClausesTest {
                 "That an instalment unpaid 7 days after its due date is in arrears, and a late-payment penalty "
                         + "applies to that instalment: 5% (₦48,125.00 on a ₦962,500.00 instalment) once it is 1 month "
                         + "late; 10% (₦96,250.00 on a ₦962,500.00 instalment) once it is 3 months late. The highest "
-                        + "step reached applies; steps are not added together.");
+                        + "step reached applies; steps are not added together. A penalty is paid with the instalment "
+                        + "it is charged on, and is not refunded if you withdraw.");
+    }
+
+    @Test
+    void refundablePenaltiesSaySoAndNoStepsMeansNoPenalty() {
+        EstateDocumentFacts facts = new EstateDocumentFacts(UUID.randomUUID(), UUID.randomUUID(), null, "Lugbe",
+                null, null, null, null, null, null);
+
+        assertThat(OfferClauses.plan(schedule(new LatePaymentTerms(TWO_STEPS.steps(), true)),
+                new BigDecimal("15000000"), null, new BigDecimal("15000000"), Currency.NGN, facts).getLast())
+                .endsWith("A penalty is paid with the instalment it is charged on, and is refunded on the same terms "
+                        + "as your other payments if you withdraw.");
+        assertThat(OfferClauses.plan(schedule(LatePaymentTerms.NONE), new BigDecimal("15000000"), null,
+                new BigDecimal("15000000"), Currency.NGN, facts).getLast())
+                .isEqualTo("That an instalment unpaid 7 days after its due date is in arrears; no late-payment penalty "
+                        + "is declared for this estate.");
     }
 }

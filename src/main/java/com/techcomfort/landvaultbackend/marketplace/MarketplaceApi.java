@@ -1,5 +1,7 @@
 package com.techcomfort.landvaultbackend.marketplace;
 
+import com.techcomfort.landvaultbackend.common.LatePaymentTerms;
+
 import java.util.Optional;
 import java.util.UUID;
 
@@ -51,4 +53,11 @@ public interface MarketplaceApi {
      * estate isn't listed or has declared no refund terms.
      */
     Optional<OfferedRefundTerms> refundTermsOf(UUID estateId);
+
+    /**
+     * Phase 4: the estate's current late-payment steps and whether penalties
+     * are refunded, as published. Empty when the estate isn't listed or has
+     * declared no default terms.
+     */
+    Optional<LatePaymentTerms> latePaymentTermsOf(UUID estateId);
 }

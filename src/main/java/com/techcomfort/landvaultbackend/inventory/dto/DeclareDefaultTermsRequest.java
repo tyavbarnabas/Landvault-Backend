@@ -43,6 +43,11 @@ public record DeclareDefaultTermsRequest(
 
         @Valid @Schema(nullable = true) List<PenaltyTier> penaltyTiers,
 
+        @Schema(description = "Whether late-payment penalties are returned, on the refund terms, to a buyer who "
+                + "withdraws. Required when penalty tiers are declared; shown to buyers before they pay.",
+                nullable = true, example = "false")
+        Boolean penaltiesRefundable,
+
         @Schema(nullable = true) String notes
 ) {
 

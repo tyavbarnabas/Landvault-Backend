@@ -46,6 +46,12 @@ public class LoggingSettlementAlertSender implements SettlementAlertSender {
     }
 
     @Override
+    public void instalmentReminder(InstalmentReminderAlert alert) {
+        log.info("[TEST-ONLY instalment reminder] to={} stage={} instalment={}/{}", alert.to(), alert.stage(),
+                alert.sequence(), alert.instalmentCount());
+    }
+
+    @Override
     public void purchaseDecided(PurchaseDecisionAlert alert) {
         log.info("[TEST-ONLY purchase decision] to={} verified={} letter={}", alert.to(), alert.verified(),
                 alert.letterNumber());
