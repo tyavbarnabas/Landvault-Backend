@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Instalment plans, phase 3c: escrow payouts (decision 6, revised to
+        escrow by the user). See AGENTS.md, "Instalment plans".
+
+        From each verified payment on a plan the developer is paid only what
+        they'd keep on a refund — their declared deduction, on the land price —
+        and HomeTrue holds the rest until the plan completes. The refund terms
+        that decide the share are copied onto the purchase when it is opened,
+        like the price, so a later change can't move an escrow already agreed.
+        Purchases opened before this have none: everything is held to the end.
+
+        A sale is paid out in tranches: SALE (outright, the whole price, as
+        before), SHARE:<payment id> (the developer's share of one payment) and
+        RELEASE (what was held, at completion). Each tranche is split under the
+        transfer cap into parts as before; one live attempt per tranche part.
+    -->
+    <changeSet id="103-transaction-escrow-terms" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE transactions
+                ADD COLUMN escrow_deduction_pct  numeric(5, 2),
+                ADD COLUMN escrow_applies_to     varchar(16),
+                ADD CONSTRAINT chk_transactions_escrow_terms
+                    CHECK ((escrow_deduction_pct IS NULL) = (escrow_applies_to IS NULL)
+                       AND (escrow_applies_to IS NULL OR escrow_applies_to IN ('AMOUNT_PAID', 'TOTAL_PRICE')));
+            COMMENT ON COLUMN transactions.escrow_deduction_pct IS
+                'The refund deduction the buyer was offered, copied when an instalment purchase opened: the developer''s escrow share (on the land price for TOTAL_PRICE). Null: everything is held until the plan completes.';
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE transactions
+                DROP CONSTRAINT chk_transactions_escrow_terms,
+                DROP COLUMN escrow_applies_to,
+                DROP COLUMN escrow_deduction_pct;
+        ]]></rollback>
+    </changeSet>
+
+    <changeSet id="103-payout-tranches" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE payouts ADD COLUMN tranche varchar(64) NOT NULL DEFAULT 'SALE';
+            DROP INDEX uq_payouts_one_live_per_part;
+            CREATE UNIQUE INDEX uq_payouts_one_live_per_tranche_part ON payouts (transaction_id, tranche, part_number)
+                WHERE status IN ('SENDING', 'AWAITING_OTP', 'PENDING', 'SUCCESS') AND deleted = false;
+            COMMENT ON COLUMN payouts.tranche IS
+                'SALE (outright: the whole price), SHARE:<payment id> (the developer''s share of one plan payment) or RELEASE (what HomeTrue held, at completion).';
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP INDEX uq_payouts_one_live_per_tranche_part;
+            CREATE UNIQUE INDEX uq_payouts_one_live_per_part ON payouts (transaction_id, part_number)
+                WHERE status IN ('SENDING', 'AWAITING_OTP', 'PENDING', 'SUCCESS') AND deleted = false;
+            ALTER TABLE payouts DROP COLUMN tranche;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

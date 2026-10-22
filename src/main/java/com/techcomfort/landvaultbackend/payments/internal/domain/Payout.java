@@ -71,7 +71,15 @@ public class Payout extends AbstractEntity {
     @Column(name = "cancelled_by")
     private UUID cancelledBy;
 
-    /** Which of {@link #partCount} equal pieces of the sale this transfer is (1-based). */
+    /**
+     * 3c: which amount owed on the sale this pays — SALE (outright: the whole
+     * price), SHARE:&lt;payment id&gt; (the developer's share of one plan payment)
+     * or RELEASE (what escrow held, at completion).
+     */
+    @Column(name = "tranche", nullable = false, length = 64)
+    private String tranche;
+
+    /** Which of {@link #partCount} equal pieces of the tranche this transfer is (1-based). */
     @Column(name = "part_number", nullable = false)
     private Integer partNumber;
 

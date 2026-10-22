@@ -7,6 +7,7 @@ import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.PaymentFrequency;
 import com.techcomfort.landvaultbackend.common.PlotIntent;
 import com.techcomfort.landvaultbackend.common.PostalAddress;
+import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -129,6 +130,18 @@ public class Transaction extends AbstractEntity {
 
     @Column(name = "deposit_amount", updatable = false, precision = 19, scale = 4)
     private BigDecimal depositAmount;
+
+    /**
+     * 3c escrow: the refund deduction offered when an instalment purchase
+     * opened — the developer's share of each payment; the rest is held until
+     * the plan completes. Both null: everything is held.
+     */
+    @Column(name = "escrow_deduction_pct", updatable = false, precision = 5, scale = 2)
+    private BigDecimal escrowDeductionPct;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "escrow_applies_to", updatable = false, length = 16)
+    private RefundAppliesTo escrowAppliesTo;
 
     /** Empty on purchases opened before addresses were collected. */
     public Optional<PostalAddress> buyerAddress() {

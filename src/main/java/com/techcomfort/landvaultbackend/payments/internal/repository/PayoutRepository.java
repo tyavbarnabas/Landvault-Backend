@@ -37,11 +37,12 @@ public interface PayoutRepository extends JpaRepository<Payout, UUID> {
     @Query("SELECT p FROM Payout p WHERE p.reference = :reference")
     Optional<Payout> findByReferenceForUpdate(@Param("reference") String reference);
 
-    /** Another attempt for the same part that is live or paid — the rare double-payment check. */
-    @Query("SELECT count(p) > 0 FROM Payout p WHERE p.transactionId = :transactionId AND p.partNumber = :part "
-            + "AND p.id <> :id AND p.status IN :statuses")
-    boolean existsOtherForPart(@Param("transactionId") UUID transactionId, @Param("part") int part,
-                               @Param("id") UUID id, @Param("statuses") Collection<PayoutStatus> statuses);
+    /** Another attempt for the same tranche part that is live or paid — the rare double-payment check. */
+    @Query("SELECT count(p) > 0 FROM Payout p WHERE p.transactionId = :transactionId AND p.tranche = :tranche "
+            + "AND p.partNumber = :part AND p.id <> :id AND p.status IN :statuses")
+    boolean existsOtherForPart(@Param("transactionId") UUID transactionId, @Param("tranche") String tranche,
+                               @Param("part") int part, @Param("id") UUID id,
+                               @Param("statuses") Collection<PayoutStatus> statuses);
 
     /** TR-3's sweep: no reply from Paystack for a while, or accepted but not finished for a while. */
     @Query("SELECT p.reference FROM Payout p WHERE (p.status = :sending AND p.createdAt < :sendingBefore) "

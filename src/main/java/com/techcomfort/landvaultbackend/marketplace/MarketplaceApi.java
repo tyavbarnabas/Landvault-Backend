@@ -45,4 +45,10 @@ public interface MarketplaceApi {
      * estate isn't listed, or doesn't offer that plan now.
      */
     Optional<OfferedPlan> offeredPlan(UUID estateId, UUID planId);
+
+    /**
+     * 3c: the estate's current refund deduction, as published. Empty when the
+     * estate isn't listed or has declared no refund terms.
+     */
+    Optional<OfferedRefundTerms> refundTermsOf(UUID estateId);
 }

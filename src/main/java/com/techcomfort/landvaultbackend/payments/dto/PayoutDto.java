@@ -9,14 +9,17 @@ import java.util.UUID;
  * success, failed, reversed, cancelled. {@code gatewayMessage} is Paystack's
  * own words where it gave any (a failure reason, "requires OTP", …).
  * {@code bankName}/{@code accountLast4} are the account THIS payout went to.
- * A sale above Paystack's per-transfer cap is paid in equal parts: this is
- * part {@code partNumber} of {@code partCount}, and {@code amount} is the part.
+ * {@code tranche} is what it pays: {@code sale} (outright), {@code share} (the
+ * developer's share of plan payment {@code sharePaymentId}) or {@code release}
+ * (what escrow held, at completion). A tranche above Paystack's per-transfer
+ * cap is paid in equal parts: this is part {@code partNumber} of
+ * {@code partCount}, and {@code amount} is the part.
  * {@code reviewReason} is set when a person must look at it (TR-3).
  * {@code companyName} is the selling company's name, the same one the ready
  * list shows; null only when none is on record, never made up.
  */
 public record PayoutDto(UUID id, UUID transactionId, UUID tenantId, String companyName, BigDecimal amount, String currency,
-                        int partNumber, int partCount, String status, String reference, String gatewayMessage,
+                        String tranche, UUID sharePaymentId, int partNumber, int partCount, String status, String reference, String gatewayMessage,
                         String bankName,
                         String accountLast4, Instant createdAt, Instant transferredAt, String reviewReason) {
 }

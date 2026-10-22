@@ -250,6 +250,14 @@ public abstract class PaymentException extends RuntimeException {
         }
     }
 
+    /** 3c: an instalment plan still running, with every share owed so far paid; the rest waits in escrow. */
+    public static class HeldInEscrow extends PaymentException {
+        public HeldInEscrow() {
+            super("Everything owed on this purchase so far has been paid out. The rest is held in escrow until "
+                    + "the plan completes.");
+        }
+    }
+
     /** A company's payouts are company-wide; a branch-scoped view can't list them. */
     public static class CompanyWideScopeRequired extends PaymentException {
         public CompanyWideScopeRequired() {

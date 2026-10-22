@@ -74,15 +74,17 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
     int moveFromAwaitingFinance(@Param("id") UUID id, @Param("to") String to);
 
     /**
-     * Verified sales, for payouts. Rows: transaction id, reference, seller
-     * tenant id, estate name, block name, plot number, total price, currency,
-     * verified at (the last status change). {@code :id} null means all.
+     * Sales the seller is owed on, for payouts: verified ones, and (3c)
+     * instalment purchases on their plan. Rows: transaction id, reference,
+     * seller tenant id, estate name, block name, plot number, total price,
+     * currency, verified at (the last status change), plan, status, escrow
+     * deduction, escrow basis. {@code :id} null means all.
      */
     @Query(value = "SELECT t.id, t.reference, t.seller_tenant_id, e.name, b.name AS block_name, p.plot_number, "
-            + "t.total_price, t.currency, t.updated_at "
+            + "t.total_price, t.currency, t.updated_at, t.plan, t.status, t.escrow_deduction_pct, t.escrow_applies_to "
             + "FROM transactions t JOIN plots p ON p.id = t.plot_id JOIN estates e ON e.id = t.estate_id "
             + "LEFT JOIN blocks b ON b.id = p.block_id "
-            + "WHERE t.status = 'VERIFIED' AND t.plan <> 'INSTALLMENT' "
+            + "WHERE (t.status = 'VERIFIED' OR (t.status = 'ON_PLAN' AND t.plan = 'INSTALLMENT')) "
             + "AND (CAST(:id AS uuid) IS NULL OR t.id = :id) "
             + "ORDER BY t.updated_at", nativeQuery = true)
     List<Object[]> findVerifiedSales(@Param("id") UUID id);

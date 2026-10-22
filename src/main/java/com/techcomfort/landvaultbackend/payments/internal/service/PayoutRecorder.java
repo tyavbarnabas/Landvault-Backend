@@ -5,6 +5,7 @@ import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
 import com.techcomfort.landvaultbackend.checkout.CheckoutApi;
 import com.techcomfort.landvaultbackend.checkout.VerifiedSale;
 import com.techcomfort.landvaultbackend.common.Currency;
+import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payout;
 import com.techcomfort.landvaultbackend.payments.internal.domain.SettlementAccount;
 import com.techcomfort.landvaultbackend.payments.internal.enums.PayoutStatus;
@@ -12,6 +13,7 @@ import com.techcomfort.landvaultbackend.payments.internal.enums.SettlementAccoun
 import com.techcomfort.landvaultbackend.payments.internal.exceptions.PaymentException;
 import com.techcomfort.landvaultbackend.payments.internal.paystack.PaystackAmounts;
 import com.techcomfort.landvaultbackend.payments.internal.paystack.PaystackClient;
+import com.techcomfort.landvaultbackend.payments.internal.repository.PaymentRepository;
 import com.techcomfort.landvaultbackend.payments.internal.repository.PayoutRepository;
 import com.techcomfort.landvaultbackend.payments.internal.repository.SettlementAccountRepository;
 import com.techcomfort.landvaultbackend.tenancy.TenancyApi;
@@ -43,6 +45,7 @@ public class PayoutRecorder {
     private static final String REFERENCE_PREFIX = "lv-payout-";
 
     private final PayoutRepository payouts;
+    private final PaymentRepository salePayments;
     private final SettlementAccountRepository accounts;
     private final CheckoutApi checkoutApi;
     private final TenancyApi tenancyApi;
@@ -53,7 +56,7 @@ public class PayoutRecorder {
     private BigDecimal maxTransferAmount;
 
     /**
-     * How a sale is being paid: {@code partCount} equal parts, of which
+     * How one tranche is being paid: {@code partCount} equal parts, of which
      * {@code paidParts} have succeeded. {@code nextPart} is null when all are paid.
      */
     public record Plan(long totalKobo, int partCount, Set<Integer> paidParts, Integer nextPart) {
@@ -70,10 +73,11 @@ public class PayoutRecorder {
     /**
      * The split is fixed by the first part actually paid and copied by every
      * later part — so a cap raised halfway can't make the parts stop adding up
-     * to the sale. While nothing has been paid, it follows the current cap.
+     * to the tranche. While nothing has been paid, it follows the current cap.
+     * {@code attempts} are this tranche's only.
      */
-    public Plan plan(VerifiedSale sale, List<Payout> attempts) {
-        long totalKobo = PaystackAmounts.toKobo(sale.totalPrice(), sale.currency());
+    Plan plan(BigDecimal amount, List<Payout> attempts) {
+        long totalKobo = PaystackAmounts.toKobo(amount, Currency.NGN);
         List<Payout> paid = attempts.stream().filter(p -> p.getStatus() == PayoutStatus.SUCCESS).toList();
         int partCount = paid.isEmpty()
                 ? PayoutSplit.partCount(totalKobo, PaystackAmounts.toKobo(maxTransferAmount, Currency.NGN))
@@ -82,6 +86,37 @@ public class PayoutRecorder {
         Integer next = IntStream.rangeClosed(1, partCount).filter(p -> !paidParts.contains(p)).boxed()
                 .findFirst().orElse(null);
         return new Plan(totalKobo, partCount, paidParts, next);
+    }
+
+    /**
+     * Where an NGN sale stands: every tranche owed (3c), the first one with a
+     * part still to pay and its plan, and what is left across all of them.
+     * {@code next} is null when everything owed so far is paid.
+     */
+    public record Owing(PayoutTranches.Owed owed, PayoutTranches.Tranche next, Plan nextPlan, BigDecimal amountOwed) {
+    }
+
+    /** Tranches are paid in order — shares as finance verified them, then the release. */
+    Owing owing(VerifiedSale sale, List<Payout> attempts, List<Payment> salePayments) {
+        PayoutTranches.Owed owed = PayoutTranches.of(sale, salePayments);
+        long owedKobo = 0;
+        PayoutTranches.Tranche next = null;
+        Plan nextPlan = null;
+        for (PayoutTranches.Tranche tranche : owed.tranches()) {
+            Plan plan = plan(tranche.amount(), attempts.stream()
+                    .filter(a -> tranche.key().equals(a.getTranche())).toList());
+            owedKobo += plan.totalKobo() - plan.paidKobo();
+            if (next == null && plan.nextPart() != null) {
+                next = tranche;
+                nextPlan = plan;
+            }
+        }
+        return new Owing(owed, next, nextPlan, PaystackAmounts.fromKobo(owedKobo));
+    }
+
+    /** The plan payments an instalment sale's tranches are worked out from; none for outright. */
+    List<Payment> paymentsFor(VerifiedSale sale) {
+        return sale.escrow() == null ? List.of() : salePayments.findAllByTransactionIdOrderByCreatedAtAsc(sale.transactionId());
     }
 
     /** What {@link PayoutService} needs to ask Paystack. {@code resend} = an earlier attempt's reply was lost. */
@@ -108,10 +143,15 @@ public class PayoutRecorder {
             throw new PaymentException.PayoutInProgress(inFlight.get().getStatus().wire());
         }
         VerifiedSale sale = checkoutApi.verifiedSale(transactionId).orElseThrow(PaymentException.SaleNotPayable::new);
-        Plan plan = plan(sale, attempts);
-        if (plan.nextPart() == null) {
-            throw new PaymentException.SaleAlreadyPaid();
+        if (sale.currency() != Currency.NGN) {
+            throw new PaymentException.SaleNotPayable();
         }
+        Owing owing = owing(sale, attempts, paymentsFor(sale));
+        if (owing.next() == null) {
+            throw sale.escrow() != null && !sale.escrow().planComplete()
+                    ? new PaymentException.HeldInEscrow() : new PaymentException.SaleAlreadyPaid();
+        }
+        Plan plan = owing.nextPlan();
         if (!tenancyApi.isTenantActive(sale.sellerTenantId())) {
             throw new PaymentException.CompanyNotActive();
         }
@@ -127,6 +167,7 @@ public class PayoutRecorder {
                 .amount(PaystackAmounts.fromKobo(kobo))
                 .currency(Currency.NGN)
                 .amountKobo(kobo)
+                .tranche(owing.next().key())
                 .partNumber(plan.nextPart())
                 .partCount(plan.partCount())
                 .reference(REFERENCE_PREFIX + UUID.randomUUID().toString().replace("-", "").toLowerCase(Locale.ROOT))
@@ -136,12 +177,12 @@ public class PayoutRecorder {
         try {
             payout = payouts.saveAndFlush(payout);
         } catch (DataIntegrityViolationException e) {
-            // The one-live-transfer-per-part index: another attempt for this part landed at the same moment.
+            // The one-live-transfer-per-tranche-part index: another attempt for this part landed at the same moment.
             throw new PaymentException.PayoutInProgress("being sent");
         }
         auditApi.record(AuditEntryRequest.of(actor, "payout.started", "payout", payout.getId(), sale.sellerTenantId(),
-                "Payout part " + plan.nextPart() + " of " + plan.partCount() + ": NGN "
-                        + payout.getAmount().toPlainString() + " of " + sale.totalPrice().toPlainString() + " for "
+                PayoutTranches.label(owing.next()) + ", part " + plan.nextPart() + " of " + plan.partCount() + ": NGN "
+                        + payout.getAmount().toPlainString() + " of " + owing.next().amount().toPlainString() + " for "
                         + sale.transactionReference() + " (" + sale.plotLabel() + ") to " + account.getBankName()
                         + " ending " + last4(account.getAccountNumber()) + ", reference " + payout.getReference() + "."));
         return prepared(payout, false);

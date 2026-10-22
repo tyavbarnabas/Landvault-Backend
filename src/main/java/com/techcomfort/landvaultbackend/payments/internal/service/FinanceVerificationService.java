@@ -118,7 +118,8 @@ public class FinanceVerificationService {
         log.info("Transaction {} verified by finance user {}; plot allocated", transactionId, scope.userId());
         Optional<AllocationLetterLookup.LetterRef> letter = letterLookup.letterFor(transactionId);
         tellBuyer(row, payment.get().getAmount(), true, null, letter, row.isDeposit());
-        return FinanceDecisionDto.verified(transactionId, letter);
+        return row.isDeposit() ? FinanceDecisionDto.depositVerified(transactionId, letter)
+                : FinanceDecisionDto.verified(transactionId, letter);
     }
 
     /** The plot goes back on sale; the money is flagged for refund (decided with the user — refunds are manual for now). */
