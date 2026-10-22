@@ -109,6 +109,7 @@
     <include file="changes/101-instalment-deposit.xml" relativeToChangelogFile="true"/>
     <include file="changes/102-instalment-payments.xml" relativeToChangelogFile="true"/>
     <include file="changes/103-escrow-payouts.xml" relativeToChangelogFile="true"/>
+    <include file="changes/104-instalment-arrears.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

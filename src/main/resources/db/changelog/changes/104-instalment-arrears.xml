@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Instalment plans, phase 4: arrears, penalties and reminders. See
+        AGENTS.md, "Instalment plans".
+
+        Nothing here stores a status: overdue and in arrears are worked out on
+        read from the schedule, the payments and today's date in Lagos. What is
+        stored is what was agreed (the penalty steps and whether penalties are
+        refunded, copied onto the purchase like the price), what was charged
+        (each penalty on the payment that carried it), and which reminders went
+        out (so each goes once).
+    -->
+    <changeSet id="104-penalties-refundable" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE estate_default_terms ADD COLUMN penalties_refundable boolean NOT NULL DEFAULT true;
+            COMMENT ON COLUMN estate_default_terms.penalties_refundable IS
+                'Declared by the developer: whether late-payment penalties are returned, on the refund terms, to a buyer who withdraws. Refundable penalties are held in escrow like the instalment; others are paid out to the developer in full.';
+
+            -- Appended at the end, so CREATE OR REPLACE keeps the view and its grants.
+            CREATE OR REPLACE VIEW marketplace_default_terms WITH (security_barrier = true) AS
+            SELECT DISTINCT ON (d.estate_id)
+                d.id                          AS default_terms_id,
+                d.estate_id                   AS estate_id,
+                d.revocation_trigger          AS revocation_trigger,
+                d.revocation_notice_days      AS revocation_notice_days,
+                d.on_revocation_refund        AS on_revocation_refund,
+                d.development_deadline_months AS development_deadline_months,
+                d.transfer_requires_consent   AS transfer_requires_consent,
+                d.notes                       AS notes,
+                d.penalties_refundable        AS penalties_refundable
+            FROM estate_default_terms d
+            JOIN marketplace_estate_eligibility el ON el.estate_id = d.estate_id AND el.eligible
+            WHERE d.deleted = false
+            ORDER BY d.estate_id, d.version DESC;
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP VIEW marketplace_penalty_tiers;
+            DROP VIEW marketplace_default_terms;
+            CREATE VIEW marketplace_default_terms WITH (security_barrier = true) AS
+            SELECT DISTINCT ON (d.estate_id)
+                d.id                          AS default_terms_id,
+                d.estate_id                   AS estate_id,
+                d.revocation_trigger          AS revocation_trigger,
+                d.revocation_notice_days      AS revocation_notice_days,
+                d.on_revocation_refund        AS on_revocation_refund,
+                d.development_deadline_months AS development_deadline_months,
+                d.transfer_requires_consent   AS transfer_requires_consent,
+                d.notes                       AS notes
+            FROM estate_default_terms d
+            JOIN marketplace_estate_eligibility el ON el.estate_id = d.estate_id AND el.eligible
+            WHERE d.deleted = false
+            ORDER BY d.estate_id, d.version DESC;
+            CREATE VIEW marketplace_penalty_tiers WITH (security_barrier = true) AS
+            SELECT
+                t.id               AS penalty_tier_id,
+                d.estate_id        AS estate_id,
+                t.months_late      AS months_late,
+                t.penalty_pct      AS penalty_pct
+            FROM estate_default_penalty_tiers t
+            JOIN marketplace_default_terms d ON d.default_terms_id = t.default_terms_id
+            WHERE t.deleted = false;
+            REVOKE ALL ON marketplace_default_terms, marketplace_penalty_tiers FROM PUBLIC;
+            REVOKE ALL ON marketplace_default_terms, marketplace_penalty_tiers FROM ${appDbUsername};
+            GRANT SELECT ON marketplace_default_terms, marketplace_penalty_tiers TO ${appDbUsername};
+            ALTER TABLE estate_default_terms DROP COLUMN penalties_refundable;
+        ]]></rollback>
+    </changeSet>
+
+    <!--
+        The late-payment terms the buyer was offered, copied when an instalment
+        purchase opens and never changed: a developer redeclaring penalties
+        reaches new buyers only. No steps: no penalty, ever, on this purchase.
+    -->
+    <changeSet id="104-transaction-penalty-terms" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE transactions ADD COLUMN penalties_refundable boolean;
+            COMMENT ON COLUMN transactions.penalties_refundable IS
+                'Copied at Proceed to buy for an instalment purchase: whether its late-payment penalties are refunded on withdrawal. Null for outright purchases.';
+
+            CREATE TABLE transaction_penalty_steps (
+                id              uuid NOT NULL PRIMARY KEY,
+                created_at      timestamp(6) with time zone NOT NULL,
+                created_by      varchar(255),
+
+                transaction_id  uuid NOT NULL REFERENCES transactions (id),
+                months_late     integer NOT NULL,
+                penalty_pct     numeric(5, 2) NOT NULL,
+
+                CONSTRAINT uq_transaction_penalty_steps UNIQUE (transaction_id, months_late),
+                CONSTRAINT chk_transaction_penalty_steps_months CHECK (months_late > 0),
+                CONSTRAINT chk_transaction_penalty_steps_pct CHECK (penalty_pct >= 0 AND penalty_pct <= 100)
+            );
+            REVOKE UPDATE, DELETE, TRUNCATE ON transaction_penalty_steps FROM ${appDbUsername};
+            COMMENT ON TABLE transaction_penalty_steps IS
+                'The estate''s declared late-payment steps as offered to this buyer: months late -> % of the overdue instalment. The highest step reached applies. Never changed.';
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE transaction_penalty_steps;
+            ALTER TABLE transactions DROP COLUMN penalties_refundable;
+        ]]></rollback>
+    </changeSet>
+
+    <!--
+        A penalty is fixed when the buyer starts paying, and charged with the
+        instalment in the same payment as its own line. The payment's amount is
+        instalment(s) + penalty_amount; finance checks that total.
+    -->
+    <changeSet id="104-payment-penalties" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE payments
+                ADD COLUMN penalty_amount numeric(19, 4) NOT NULL DEFAULT 0,
+                ADD CONSTRAINT chk_payments_penalty_amount CHECK (penalty_amount >= 0);
+            COMMENT ON COLUMN payments.penalty_amount IS
+                'Late-payment penalties charged in this payment, fixed when it started (the lines are in payment_penalties). Part of amount.';
+
+            CREATE TABLE payment_penalties (
+                id                  uuid NOT NULL PRIMARY KEY,
+                created_at          timestamp(6) with time zone NOT NULL,
+                created_by          varchar(255),
+
+                payment_id          uuid NOT NULL REFERENCES payments (id),
+                instalment_sequence integer NOT NULL,
+                months_late         integer NOT NULL,
+                penalty_pct         numeric(5, 2) NOT NULL,
+                amount              numeric(19, 4) NOT NULL,
+
+                CONSTRAINT uq_payment_penalties UNIQUE (payment_id, instalment_sequence),
+                CONSTRAINT chk_payment_penalties_amount CHECK (amount > 0)
+            );
+            CREATE INDEX idx_payment_penalties_payment ON payment_penalties (payment_id);
+            REVOKE UPDATE, DELETE, TRUNCATE ON payment_penalties FROM ${appDbUsername};
+            COMMENT ON TABLE payment_penalties IS
+                'One line per overdue instalment a payment carried a penalty for: the step reached when the buyer started paying, and its amount. Never changed.';
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE payment_penalties;
+            ALTER TABLE payments
+                DROP CONSTRAINT chk_payments_penalty_amount,
+                DROP COLUMN penalty_amount;
+        ]]></rollback>
+    </changeSet>
+
+    <!--
+        AR-3: each reminder goes once per instalment and stage. The row is
+        written in the job's transaction and the email sent after commit, so
+        a rerun never sends the same reminder twice.
+    -->
+    <changeSet id="104-instalment-reminders" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE instalment_reminders (
+                id                  uuid NOT NULL PRIMARY KEY,
+                created_at          timestamp(6) with time zone NOT NULL,
+                created_by          varchar(255),
+
+                transaction_id      uuid NOT NULL REFERENCES transactions (id),
+                schedule_version    integer NOT NULL,
+                instalment_sequence integer NOT NULL,
+                stage               varchar(32) NOT NULL,
+
+                CONSTRAINT uq_instalment_reminders UNIQUE (transaction_id, schedule_version, instalment_sequence, stage),
+                CONSTRAINT chk_instalment_reminders_stage
+                    CHECK (stage IN ('SEVEN_DAYS_BEFORE', 'ONE_DAY_BEFORE', 'OVERDUE', 'IN_ARREARS'))
+            );
+            REVOKE UPDATE, DELETE, TRUNCATE ON instalment_reminders FROM ${appDbUsername};
+            COMMENT ON TABLE instalment_reminders IS
+                'Which instalment reminders were sent: 7 days and 1 day before the due date, on the first day overdue, and on entering arrears (day 8). One per instalment and stage.';
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE instalment_reminders;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

@@ -5,17 +5,20 @@ import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
 import com.techcomfort.landvaultbackend.checkout.CheckoutApi;
 import com.techcomfort.landvaultbackend.checkout.PayableTransaction;
 import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
+import com.techcomfort.landvaultbackend.common.LatePaymentTerms;
 import com.techcomfort.landvaultbackend.common.TenantContext;
 import com.techcomfort.landvaultbackend.common.TenantScope;
 import com.techcomfort.landvaultbackend.identity.IdentityApi;
 import com.techcomfort.landvaultbackend.payments.dto.PaymentDto;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
+import com.techcomfort.landvaultbackend.payments.internal.domain.PaymentPenalty;
 import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentPurpose;
 import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentStatus;
 import com.techcomfort.landvaultbackend.payments.internal.exceptions.PaymentException;
 import com.techcomfort.landvaultbackend.payments.internal.paystack.PaystackAmounts;
 import com.techcomfort.landvaultbackend.payments.internal.paystack.PaystackClient;
 import com.techcomfort.landvaultbackend.payments.internal.paystack.PaystackProperties;
+import com.techcomfort.landvaultbackend.payments.internal.repository.PaymentPenaltyRepository;
 import com.techcomfort.landvaultbackend.payments.internal.repository.PaymentRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,6 +29,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -51,6 +55,7 @@ public class PaymentService {
     private final PaystackProperties paystackProperties;
     private final PaymentRepository payments;
     private final AuditApi auditApi;
+    private final PaymentPenaltyRepository penalties;
 
     /** How long an unpaid link is handed back again instead of opening a second payment. */
     @Value("${landvault.payments.link-reuse-window:30m}")
@@ -60,8 +65,24 @@ public class PaymentService {
     public record Started(PaymentDto payment, boolean created) {
     }
 
-    /** What this payment is for, and how much. */
-    private record Due(BigDecimal amount, PaymentPurpose purpose, Integer instalmentSequence) {
+    /** What this payment is for, and how much: the instalment(s) plus any penalty lines. */
+    private record Due(BigDecimal amount, PaymentPurpose purpose, Integer instalmentSequence,
+                       List<PenaltyLine> penalties) {
+
+        Due(BigDecimal amount, PaymentPurpose purpose, Integer instalmentSequence) {
+            this(amount, purpose, instalmentSequence, List.of());
+        }
+
+        BigDecimal penaltyTotal() {
+            return penalties.stream().map(l -> l.penalty().amount()).reduce(BigDecimal.ZERO, BigDecimal::add);
+        }
+
+        BigDecimal total() {
+            return amount.add(penaltyTotal());
+        }
+    }
+
+    private record PenaltyLine(int sequence, LatePaymentTerms.Penalty penalty) {
     }
 
     /**
@@ -100,7 +121,9 @@ public class PaymentService {
 
     /**
      * 3b, decision 7: one instalment at a time — the next only once the
-     * current one is verified — or the whole balance in one payment.
+     * current one is verified — or the whole balance in one payment. Phase 4:
+     * an overdue instalment carries the penalty it has reached today, fixed
+     * now, as its own line; a pay-off carries every overdue instalment's.
      */
     private Due instalmentDue(PayableTransaction transaction, boolean balance) {
         PlanSchedule schedule = checkoutApi.schedulesOf(List.of(transaction.id())).get(transaction.id());
@@ -115,14 +138,21 @@ public class PaymentService {
         if (progress.complete()) {
             throw new PaymentException.TransactionNotPayable("paid in full");
         }
-        return balance ? new Due(progress.balance(), PaymentPurpose.BALANCE, null)
-                : progress.next().map(i -> new Due(i.amount(), PaymentPurpose.INSTALMENT, i.sequence())).orElseThrow();
+        LocalDate today = PlanStandings.today();
+        if (balance) {
+            return new Due(progress.balance(), PaymentPurpose.BALANCE, null, progress.remaining().stream()
+                    .flatMap(i -> progress.penaltyDue(i, today).map(p -> new PenaltyLine(i.sequence(), p)).stream())
+                    .toList());
+        }
+        PlanSchedule.Instalment next = progress.next().orElseThrow();
+        return new Due(next.amount(), PaymentPurpose.INSTALMENT, next.sequence(),
+                progress.penaltyDue(next, today).map(p -> List.of(new PenaltyLine(next.sequence(), p))).orElse(List.of()));
     }
 
     private Started start(PayableTransaction transaction, UUID buyerId, Due due) {
         UUID transactionId = transaction.id();
         // NGN only, above zero, whole kobo — refused here before Paystack is ever called.
-        long amountKobo = PaystackAmounts.toKobo(due.amount(), transaction.currency());
+        long amountKobo = PaystackAmounts.toKobo(due.total(), transaction.currency());
 
         // The open link is reused only for the same thing at the same amount.
         Optional<Payment> open = payments.findFirstByTransactionIdAndStatusOrderByCreatedAtDesc(
@@ -148,7 +178,16 @@ public class PaymentService {
                 .status(PaymentStatus.INITIALIZED)
                 .purpose(due.purpose())
                 .instalmentSequence(due.instalmentSequence())
+                .penaltyAmount(due.penaltyTotal())
                 .build());
+        UUID paymentId = payment.getId();
+        penalties.saveAll(due.penalties().stream().map(line -> PaymentPenalty.builder()
+                .paymentId(paymentId)
+                .instalmentSequence(line.sequence())
+                .monthsLate(line.penalty().monthsLate())
+                .penaltyPct(line.penalty().penaltyPct())
+                .amount(line.penalty().amount())
+                .build()).toList());
         String reference = payment.getReference();
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("paymentId", payment.getId().toString());
@@ -166,7 +205,9 @@ public class PaymentService {
 
         auditApi.record(AuditEntryRequest.of(buyerId, "payment.initialized", "payment", payment.getId(),
                 transaction.sellerTenantId(), "Payment " + reference + " started for transaction "
-                        + transaction.reference() + ": ₦" + payment.getAmount().toPlainString() + " via Paystack."));
+                        + transaction.reference() + ": ₦" + payment.getAmount().toPlainString()
+                        + (due.penalties().isEmpty() ? "" : " (including ₦" + due.penaltyTotal().toPlainString()
+                        + " late-payment penalty)") + " via Paystack."));
         log.info("Payment {} initialized for transaction {}", reference, transaction.id());
         return new Started(toDto(payment), true);
     }
@@ -174,7 +215,7 @@ public class PaymentService {
     static PaymentDto toDto(Payment p) {
         return new PaymentDto(p.getId(), p.getTransactionId(), p.getReference(), p.getStatus().wire(), p.getAmount(),
                 p.getCurrency().name(), p.getAuthorizationUrl(), p.getCreatedAt(), p.getGatewayResponse(),
-                p.getChannel(), p.getPaidAt(), p.getReviewReason() != null);
+                p.getChannel(), p.getPaidAt(), p.getReviewReason() != null, p.getPenaltyAmount());
     }
 
     private static TenantScope currentScope() {

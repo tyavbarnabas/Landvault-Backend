@@ -1,5 +1,6 @@
 package com.techcomfort.landvaultbackend.checkout;
 
+import com.techcomfort.landvaultbackend.common.LatePaymentTerms;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.math.BigDecimal;
@@ -19,7 +20,10 @@ public record PlanSchedule(
         @Schema(description = "Paid in all under the plan: the agreed price plus the premium.") BigDecimal planTotal,
         @Schema(description = "How much more than paying in full.") BigDecimal premium,
         @Schema(description = "Paid first, before the plot is held on the plan.") BigDecimal deposit,
-        List<Instalment> instalments
+        List<Instalment> instalments,
+        @Schema(description = "The late-payment steps and whether penalties are refunded on withdrawal, as "
+                + "offered when the purchase opened. No steps: no penalty.")
+        LatePaymentTerms lateTerms
 ) {
 
     @Schema(name = "ScheduledInstalment")

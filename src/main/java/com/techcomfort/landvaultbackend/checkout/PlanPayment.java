@@ -11,9 +11,10 @@ import java.util.UUID;
  * @param purpose            outright, deposit, instalment or balance
  * @param instalmentSequence which instalment, for an instalment payment
  * @param financeVerifiedAt  null while finance hasn't verified it
+ * @param penaltyAmount      phase 4: the late-payment penalty included in {@code amount}
  */
 public record PlanPayment(String reference, String purpose, Integer instalmentSequence, BigDecimal amount,
-                          Instant paidAt, Instant financeVerifiedAt, UUID receiptId) {
+                          Instant paidAt, Instant financeVerifiedAt, UUID receiptId, BigDecimal penaltyAmount) {
 
     public boolean verified() {
         return financeVerifiedAt != null;

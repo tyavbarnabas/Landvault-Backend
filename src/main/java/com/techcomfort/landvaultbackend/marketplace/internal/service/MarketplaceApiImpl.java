@@ -1,13 +1,16 @@
 package com.techcomfort.landvaultbackend.marketplace.internal.service;
 
+import com.techcomfort.landvaultbackend.common.LatePaymentTerms;
 import com.techcomfort.landvaultbackend.marketplace.EstateEligibility;
 import com.techcomfort.landvaultbackend.marketplace.MarketplaceApi;
 import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
 import com.techcomfort.landvaultbackend.marketplace.OfferedPlan;
 import com.techcomfort.landvaultbackend.marketplace.OfferedRefundTerms;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.PlotView;
+import com.techcomfort.landvaultbackend.marketplace.internal.repository.DefaultTermsViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.EstateEligibilityViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.PaymentPlanViewRepository;
+import com.techcomfort.landvaultbackend.marketplace.internal.repository.PenaltyTierViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.PlotViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.RefundTermsViewRepository;
 import lombok.RequiredArgsConstructor;
@@ -26,6 +29,8 @@ public class MarketplaceApiImpl implements MarketplaceApi {
     private final PlotViewRepository plots;
     private final PaymentPlanViewRepository paymentPlans;
     private final RefundTermsViewRepository refundTerms;
+    private final DefaultTermsViewRepository defaultTerms;
+    private final PenaltyTierViewRepository penaltyTiers;
 
     @Override
     @Transactional(readOnly = true)
@@ -54,5 +59,14 @@ public class MarketplaceApiImpl implements MarketplaceApi {
     public Optional<OfferedRefundTerms> refundTermsOf(UUID estateId) {
         return refundTerms.findByEstateIdIn(List.of(estateId)).stream().findFirst()
                 .map(t -> new OfferedRefundTerms(t.getDeductionPct(), RefundAppliesTo.fromValue(t.getAppliesTo())));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<LatePaymentTerms> latePaymentTermsOf(UUID estateId) {
+        return defaultTerms.findByEstateIdIn(List.of(estateId)).stream().findFirst()
+                .map(d -> new LatePaymentTerms(penaltyTiers.findByEstateIdInOrderByMonthsLateAsc(List.of(estateId))
+                        .stream().map(t -> new LatePaymentTerms.Step(t.getMonthsLate(), t.getPenaltyPct())).toList(),
+                        d.isPenaltiesRefundable()));
     }
 }

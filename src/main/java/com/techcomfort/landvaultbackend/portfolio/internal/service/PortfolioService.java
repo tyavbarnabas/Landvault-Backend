@@ -6,12 +6,14 @@ import com.techcomfort.landvaultbackend.checkout.PaymentSummaryProvider;
 import com.techcomfort.landvaultbackend.checkout.PendingPurchase;
 import com.techcomfort.landvaultbackend.checkout.PlanPayment;
 import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
+import com.techcomfort.landvaultbackend.checkout.PlanStanding;
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.PageResponse;
 import com.techcomfort.landvaultbackend.common.PageResponses;
 import com.techcomfort.landvaultbackend.common.TitleStatus;
 import com.techcomfort.landvaultbackend.common.TitleType;
 import com.techcomfort.landvaultbackend.portfolio.PortfolioApi;
+import com.techcomfort.landvaultbackend.portfolio.dto.ArrearsDto;
 import com.techcomfort.landvaultbackend.portfolio.dto.OwnedPlotDto;
 import com.techcomfort.landvaultbackend.portfolio.dto.PortfolioPaymentDto;
 import com.techcomfort.landvaultbackend.portfolio.dto.PortfolioSummaryDto;
@@ -142,11 +144,18 @@ public class PortfolioService implements PortfolioApi {
                 .map(OwnedPlot::getTransactionId).toList();
         Map<UUID, PlanSchedule> schedules = checkoutApi.schedulesOf(onPlans);
         Map<UUID, List<PlanPayment>> planPayments = payments.succeededPaymentsFor(onPlans);
+        // Phase 4: where each running plan stands today — arrears and penalties.
+        Map<UUID, PlanSchedule> running = new HashMap<>();
+        owned.stream().filter(o -> o.getStatus() == OwnedPlotStatus.INSTALLMENT_ACTIVE && o.getTransactionId() != null)
+                .filter(o -> schedules.containsKey(o.getTransactionId()))
+                .forEach(o -> running.put(o.getTransactionId(), schedules.get(o.getTransactionId())));
+        Map<UUID, PlanStanding> standings = running.isEmpty() ? Map.of() : payments.standingsFor(running);
         // A record with no sale behind it (an upgrade's) has no transaction id, and no plan.
         owned.forEach(o -> out.add(ownedDto(o, o.getTransactionId() == null ? null : schedules.get(o.getTransactionId()),
                 o.getTransactionId() == null ? List.of() : planPayments.getOrDefault(o.getTransactionId(), List.of()),
                 details.get(o.getPlotId()),
-                o.getTransactionId() == null ? null : paid.get(o.getTransactionId()))));
+                o.getTransactionId() == null ? null : paid.get(o.getTransactionId()),
+                o.getTransactionId() == null ? null : standings.get(o.getTransactionId()))));
         return out;
     }
 
@@ -156,9 +165,9 @@ public class PortfolioService implements PortfolioApi {
      * from the fixed schedule; instalments themselves arrive with phase 3b.
      */
     private Entry ownedDto(OwnedPlot o, PlanSchedule schedule, List<PlanPayment> planPayments, PlotDetails d,
-                           PaymentSummary payment) {
+                           PaymentSummary payment, PlanStanding standing) {
         if (schedule != null) {
-            return planDto(o, schedule, planPayments, d);
+            return planDto(o, schedule, planPayments, d, standing);
         }
         boolean confirmed = payment != null && "succeeded".equals(payment.status()) && payment.amountPaid() != null;
         List<PortfolioPaymentDto> history = confirmed
@@ -175,9 +184,13 @@ public class PortfolioService implements PortfolioApi {
      * An instalment plan (3b): the plan total, what finance has verified (the
      * deposit plus each verified instalment — "paid" means verified), how many
      * instalments that is, and the first one still owed. Every succeeded payment
-     * is listed, awaiting verification or confirmed.
+     * is listed, awaiting verification or confirmed. Phase 4: penalties don't
+     * count towards the plan total, and a plan more than 7 days late reads
+     * {@code in_arrears}, with {@code arrears} filled in from the first day
+     * late — worked out today, never stored.
      */
-    private Entry planDto(OwnedPlot o, PlanSchedule schedule, List<PlanPayment> planPayments, PlotDetails d) {
+    private Entry planDto(OwnedPlot o, PlanSchedule schedule, List<PlanPayment> planPayments, PlotDetails d,
+                          PlanStanding standing) {
         List<PlanPayment> verified = planPayments.stream().filter(PlanPayment::verified).toList();
         boolean paidOff = verified.stream().anyMatch(p -> "balance".equals(p.purpose()));
         Set<Integer> paidInstalments = verified.stream().filter(p -> "instalment".equals(p.purpose()))
@@ -187,12 +200,15 @@ public class PortfolioService implements PortfolioApi {
         List<PortfolioPaymentDto> history = planPayments.stream().map(p -> new PortfolioPaymentDto(p.reference(),
                 p.paidAt() == null ? null : LocalDate.ofInstant(p.paidAt(), NIGERIA), p.amount(), o.getCurrency().name(),
                 p.purpose(), p.verified() ? "confirmed" : "pending_verification",
-                p.receiptId() == null ? null : p.receiptId().toString(), null, p.financeVerifiedAt())).toList();
+                p.receiptId() == null ? null : p.receiptId().toString(), null, p.financeVerifiedAt(),
+                p.penaltyAmount())).toList();
         Entry entry = dto(o.getId(), o.getTransactionId(), o.getEstateId(), o.getPlotId(), d, o.getCornerPremiumPct(),
                 o.getBasePrice(), o.getIntent().getValue(), o.getPlan().toLowerCase(Locale.ROOT), schedule.planTotal(),
-                verified.stream().map(PlanPayment::amount).reduce(BigDecimal.ZERO, BigDecimal::add), o.getCurrency(),
-                LocalDate.ofInstant(o.getAcquiredAt(), NIGERIA), o.getStatus(), history, o.getSupersedes(),
-                o.getAcquiredAt());
+                verified.stream().map(p -> p.amount().subtract(p.penaltyAmount())).reduce(BigDecimal.ZERO,
+                        BigDecimal::add), o.getCurrency(),
+                LocalDate.ofInstant(o.getAcquiredAt(), NIGERIA),
+                standing != null && "in_arrears".equals(standing.status()) ? OwnedPlotStatus.IN_ARREARS : o.getStatus(),
+                history, o.getSupersedes(), o.getAcquiredAt());
         OwnedPlotDto p = entry.dto();
         return new Entry(new OwnedPlotDto(p.id(), p.transactionId(), p.estateId(), p.plotId(), p.plotLabel(),
                 p.estate(), p.location(), p.sqm(), p.actualSqm(), p.isCorner(), p.cornerPremiumPct(),
@@ -200,8 +216,27 @@ public class PortfolioService implements PortfolioApi {
                 p.totalPrice(), p.paidAmount(), p.currency(), p.acquiredDate(), p.status(),
                 next.map(PlanSchedule.Instalment::dueDate).orElse(null),
                 next.map(PlanSchedule.Instalment::amount).orElse(null), p.payments(), schedule.instalments().size(),
-                paidOff ? schedule.instalments().size() : paidInstalments.size(), p.arrears(), p.restructureStatus(),
+                paidOff ? schedule.instalments().size() : paidInstalments.size(),
+                standing == null ? null : arrears(standing), p.restructureStatus(),
                 p.supersedes()), entry.sortTime());
+    }
+
+    private static ArrearsDto arrears(PlanStanding standing) {
+        PlanStanding.Arrears a = standing.arrears();
+        if (a == null) {
+            return null;
+        }
+        List<String> reasons = standing.instalments().stream()
+                .filter(i -> "overdue".equals(i.status()) || "in_arrears".equals(i.status()))
+                .filter(i -> i.penalty() != null)
+                .map(i -> "instalment " + i.sequence() + " is " + i.penalty().monthsLate() + " month"
+                        + (i.penalty().monthsLate() == 1 ? "" : "s") + " late, so the declared "
+                        + i.penalty().penaltyPct().stripTrailingZeros().toPlainString() + "% penalty applies to it")
+                .toList();
+        String reason = reasons.isEmpty() ? null
+                : Character.toUpperCase(reasons.getFirst().charAt(0)) + String.join("; ", reasons).substring(1) + ".";
+        return new ArrearsDto(a.status(), a.amountOverdue(), a.overdueSince(), a.gracePeriodDays(), a.graceEnds(),
+                a.penaltyAmount(), reason, a.instalmentsLate(), a.totalDue(), a.daysLate());
     }
 
     /** Paid, not yet verified: shown, but no equity — that advances only when finance signs off (IS-3). */
@@ -235,7 +270,7 @@ public class PortfolioService implements PortfolioApi {
                                                   String type) {
         return new PortfolioPaymentDto(p.reference(), p.paidAt() == null ? null : LocalDate.ofInstant(p.paidAt(), NIGERIA),
                 p.amountPaid(), currency.name(), type, status,
-                p.receiptId() == null ? null : p.receiptId().toString(), null, verifiedAt);
+                p.receiptId() == null ? null : p.receiptId().toString(), null, verifiedAt, BigDecimal.ZERO);
     }
 
     private Map<UUID, PlotDetails> details(UUID buyer) {

@@ -266,6 +266,13 @@ public class EstateDisclosureService {
         Estate estate = requireEstate(estateId);
         EstateWriteAccess.requireWritable(estate);
 
+        boolean hasPenalties = request.penaltyTiers() != null && !request.penaltyTiers().isEmpty();
+        // Phase 4: whether penalties are refunded is the developer's to declare,
+        // never assumed, whenever there are penalties to refund.
+        if (hasPenalties && request.penaltiesRefundable() == null) {
+            throw new InventoryException.InvalidRequest(
+                    "Say whether late-payment penalties are refunded to a buyer who withdraws (penaltiesRefundable).");
+        }
         int version = defaultTermsRepository.findFirstByEstateIdOrderByVersionDesc(estateId)
                 .map(existing -> existing.getVersion() + 1).orElse(1);
 
@@ -279,6 +286,8 @@ public class EstateDisclosureService {
                 .onRevocationRefund(request.onRevocationRefund().trim())
                 .developmentDeadlineMonths(request.developmentDeadlineMonths())
                 .transferRequiresConsent(Boolean.TRUE.equals(request.transferRequiresConsent()))
+                // No penalties: nothing to refund, so the question doesn't arise.
+                .penaltiesRefundable(!hasPenalties || request.penaltiesRefundable())
                 .notes(request.notes())
                 .build());
 
@@ -467,6 +476,7 @@ public class EstateDisclosureService {
                 terms.getDevelopmentDeadlineMonths(),
                 Boolean.TRUE.equals(terms.getTransferRequiresConsent()),
                 tierDtos,
+                Boolean.TRUE.equals(terms.getPenaltiesRefundable()),
                 terms.getNotes());
     }
 }

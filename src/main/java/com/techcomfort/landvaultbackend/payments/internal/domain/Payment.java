@@ -10,6 +10,7 @@ import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -60,6 +61,15 @@ public class Payment extends AbstractEntity {
     /** Which instalment an INSTALMENT payment pays; null otherwise (changeset 102). */
     @Column(name = "instalment_sequence", updatable = false)
     private Integer instalmentSequence;
+
+    /**
+     * Late-payment penalties this payment carries, fixed when it started and
+     * part of {@code amount}; the lines are in {@code payment_penalties}
+     * (changeset 104).
+     */
+    @Builder.Default
+    @Column(name = "penalty_amount", nullable = false, updatable = false)
+    private BigDecimal penaltyAmount = BigDecimal.ZERO;
 
     /** When the developer's finance verified this payment — never automatic (changeset 102). */
     @Column(name = "finance_verified_at")

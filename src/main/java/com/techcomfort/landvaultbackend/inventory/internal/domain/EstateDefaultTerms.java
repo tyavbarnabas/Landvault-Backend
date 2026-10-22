@@ -66,6 +66,10 @@ public class EstateDefaultTerms extends AbstractEntity {
     @Column(name = "transfer_requires_consent", nullable = false)
     private Boolean transferRequiresConsent;
 
+    /** Declared with the penalty tiers: whether penalties come back to a buyer who withdraws. */
+    @Column(name = "penalties_refundable", nullable = false)
+    private Boolean penaltiesRefundable;
+
     @Column(name = "notes", columnDefinition = "text")
     private String notes;
 }

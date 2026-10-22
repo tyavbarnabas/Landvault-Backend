@@ -43,4 +43,7 @@ public class DefaultTermsView {
 
     @Column(name = "notes")
     private String notes;
+
+    @Column(name = "penalties_refundable")
+    private boolean penaltiesRefundable;
 }

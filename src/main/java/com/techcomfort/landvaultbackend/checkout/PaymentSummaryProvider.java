@@ -17,4 +17,11 @@ public interface PaymentSummaryProvider {
 
     /** 3b: every succeeded, unflagged payment on each purchase, oldest first — an instalment plan has many. */
     Map<UUID, List<PlanPayment>> succeededPaymentsFor(Collection<UUID> transactionIds);
+
+    /**
+     * Phase 4: where each plan stands today, keyed like {@code schedules}. The
+     * caller passes the schedules it already holds (checkout can't be called
+     * back from here without a cycle).
+     */
+    Map<UUID, PlanStanding> standingsFor(Map<UUID, PlanSchedule> schedules);
 }

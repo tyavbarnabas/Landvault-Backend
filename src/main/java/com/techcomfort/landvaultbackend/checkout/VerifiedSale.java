@@ -36,7 +36,10 @@ public record VerifiedSale(
      * @param planComplete every payment made and verified: what was held is due
      * @param deductionPct the developer's share; null (with {@code appliesTo})
      *                     when the purchase predates escrow terms — all held
+     * @param penaltiesRefundable phase 4: refundable penalties are held like the
+     *                     instalment; others are the developer's in full
      */
-    public record Escrow(boolean planComplete, BigDecimal deductionPct, RefundAppliesTo appliesTo) {
+    public record Escrow(boolean planComplete, BigDecimal deductionPct, RefundAppliesTo appliesTo,
+                         boolean penaltiesRefundable) {
     }
 }

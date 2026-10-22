@@ -341,7 +341,20 @@ gets it without a new call.
   unpaid instalment, and `payments[]` every payment (`type` `deposit`/`instalment`/`balance`, `status` `confirmed` or
   `pending_verification`). The buyer is emailed per verified instalment. The developer is paid out of escrow: see
   "Escrow payouts" under Payments.
-  **Not built yet (phases 4–5)**: arrears, penalties charged, reminders, withdrawal, revocation and restructure.
+  **Phase 4 built** (changeset 104): arrears, penalties and reminders. Nothing is stored — every status is worked out
+  on read for today in Lagos. Each instalment is `upcoming`, `due_today`, `overdue` (1–7 days late), `in_arrears`
+  (from day 8), `awaiting_verification` (paid; finance hasn't verified it — **never late**) or `paid`. The purchase
+  carries `standing: { status, instalments: [{ sequence, dueDate, amount, status, daysLate, penalty }], arrears }`
+  once `on_plan` (plan `status` `on_track` | `due_today` | `overdue` | `in_arrears` | `paid_off`; `arrears` while an
+  instalment is late: `instalmentsLate`, `amountOverdue`, `penaltyAmount`, `totalDue`, `overdueSince`, `graceEnds`,
+  `daysLate`). Penalties: the developer's declared steps **as copied onto the purchase** when it opened, highest step
+  reached, a % of the late instalment; none declared = none. Paying a late instalment charges it **plus its penalty**
+  (fixed when Pay is pressed; `PaymentDto.penaltyAmount`); `?balance=true` adds every late instalment's penalty.
+  The finance queue shows `penaltyAmount` and `penalties[]` inside `expectedAmount`. Default terms take
+  `penaltiesRefundable` (required when `penaltyTiers` is non-empty); the listing shows it as
+  `exitCosts.penaltiesRefundable` and the offer letter states it. Reminder emails go 7 days and 1 day before, on the
+  first day overdue and on entering arrears. Developers: `GET /api/portal/finance/plans?status=` (see Portal finance).
+  **Not built yet (phase 5)**: withdrawal, revocation, restructure and penalty waivers.
 
 ### Publication now has SEVEN conditions, not five
 
@@ -525,12 +538,12 @@ All need `client.portfolio.view` (every buyer has it). Read-only: **ownership on
 
 - **What is listed**: every plot the buyer owns, across every company, plus paid purchases finance hasn't verified yet (`pending_verification`, with `id` = the transaction id). An unpaid hold is **not** listed (it's a checkout, not ownership), nor is a rejected or abandoned purchase.
 - **When finance verifies**, the purchase becomes an owned plot with its own `id`; `transactionId` stays the same, and `GET /plots/{transactionId}` keeps working, so the frontend can follow it.
-- **Statuses today**: `pending_verification`, `installment_active` (deposit verified, plan running) and `completed` (verified and paid in full — outright, or the plan's last instalment or balance). `allocated` waits for issued documents; the arrears, upgrade and resale statuses wait for those flows. Nothing fakes them.
+- **Statuses today**: `pending_verification`, `installment_active` (deposit verified, plan running), `in_arrears` (a plan instalment more than 7 days late — worked out on read) and `completed` (verified and paid in full — outright, or the plan's last instalment or balance). `allocated` waits for issued documents; the upgrade and resale statuses wait for those flows. Nothing fakes them.
 - **No money arithmetic in the frontend**: `paidAmount` is what finance verified (**zero while pending** — equity doesn't advance before verification), and `/summary` gives totals per currency, never added across currencies, counting only plots still owned (`transferred`/`superseded` are listed as history but never counted), with pending purchases counted separately. Use it instead of `groupPlotsByCurrency`, which only sees the page loaded.
 - **Title**: `titleType`, plus **`titleStatus`** (`pending` | `verified` | `rejected`, live from HomeTrue's review) and `titleVerified` (true only while verified). The frontend's mock always set `titleVerified: true`; that is no longer true.
 - `basePrice` is always the agreed pre-premium price; `cornerPremiumPct` only when a premium was applied. `sqm` is what it was sold as; `actualSqm` the survey, null when unsurveyed — never reconcile them.
 - `payments`: the purchase's payment, `pending_verification` then `confirmed`. **`receiptId` is HomeTrue's receipt id** (`/api/documents/receipts/{id}`), null until Paystack confirms the payment. *(Changed: it used to be the payment reference.)*
-- **Plans**: `plan` is `installment`, `totalPrice` the plan total, `paidAmount` what finance verified, `installmentMonths`, `installmentsPaid`, and `nextDueDate`/`nextDueAmount` the first unpaid instalment (null once paid off). `payments[]` lists every payment with `type` `deposit` | `instalment` | `balance`. `arrears`, `restructureStatus` and `supersedes` are still null (phases 4–5, upgrades).
+- **Plans**: `plan` is `installment`, `totalPrice` the plan total, `paidAmount` what finance verified, `installmentMonths`, `installmentsPaid`, and `nextDueDate`/`nextDueAmount` the first unpaid instalment (null once paid off). `payments[]` lists every payment with `type` `deposit` | `instalment` | `balance`. `arrears` (phase 4) is filled from the first day an instalment is late — `status` (`overdue`/`in_arrears`), `amountOwed`, `overdueSinceDate`, `gracePeriodDays`, `graceEndsDate`, `penaltyAmount`, `penaltyReason`, `instalmentsLate`, `totalDue`, `daysLate` — and the entry's `status` reads `in_arrears` past the 7-day grace. `paidAmount` excludes penalties; each payment carries `penaltyAmount`. `restructureStatus` and `supersedes` are still null (phase 5, upgrades).
 
 **Not built, and the frontend's live calls to them will 404/405**: `POST /api/portfolio/plots` and `PUT /api/portfolio/plots/{id}` (**never will be** — a client must not be able to create or change ownership), and `restructure-requests` (phase 5). The schedule is on the transaction (`schedule`); instalments are paid with `POST /api/transactions/{id}/payments` and verified in the finance queue — there are no portfolio routes for either.
 
@@ -962,6 +975,15 @@ Director approves the estate's letter — show it on the row and disable Verify;
 `POST …/{id}/reject` `{ reason }` → `{ status: "rejected" }`. Errors: 404
 `TRANSACTION_NOT_FOUND`, 409 `TRANSACTION_NOT_AWAITING_FINANCE` /
 `PAYMENT_NOT_CONFIRMED` / `PLOT_NOT_RESERVED` / `LETTER_NOT_APPROVED`, 403 `COMPANY_SCOPE_REQUIRED`.
+Phase 4: a plan payment's `expectedAmount` includes any late-payment penalty it carries; `penaltyAmount` and
+`penalties[]` (`{ instalmentSequence, monthsLate, penaltyPct, amount }`) show it as its own line.
+
+**Running plans and arrears (phase 4)**: `GET /api/portal/finance/plans?status=` (`portal.payments.verify`, own
+company; a branch officer sees only their branch's) → `[{ transactionId, transactionReference, estateId, estateName,
+plotId, plotLabel, buyerEmail, planName, currency, instalmentCount, instalmentsPaid, nextDueDate, nextDueAmount,
+status, arrears }]`, most urgent first. `status` is `on_track` | `due_today` | `overdue` | `in_arrears` — the same the
+buyer sees, worked out today; `arrears` as on the purchase's `standing`. Filter `status=` one of those or `late`
+(overdue and in arrears); anything else is 400 `INVALID_STATUS`. Read-only.
 
 **Payments, step 8a — payout account.** New permissions `portal.settlement.manage`
 (Executive Director) and `admin.payouts.manage` (Super Admin) — add both to the

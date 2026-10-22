@@ -27,6 +27,8 @@ public record DefaultTermsDto(
         @Schema(description = "Disclosed only; resale does not exist to enforce it.")
         boolean transferRequiresConsent,
         List<PenaltyTierDto> penaltyTiers,
+        @Schema(description = "Whether late-payment penalties are refunded to a buyer who withdraws.")
+        boolean penaltiesRefundable,
         @Schema(nullable = true) String notes
 ) {
 }

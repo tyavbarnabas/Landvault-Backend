@@ -8,6 +8,7 @@ import com.techcomfort.landvaultbackend.payments.internal.controllers.PaymentCon
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PaystackWebhookController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalFinanceController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalLatePaymentController;
+import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalPlanController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalPayoutController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalSettlementController;
 import org.springframework.http.HttpStatus;
@@ -26,7 +27,7 @@ import java.util.stream.Collectors;
 @RestControllerAdvice(assignableTypes = {PaymentController.class, PaystackWebhookController.class,
         PortalFinanceController.class, PortalSettlementController.class, AdminSettlementAccountController.class,
         AdminPayoutController.class, PortalPayoutController.class, AdminRefundController.class,
-        PortalLatePaymentController.class})
+        PortalLatePaymentController.class, PortalPlanController.class})
 public class PaymentExceptionHandler {
 
     @ExceptionHandler(PaymentException.class)

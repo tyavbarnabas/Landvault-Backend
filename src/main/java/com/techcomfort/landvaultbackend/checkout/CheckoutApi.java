@@ -30,6 +30,12 @@ public interface CheckoutApi {
      */
     FinanceDecision completePlan(UUID transactionId, UUID tenantId, UUID financeUserId);
 
+    /**
+     * Phase 4: running plans (deposit verified, not paid off), under the
+     * caller's RLS — one company's, or with a null id and platform scope, all.
+     */
+    List<RunningPlan> runningPlans(UUID tenantId);
+
     /** Each instalment purchase's plan and fixed schedule, by transaction id; outright purchases have none. */
     Map<UUID, PlanSchedule> schedulesOf(Collection<UUID> transactionIds);
 

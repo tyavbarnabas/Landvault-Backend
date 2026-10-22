@@ -640,7 +640,8 @@ class FullCostDisclosureUnderRlsIT {
                          "transferRequiresConsent":true,
                          "penaltyTiers":[{"monthsLate":3,"penaltyPct":5.00},
                                          {"monthsLate":6,"penaltyPct":10.00},
-                                         {"monthsLate":12,"penaltyPct":20.00}]}
+                                         {"monthsLate":12,"penaltyPct":20.00}],
+                         "penaltiesRefundable":false}
                         """), String.class);
         assertThat(defaults.getStatusCode()).as(defaults.getBody()).isEqualTo(HttpStatus.OK);
     }

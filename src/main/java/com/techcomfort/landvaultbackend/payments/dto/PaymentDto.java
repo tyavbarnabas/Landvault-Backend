@@ -24,6 +24,9 @@ public record PaymentDto(
         Instant paidAt,
         @Schema(description = "True when our team must look at this payment by hand — e.g. the money arrived "
                 + "after the purchase had been abandoned. Tell the buyer we'll be in touch.")
-        boolean underReview
+        boolean underReview,
+        @Schema(description = "Late-payment penalties included in `amount`, fixed when the payment started. "
+                + "Zero when the instalment wasn't late.")
+        BigDecimal penaltyAmount
 ) {
 }

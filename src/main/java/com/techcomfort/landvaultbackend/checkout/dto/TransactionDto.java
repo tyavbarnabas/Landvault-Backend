@@ -3,6 +3,7 @@ package com.techcomfort.landvaultbackend.checkout.dto;
 import com.techcomfort.landvaultbackend.checkout.PaymentSummary;
 import com.techcomfort.landvaultbackend.checkout.OfferSummary;
 import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
+import com.techcomfort.landvaultbackend.checkout.PlanStanding;
 import com.techcomfort.landvaultbackend.common.PostalAddress;
 import io.swagger.v3.oas.annotations.media.Schema;
 
@@ -85,6 +86,11 @@ public record TransactionDto(
                 + "it was opened and never recomputed: `{ planId, planName, frequency, planTotal, premium, "
                 + "deposit, instalments: [{ sequence, dueDate, amount }] }`. Due dates count from the offer date. "
                 + "Null for outright and milestone purchases.", nullable = true)
-        PlanSchedule schedule
+        PlanSchedule schedule,
+
+        @Schema(description = "Once the deposit is verified (`on_plan`, or `verified` when paid off): where the "
+                + "plan stands today — each instalment's status and any penalty, and `arrears` while one is late. "
+                + "Worked out on every read, never stored. Null otherwise.", nullable = true)
+        PlanStanding standing
 ) {
 }
