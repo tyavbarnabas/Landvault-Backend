@@ -7,6 +7,7 @@ import java.math.RoundingMode;
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
@@ -36,6 +37,11 @@ public final class DocumentFormats {
 
     public static String date(Instant instant) {
         return instant == null ? "—" : DATE.format(instant.atZone(NIGERIA));
+    }
+
+    /** "22 November 2026": a calendar date, already in Nigeria. */
+    public static String date(LocalDate date) {
+        return date == null ? "—" : DATE.format(date);
     }
 
     /** "16 October 2026, 7:40 pm (WAT)". */

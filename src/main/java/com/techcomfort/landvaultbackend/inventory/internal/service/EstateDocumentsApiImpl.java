@@ -8,6 +8,7 @@ import com.techcomfort.landvaultbackend.inventory.internal.domain.Block;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.Estate;
 import com.techcomfort.landvaultbackend.inventory.internal.domain.EstateFee;
 import com.techcomfort.landvaultbackend.inventory.internal.repository.BlockRepository;
+import com.techcomfort.landvaultbackend.inventory.internal.repository.EstateDefaultPenaltyTierRepository;
 import com.techcomfort.landvaultbackend.inventory.internal.repository.EstateDefaultTermsRepository;
 import com.techcomfort.landvaultbackend.inventory.internal.repository.EstateFeeRepository;
 import com.techcomfort.landvaultbackend.inventory.internal.repository.EstateRefundTermsRepository;
@@ -35,6 +36,7 @@ public class EstateDocumentsApiImpl implements EstateDocumentsApi {
     private final EstateFeeRepository fees;
     private final EstateRefundTermsRepository refundTerms;
     private final EstateDefaultTermsRepository defaultTerms;
+    private final EstateDefaultPenaltyTierRepository penaltyTiers;
     private final PlotRepository plots;
     private final BlockRepository blocks;
 
@@ -86,7 +88,10 @@ public class EstateDocumentsApiImpl implements EstateDocumentsApi {
         return defaultTerms.findFirstByEstateIdOrderByVersionDesc(estateId).map(terms ->
                 new EstateDocumentFacts.DefaultTerms(terms.getVersion(), terms.getRevocationTrigger(),
                         terms.getRevocationNoticeDays(), terms.getOnRevocationRefund(),
-                        terms.getDevelopmentDeadlineMonths(), Boolean.TRUE.equals(terms.getTransferRequiresConsent())))
+                        terms.getDevelopmentDeadlineMonths(), Boolean.TRUE.equals(terms.getTransferRequiresConsent()),
+                        penaltyTiers.findByDefaultTermsIdOrderByMonthsLateAsc(terms.getId()).stream()
+                                .map(t -> new EstateDocumentFacts.PenaltyStep(t.getMonthsLate(), t.getPenaltyPct()))
+                                .toList()))
                 .orElse(null);
     }
 }

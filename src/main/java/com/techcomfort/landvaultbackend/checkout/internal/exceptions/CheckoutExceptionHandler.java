@@ -90,6 +90,12 @@ public class CheckoutExceptionHandler {
                 .body(ErrorResponse.of(ex.getMessage(), "TRANSACTION_ALREADY_EXISTS"));
     }
 
+    @ExceptionHandler(CheckoutException.PlanNotOffered.class)
+    public ResponseEntity<ErrorResponse> handlePlanNotOffered(CheckoutException.PlanNotOffered ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of(ex.getMessage(), "PLAN_NOT_OFFERED"));
+    }
+
     @ExceptionHandler(CheckoutException.InvalidPaymentPlan.class)
     public ResponseEntity<ErrorResponse> handleInvalidPlan(CheckoutException.InvalidPaymentPlan ex) {
         return ResponseEntity.badRequest()

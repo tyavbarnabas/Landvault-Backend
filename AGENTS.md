@@ -6244,6 +6244,29 @@ section. Built in phases.
   when there are no plans — before, it was a placeholder against the whole land price. Proven red by pricing on the
   plan total.
 
+### Phase 2: choosing a plan at Proceed to buy; the offer's plan section (IC-1, PL-3)
+
+- **The buyer names a plan id**: `POST /api/checkout/transactions` `{ …, plan: "installment", planId }`.
+  `installmentMonths` is no longer the buyer's (refused, `INVALID_PAYMENT_PLAN`; set from the plan); `planId` on any
+  other plan is refused; a plan the estate doesn't offer now, or one a fixed deposit rules out at this price, is 409
+  `PLAN_NOT_OFFERED`. Checkout reads plans through the public projection (`MarketplaceApi.offeredPlan`, the
+  `marketplace_payment_plans` view) — a buyer has no tenant scope, and that's the plan they were shown.
+- **The schedule is fixed when the purchase opens** (changeset 100), the price rule applied to the plan: worked out
+  by `InstalmentPlanCalculator` from the **agreed price** (corner premium included); plan name, frequency, total,
+  premium and deposit copied onto `transactions`; one `transaction_instalments` row per instalment, due dates
+  counted from the offer date in Lagos (`dueDates`: always from the offer date, so a short month moves one date to
+  its last day without dragging the rest). UPDATE/DELETE revoked; `schedule_version` 1 now, a restructure adds a new
+  one. Redeclaring the estate's plans later doesn't touch it (tested). `TransactionDto.schedule`.
+- **The offer states the plan** in place of the outright price clauses (`OfferClauses.plan`): the full price, the
+  chosen plan (total, premium, deposit, count and amount, the last if different), every due date, the total
+  commitment on the plan **with one-off fees** (`CommitmentCalculator` on the plan total), and the arrears rule —
+  7-day grace, the declared penalty steps priced on one instalment, highest step applying — or "no late-payment
+  penalty is declared". `EstateDocumentFacts.DefaultTerms` gained `penaltySteps` for it. Revocation stays in the
+  disclosure clauses. One wording for every developer.
+- **Not yet**: paying — `PAYMENT_PLAN_NOT_SUPPORTED` still refuses instalment purchases until phase 3.
+
+Proven red: an offer that ignores the plan, and accepting a month count from the buyer.
+
 ## A buyer's address (changeset 097)
 
 Built 2026-10-21, decided with the user, so the allocation letter can name

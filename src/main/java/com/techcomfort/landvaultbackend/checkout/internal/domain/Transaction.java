@@ -4,6 +4,7 @@ import com.techcomfort.landvaultbackend.checkout.internal.enums.PaymentPlan;
 import com.techcomfort.landvaultbackend.checkout.internal.enums.TransactionStatus;
 import com.techcomfort.landvaultbackend.common.AbstractEntity;
 import com.techcomfort.landvaultbackend.common.Currency;
+import com.techcomfort.landvaultbackend.common.PaymentFrequency;
 import com.techcomfort.landvaultbackend.common.PlotIntent;
 import com.techcomfort.landvaultbackend.common.PostalAddress;
 import jakarta.persistence.Column;
@@ -107,6 +108,27 @@ public class Transaction extends AbstractEntity {
 
     @Column(name = "buyer_address_country", length = 2, updatable = false)
     private String buyerAddressCountry;
+
+    // IC-1: the declared plan an instalment purchase was opened on, and its
+    // figures as worked out then — never recomputed (the price rule).
+    @Column(name = "plan_id", updatable = false)
+    private UUID planId;
+
+    @Column(name = "plan_name", updatable = false)
+    private String planName;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "plan_frequency", updatable = false, length = 16)
+    private PaymentFrequency planFrequency;
+
+    @Column(name = "plan_total", updatable = false, precision = 19, scale = 4)
+    private BigDecimal planTotal;
+
+    @Column(name = "plan_premium", updatable = false, precision = 19, scale = 4)
+    private BigDecimal planPremium;
+
+    @Column(name = "deposit_amount", updatable = false, precision = 19, scale = 4)
+    private BigDecimal depositAmount;
 
     /** Empty on purchases opened before addresses were collected. */
     public Optional<PostalAddress> buyerAddress() {

@@ -2,6 +2,7 @@ package com.techcomfort.landvaultbackend.common;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.IntStream;
@@ -70,6 +71,18 @@ public final class InstalmentPlanCalculator {
         return Optional.of(new Quote(price.setScale(KOBO, RoundingMode.HALF_UP), planTotal,
                 planTotal.subtract(price).setScale(KOBO, RoundingMode.HALF_UP), deposit, count, instalment, last,
                 terms.frequency()));
+    }
+
+    /**
+     * Each instalment's due date, counted from the offer date (decided with the
+     * user): the 1st falls one period after it, and so on. Always counted from
+     * the offer date itself, so a short month moves one date to its last day
+     * without dragging the rest (31 January → 28 February → 31 March).
+     */
+    public static List<LocalDate> dueDates(LocalDate offerDate, PaymentFrequency frequency, int count) {
+        return IntStream.rangeClosed(1, count)
+                .mapToObj(n -> offerDate.plusMonths((long) n * frequency.months()))
+                .toList();
     }
 
     /** A declared late-payment step on one instalment (decided with the user: a share of the overdue instalment). */

@@ -108,8 +108,11 @@ public class OfferLetterIssuer implements OfferLetters {
                 .plotLabel(plot.label())
                 .opening(OfferClauses.opening(DocumentFormats.date(purchase.reservedAt()),
                         AllocationLetterIssuer.plotPhrase(plot), setup.facts().name(), location, p.companyName()))
-                .priceClauses(OfferClauses.price(purchase.basePrice(), purchase.cornerPremiumPct(),
-                        purchase.totalPrice(), purchase.currency(), setup.facts().fees()).toArray(String[]::new))
+                .priceClauses((purchase.schedule() == null
+                        ? OfferClauses.price(purchase.basePrice(), purchase.cornerPremiumPct(), purchase.totalPrice(),
+                        purchase.currency(), setup.facts().fees())
+                        : OfferClauses.plan(purchase.schedule(), purchase.basePrice(), purchase.cornerPremiumPct(),
+                        purchase.totalPrice(), purchase.currency(), setup.facts())).toArray(String[]::new))
                 // The same conditions, in the same order, as the allocation letter
                 // would print today — which copies these when the sale is allocated.
                 .clauses(LetterClauses.of(setup.template().standardClauses(),

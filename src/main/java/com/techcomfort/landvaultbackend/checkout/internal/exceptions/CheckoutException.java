@@ -87,6 +87,13 @@ public sealed class CheckoutException extends RuntimeException {
         }
     }
 
+    /** IC-1: the plan named isn't one the estate offers now, or isn't available at this plot's price. */
+    public static final class PlanNotOffered extends CheckoutException {
+        public PlanNotOffered(String message) {
+            super(message);
+        }
+    }
+
     /** A plan and a month count that contradict each other. */
     public static final class InvalidPaymentPlan extends CheckoutException {
         public InvalidPaymentPlan(String message) {

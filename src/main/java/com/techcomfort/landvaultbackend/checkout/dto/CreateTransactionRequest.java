@@ -39,13 +39,18 @@ public record CreateTransactionRequest(
                 example = "development", requiredMode = Schema.RequiredMode.REQUIRED)
         @NotBlank String intent,
 
-        @Schema(description = "`outright`, `installment` or `milestone`. Recorded here; the schedule "
-                + "itself belongs to finance, which is not built.",
+        @Schema(description = "`outright`, `installment` or `milestone`. For `installment`, name the "
+                + "estate's declared plan in `planId`; the schedule is worked out from it.",
                 example = "outright", requiredMode = Schema.RequiredMode.REQUIRED)
         @NotBlank String plan,
 
-        @Schema(description = "Required for `installment`, and rejected for any other plan.",
-                example = "12", nullable = true)
-        Integer installmentMonths
+        @Schema(description = "**No longer chosen by the buyer**: it comes from the plan. Must be left out.",
+                nullable = true, deprecated = true)
+        Integer installmentMonths,
+
+        @Schema(description = "Required for `installment`: one of the plans the estate currently offers "
+                + "(`priceTiers[].paymentPlans[].planId` on the listing). Rejected for any other plan.",
+                nullable = true)
+        UUID planId
 ) {
 }

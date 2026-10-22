@@ -318,7 +318,8 @@ gets it without a new call.
 - **Change to `costDisclosure.exitCosts.ifYouFallBehind`**: penalties are now a share of **one instalment** (of the
   estate's first plan at the basis tier — named in the new `penaltyBasisPlan` and `penaltyBasisInstalment`), not of
   the whole price. It is **empty when the estate has no plans** (an outright buyer has nothing to fall behind on).
-- Not built yet: choosing a plan at checkout, the plan on the offer letter, paying instalments.
+- **Phase 2 built** (changeset 100): choosing a plan at checkout and the plan on the offer letter — see Checkout.
+  Paying instalments is not built yet.
 
 ### Publication now has SEVEN conditions, not five
 
@@ -421,6 +422,15 @@ WishlistItem {
 | POST | `/api/checkout/transactions` | `{ reservationId, intent, plan, installmentMonths? }` | `Transaction` |
 | GET | `/api/checkout/transactions/mine?cursor&limit` | — | `Page<Transaction>` — the buyer's own, newest first (limit default 20, max 100) |
 | GET | `/api/checkout/transactions/{id}` | — | `Transaction` (another buyer's is 404) |
+
+**Instalment purchases name a declared plan**: `{ reservationId, intent, plan: "installment", planId }`, the
+`planId` from the listing's `priceTiers[].paymentPlans[].planId`. **Don't send `installmentMonths`** (400
+`INVALID_PAYMENT_PLAN`; it now comes from the plan); `planId` on outright/milestone is 400 too; a plan the estate
+doesn't offer now is 409 `PLAN_NOT_OFFERED`. The response's **`schedule`** is `{ planId, planName, frequency,
+planTotal, premium, deposit, instalments: [{ sequence, dueDate, amount }] }`, worked out from the agreed price and
+**fixed** — due dates count from today (Lagos), and the developer redeclaring plans later changes nothing. The offer
+letter states the whole plan, every due date, the total commitment on the plan (one-off fees included) and the
+late-payment rule. Paying an instalment purchase is still refused (`PAYMENT_PLAN_NOT_SUPPORTED`) until phase 3.
 
 **Opening a purchase issues the offer letter** (see Documents): the response's **`offer`** is `{ id, number, issuedAt, acceptedAt }`. Show it and let the buyer accept it (`POST /api/documents/offer-letters/{offer.id}/accept`) before the Pay button; paying is refused with 409 `OFFER_NOT_ACCEPTED` until then. If the estate's letter isn't approved and current, nothing is opened: 409 `LETTER_NOT_APPROVED` (the hold stays). `offer` is null on purchases opened before offer letters.
 

@@ -3,6 +3,7 @@ package com.techcomfort.landvaultbackend.common;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -49,5 +50,13 @@ class InstalmentPlanCalculatorTest {
     void aPenaltyIsAShareOfOneInstalment() {
         assertThat(InstalmentPlanCalculator.penaltyOn(new BigDecimal("1000000"), new BigDecimal("5")))
                 .isEqualByComparingTo("50000");
+    }
+
+    @Test
+    void dueDatesCountFromTheOfferDateAndShortMonthsDontDragTheRest() {
+        assertThat(InstalmentPlanCalculator.dueDates(LocalDate.of(2027, 1, 31), PaymentFrequency.MONTHLY, 3))
+                .containsExactly(LocalDate.of(2027, 2, 28), LocalDate.of(2027, 3, 31), LocalDate.of(2027, 4, 30));
+        assertThat(InstalmentPlanCalculator.dueDates(LocalDate.of(2026, 10, 22), PaymentFrequency.QUARTERLY, 2))
+                .containsExactly(LocalDate.of(2027, 1, 22), LocalDate.of(2027, 4, 22));
     }
 }
