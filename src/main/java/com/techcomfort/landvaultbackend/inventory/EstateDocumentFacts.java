@@ -45,8 +45,12 @@ public record EstateDocumentFacts(
                               List<FeeType> nonRefundableFeeTypes) {
     }
 
+    /** @param penaltySteps the declared late-payment steps, earliest first; empty when none */
     public record DefaultTerms(int version, String revocationTrigger, Integer revocationNoticeDays,
                                String onRevocationRefund, Integer developmentDeadlineMonths,
-                               boolean transferRequiresConsent) {
+                               boolean transferRequiresConsent, List<PenaltyStep> penaltySteps) {
+    }
+
+    public record PenaltyStep(int monthsLate, BigDecimal penaltyPct) {
     }
 }

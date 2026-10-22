@@ -2,8 +2,10 @@ package com.techcomfort.landvaultbackend.marketplace.internal.service;
 
 import com.techcomfort.landvaultbackend.marketplace.EstateEligibility;
 import com.techcomfort.landvaultbackend.marketplace.MarketplaceApi;
+import com.techcomfort.landvaultbackend.marketplace.OfferedPlan;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.PlotView;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.EstateEligibilityViewRepository;
+import com.techcomfort.landvaultbackend.marketplace.internal.repository.PaymentPlanViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.PlotViewRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -18,6 +20,7 @@ public class MarketplaceApiImpl implements MarketplaceApi {
 
     private final EstateEligibilityViewRepository eligibility;
     private final PlotViewRepository plots;
+    private final PaymentPlanViewRepository paymentPlans;
 
     @Override
     @Transactional(readOnly = true)
@@ -32,5 +35,12 @@ public class MarketplaceApiImpl implements MarketplaceApi {
     @Transactional(readOnly = true)
     public Optional<UUID> estateIdOfPlot(UUID plotId) {
         return plots.findByPlotId(plotId).map(PlotView::getEstateId);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<OfferedPlan> offeredPlan(UUID estateId, UUID planId) {
+        return paymentPlans.findByPlanIdAndEstateId(planId, estateId)
+                .map(p -> new OfferedPlan(p.getPlanId(), p.getName(), p.terms()));
     }
 }

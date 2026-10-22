@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Instalment plans, phase 2 (IC-1, PL-3): the plan a buyer chose at
+        "Proceed to buy" and its schedule, fixed then and never recomputed —
+        the price rule, applied to the plan. See AGENTS.md, "Instalment plans".
+
+        The plan's figures are copied onto the purchase (the developer may
+        redeclare plans later; this buyer keeps what they were offered). The
+        schedule is one row per instalment, with a schedule_version so a
+        restructure (RS) can add a new version without editing the old one.
+        Buyer-owned like transactions: not RLS-policied.
+    -->
+    <changeSet id="100-add-transaction-plans" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE transactions
+                ADD COLUMN plan_id         uuid REFERENCES estate_payment_plans (id),
+                ADD COLUMN plan_name       varchar(80),
+                ADD COLUMN plan_frequency  varchar(16),
+                ADD COLUMN plan_total      numeric(19, 4),
+                ADD COLUMN plan_premium    numeric(19, 4),
+                ADD COLUMN deposit_amount  numeric(19, 4),
+                ADD CONSTRAINT chk_transactions_plan_only_for_instalments
+                    CHECK (plan_id IS NULL OR plan = 'INSTALLMENT'),
+                ADD CONSTRAINT chk_transactions_plan_whole
+                    CHECK ((plan_id IS NULL) = (plan_name IS NULL)
+                       AND (plan_id IS NULL) = (plan_frequency IS NULL)
+                       AND (plan_id IS NULL) = (plan_total IS NULL)
+                       AND (plan_id IS NULL) = (plan_premium IS NULL)
+                       AND (plan_id IS NULL) = (deposit_amount IS NULL));
+            COMMENT ON COLUMN transactions.plan_id IS
+                'The declared plan chosen at Proceed to buy; its figures are copied beside it and never recomputed. Null for outright, and for instalment purchases opened before changeset 100.';
+
+            CREATE TABLE transaction_instalments (
+                id                uuid NOT NULL PRIMARY KEY,
+                created_at        timestamp(6) with time zone NOT NULL,
+                created_by        varchar(255),
+
+                transaction_id    uuid NOT NULL REFERENCES transactions (id),
+                schedule_version  integer NOT NULL,
+                sequence          integer NOT NULL,
+                due_date          date NOT NULL,
+                amount            numeric(19, 4) NOT NULL,
+
+                CONSTRAINT uq_transaction_instalments UNIQUE (transaction_id, schedule_version, sequence),
+                CONSTRAINT chk_transaction_instalments_amount CHECK (amount > 0),
+                CONSTRAINT chk_transaction_instalments_sequence CHECK (sequence >= 1)
+            );
+            CREATE INDEX idx_transaction_instalments_due ON transaction_instalments (due_date);
+            REVOKE UPDATE, DELETE, TRUNCATE ON transaction_instalments FROM ${appDbUsername};
+            COMMENT ON TABLE transaction_instalments IS
+                'An instalment purchase''s schedule after the deposit: one row per instalment, due dates counted from the offer date (Lagos). Never changed; a restructure adds a new schedule_version.';
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE transaction_instalments;
+            ALTER TABLE transactions
+                DROP CONSTRAINT chk_transactions_plan_whole,
+                DROP CONSTRAINT chk_transactions_plan_only_for_instalments,
+                DROP COLUMN plan_id,
+                DROP COLUMN plan_name,
+                DROP COLUMN plan_frequency,
+                DROP COLUMN plan_total,
+                DROP COLUMN plan_premium,
+                DROP COLUMN deposit_amount;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

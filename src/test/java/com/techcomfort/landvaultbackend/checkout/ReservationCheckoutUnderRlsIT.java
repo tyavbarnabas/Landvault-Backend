@@ -14,11 +14,13 @@ import com.techcomfort.landvaultbackend.portfolio.dto.OwnedPlotDto;
 import com.techcomfort.landvaultbackend.checkout.dto.CreateReservationRequest;
 import com.techcomfort.landvaultbackend.checkout.dto.ReservationDto;
 import com.techcomfort.landvaultbackend.checkout.OfferSummary;
+import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
 import com.techcomfort.landvaultbackend.checkout.dto.TransactionDto;
 import com.techcomfort.landvaultbackend.checkout.internal.service.ReservationExpirySweeper;
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.geojson.GeoJsonPolygonDto;
 import com.techcomfort.landvaultbackend.documents.internal.render.DisclosureClauses;
+import com.techcomfort.landvaultbackend.documents.internal.render.DocumentFormats;
 import com.techcomfort.landvaultbackend.identity.dto.AuthResponse;
 import com.techcomfort.landvaultbackend.identity.dto.LoginRequest;
 import com.techcomfort.landvaultbackend.identity.dto.RegisterRequest;
@@ -76,6 +78,8 @@ import org.testcontainers.utility.DockerImageName;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
@@ -86,6 +90,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.IntStream;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -517,12 +524,12 @@ class ReservationCheckoutUnderRlsIT {
 
     @Test
     void installmentsAndOtherCurrenciesAreRefusedBeforePaystackIsCalled() {
-        ReservationDto reservation = reserve(buyer, plotId);
-        TransactionDto installment = createTransaction(buyer, reservation.id(), "installment", 12);
+        TransactionDto installment = instalmentPurchase();
         assertThat(pay(buyer, installment.id()).getBody()).contains("PAYMENT_PLAN_NOT_SUPPORTED");
 
-        execute("UPDATE transactions SET plan = 'OUTRIGHT', installment_months = NULL, currency = 'USD' WHERE id = '"
-                + installment.id() + "'");
+        execute("UPDATE transactions SET plan = 'OUTRIGHT', installment_months = NULL, plan_id = NULL, "
+                + "plan_name = NULL, plan_frequency = NULL, plan_total = NULL, plan_premium = NULL, "
+                + "deposit_amount = NULL, currency = 'USD' WHERE id = '" + installment.id() + "'");
         assertThat(pay(buyer, installment.id()).getBody()).contains("CURRENCY_NOT_SUPPORTED");
         verify(paystack, never()).initialize(any());
     }
@@ -2086,21 +2093,67 @@ class ReservationCheckoutUnderRlsIT {
         assertThat(second.getBody()).contains("TRANSACTION_ALREADY_EXISTS");
     }
 
+    /** IC-1: an instalment purchase names one of the estate's declared plans; the buyer never picks a month count. */
     @Test
-    void anInstallmentPlanNeedsAMonthCountAndNoOtherPlanMayCarryOne() {
+    void anInstalmentPurchaseMustNameAPlanTheEstateOffersNow() {
+        UUID planId = declareTwelveMonthPlan();
         ReservationDto held = reserve(buyer, plotId);
-        ResponseEntity<String> missingMonths = restTemplate.exchange(
-                "/api/checkout/transactions", HttpMethod.POST,
-                entity(buyer.token(), body(held.id(), "installment", null)), String.class);
-        assertThat(missingMonths.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(missingMonths.getBody()).contains("INVALID_PAYMENT_PLAN");
 
-        ResponseEntity<String> strayMonths = restTemplate.exchange(
-                "/api/checkout/transactions", HttpMethod.POST,
-                entity(buyer.token(), body(held.id(), "outright", 12)), String.class);
-        assertThat(strayMonths.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(openRaw(held.id(), "installment", null, null).getBody()).as("no plan named")
+                .contains("INVALID_PAYMENT_PLAN");
+        assertThat(openRaw(held.id(), "installment", 12, planId).getBody()).as("a month count from the buyer")
+                .contains("INVALID_PAYMENT_PLAN");
+        assertThat(openRaw(held.id(), "outright", null, planId).getBody()).as("a plan on an outright purchase")
+                .contains("INVALID_PAYMENT_PLAN");
+        ResponseEntity<String> unknown = openRaw(held.id(), "installment", null, UUID.randomUUID());
+        assertThat(unknown.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(unknown.getBody()).contains("PLAN_NOT_OFFERED");
+        assertThat(queryString("SELECT count(*) FROM transactions WHERE reservation_id = '" + held.id() + "'"))
+                .isEqualTo("0");
+    }
 
-        assertThat(createTransaction(buyer, held.id(), "installment", 12).installmentMonths()).isEqualTo(12);
+    /**
+     * IC-1 + PL-3: the schedule is worked out from the agreed price when the
+     * purchase opens, due dates from the offer date, and fixed: redeclaring the
+     * estate's plans afterwards changes nothing. The offer states all of it.
+     */
+    @Test
+    void anInstalmentPurchaseFixesItsScheduleAndTheOfferStatesIt() {
+        UUID planId = declareTwelveMonthPlan();
+        TransactionDto purchase = openOnPlan(buyer, reserve(buyer, plotId).id(), planId);
+
+        PlanSchedule schedule = purchase.schedule();
+        assertThat(purchase.installmentMonths()).as("from the plan").isEqualTo(12);
+        assertThat(schedule.planName()).isEqualTo("12-month plan");
+        assertThat(schedule.planTotal()).as("₦20M + 10%").isEqualByComparingTo("22000000");
+        assertThat(schedule.premium()).isEqualByComparingTo("2000000");
+        assertThat(schedule.deposit()).as("30% of the plan total").isEqualByComparingTo("6600000");
+        assertThat(schedule.instalments()).hasSize(12);
+        assertThat(schedule.instalments().getFirst().amount()).isEqualByComparingTo("1283333.33");
+        assertThat(schedule.instalments().getLast().amount()).as("the leftover kobo")
+                .isEqualByComparingTo("1283333.37");
+        LocalDate today = LocalDate.now(ZoneId.of("Africa/Lagos"));
+        assertThat(schedule.instalments()).extracting(PlanSchedule.Instalment::dueDate)
+                .containsExactlyElementsOf(IntStream.rangeClosed(1, 12).mapToObj(today::plusMonths).toList());
+
+        declarePlans("[]");
+        assertThat(get("/api/checkout/transactions/" + purchase.id(), buyer.token(), TransactionDto.class).getBody()
+                .schedule()).as("redeclaring the estate's plans doesn't touch this purchase")
+                .usingRecursiveComparison().withComparatorForType(BigDecimal::compareTo, BigDecimal.class)
+                .isEqualTo(schedule);
+
+        String offer = "FROM offer_letters WHERE id = '" + purchase.offer().id() + "'";
+        assertThat(queryString("SELECT array_to_string(price_clauses, '|') " + offer))
+                .contains("That the price of the plot, paid in full, is ₦20,000,000.00",
+                        "That you have chosen the 12-month plan: ₦22,000,000.00 in all (₦2,000,000.00 more than "
+                                + "paying in full), made up of a deposit of ₦6,600,000.00",
+                        "12 monthly instalments of ₦1,283,333.33 (the last ₦1,283,333.37)",
+                        "That the instalments fall due on " + DocumentFormats.date(today.plusMonths(1)),
+                        "your total commitment on this plan is ₦22,000,000.00",
+                        "is in arrears; no late-payment penalty is declared");
+        assertThat(acceptOffer(buyer, purchase.offer().id()).getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(pay(buyer, purchase.id()).getBody()).as("paying instalments is phase 3")
+                .contains("PAYMENT_PLAN_NOT_SUPPORTED");
     }
 
     // ------------------------------------------------------------------
@@ -2254,6 +2307,46 @@ class ReservationCheckoutUnderRlsIT {
     private ResponseEntity<String> acceptOffer(Buyer who, UUID offerId) {
         return restTemplate.exchange("/api/documents/offer-letters/" + offerId + "/accept", HttpMethod.POST,
                 entity(who.token(), null), String.class);
+    }
+
+    /** 30% deposit, 12 monthly, 10% premium on this class's estate; returns the plan's id. */
+    private UUID declareTwelveMonthPlan() {
+        String body = declarePlans("""
+                [{"name":"12-month plan","depositPct":30,"instalmentCount":12,"frequency":"monthly","premiumPct":10}]
+                """);
+        Matcher id = Pattern.compile("\"plans\":\\[\\{\"id\":\"([0-9a-f-]{36})\"").matcher(body);
+        assertThat(id.find()).as(body).isTrue();
+        return UUID.fromString(id.group(1));
+    }
+
+    private String declarePlans(String plansJson) {
+        ResponseEntity<String> response = restTemplate.exchange("/api/portal/estates/" + estateId + "/payment-plans",
+                HttpMethod.PUT, entity(seller.token(), "{\"plans\":" + plansJson + "}"), String.class);
+        assertThat(response.getStatusCode()).as(response.getBody()).isEqualTo(HttpStatus.OK);
+        return response.getBody();
+    }
+
+    /** Opened on the 12-month plan with its offer accepted — as far as phase 2 goes. */
+    private TransactionDto instalmentPurchase() {
+        TransactionDto purchase = openOnPlan(buyer, reserve(buyer, plotId).id(), declareTwelveMonthPlan());
+        assertThat(acceptOffer(buyer, purchase.offer().id()).getStatusCode()).isEqualTo(HttpStatus.OK);
+        return purchase;
+    }
+
+    private TransactionDto openOnPlan(Buyer who, UUID reservationId, UUID planId) {
+        ResponseEntity<TransactionDto> response = restTemplate.exchange("/api/checkout/transactions", HttpMethod.POST,
+                entity(who.token(), """
+                        {"reservationId":"%s","intent":"development","plan":"installment","planId":"%s"}
+                        """.formatted(reservationId, planId)), TransactionDto.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        return response.getBody();
+    }
+
+    private ResponseEntity<String> openRaw(UUID reservationId, String plan, Integer months, UUID planId) {
+        return restTemplate.exchange("/api/checkout/transactions", HttpMethod.POST, entity(buyer.token(), """
+                {"reservationId":"%s","intent":"development","plan":"%s"%s%s}
+                """.formatted(reservationId, plan, months == null ? "" : ",\"installmentMonths\":" + months,
+                planId == null ? "" : ",\"planId\":\"" + planId + "\"")), String.class);
     }
 
     private static String body(UUID reservationId, String plan, Integer months) {

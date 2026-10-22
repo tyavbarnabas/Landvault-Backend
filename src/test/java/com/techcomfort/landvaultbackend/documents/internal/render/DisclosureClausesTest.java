@@ -36,7 +36,7 @@ class DisclosureClausesTest {
         var refund = new EstateDocumentFacts.RefundTerms(1, new BigDecimal("20.00"), 90, RefundAppliesTo.TOTAL_PRICE,
                 List.of(FeeType.APPLICATION));
         var terms = new EstateDocumentFacts.DefaultTerms(1, "Failure to begin development within 24 months.", 30,
-                "Money paid is refunded less the 20% deduction.", 24, true);
+                "Money paid is refunded less the 20% deduction.", 24, true, List.of());
 
         assertThat(DisclosureClauses.of(facts(fees, refund, terms))).containsExactly(
                 "That an application fee of ₦10,000.00 is payable on application, and is not refundable.",

@@ -38,4 +38,11 @@ public interface MarketplaceApi {
      * companies are suspended.
      */
     Optional<UUID> estateIdOfPlot(UUID plotId);
+
+    /**
+     * PL/IC: one of the estate's current instalment plans, read through the
+     * public projection like everything else a buyer may see. Empty when the
+     * estate isn't listed, or doesn't offer that plan now.
+     */
+    Optional<OfferedPlan> offeredPlan(UUID estateId, UUID planId);
 }

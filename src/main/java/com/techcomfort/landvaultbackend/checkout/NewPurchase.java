@@ -13,6 +13,7 @@ import java.util.UUID;
  *
  * @param reservedAt   when the buyer reserved the plot — the offer's application date
  * @param buyerAddress null only for accounts from before addresses were collected
+ * @param schedule     the chosen plan and its schedule; null when paying outright
  */
 public record NewPurchase(
         UUID transactionId,
@@ -25,6 +26,7 @@ public record NewPurchase(
         BigDecimal totalPrice,
         Currency currency,
         Instant reservedAt,
-        PostalAddress buyerAddress
+        PostalAddress buyerAddress,
+        PlanSchedule schedule
 ) {
 }

@@ -2,6 +2,7 @@ package com.techcomfort.landvaultbackend.checkout.dto;
 
 import com.techcomfort.landvaultbackend.checkout.PaymentSummary;
 import com.techcomfort.landvaultbackend.checkout.OfferSummary;
+import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
 import com.techcomfort.landvaultbackend.common.PostalAddress;
 import io.swagger.v3.oas.annotations.media.Schema;
 
@@ -78,6 +79,12 @@ public record TransactionDto(
         @Schema(description = "The offer letter issued when this purchase was opened: `{ id, number, issuedAt, "
                 + "acceptedAt }`. Paying is refused (`OFFER_NOT_ACCEPTED`) until `acceptedAt` is set. Null on "
                 + "purchases opened before offer letters existed.", nullable = true)
-        OfferSummary offer
+        OfferSummary offer,
+
+        @Schema(description = "An instalment purchase's plan and schedule, worked out from the agreed price when "
+                + "it was opened and never recomputed: `{ planId, planName, frequency, planTotal, premium, "
+                + "deposit, instalments: [{ sequence, dueDate, amount }] }`. Due dates count from the offer date. "
+                + "Null for outright and milestone purchases.", nullable = true)
+        PlanSchedule schedule
 ) {
 }
