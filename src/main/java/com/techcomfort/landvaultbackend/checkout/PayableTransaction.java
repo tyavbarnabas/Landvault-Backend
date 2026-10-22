@@ -38,6 +38,11 @@ public record PayableTransaction(
         return "outright".equals(plan);
     }
 
+    /** An instalment plan whose deposit is verified: its instalments are what's payable now. */
+    public boolean isOnPlan() {
+        return "on_plan".equals(status);
+    }
+
     public boolean isInstalment() {
         return "installment".equals(plan);
     }

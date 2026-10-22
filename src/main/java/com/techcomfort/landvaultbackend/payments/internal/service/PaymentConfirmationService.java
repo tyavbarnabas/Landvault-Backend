@@ -3,11 +3,13 @@ package com.techcomfort.landvaultbackend.payments.internal.service;
 import com.techcomfort.landvaultbackend.audit.AuditApi;
 import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
 import com.techcomfort.landvaultbackend.checkout.CheckoutApi;
+import com.techcomfort.landvaultbackend.checkout.PayableTransaction;
 import com.techcomfort.landvaultbackend.common.TenantContext;
 import com.techcomfort.landvaultbackend.common.TenantScope;
 import com.techcomfort.landvaultbackend.payments.PaymentSucceeded;
 import com.techcomfort.landvaultbackend.payments.dto.PaymentDto;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
+import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentPurpose;
 import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentStatus;
 import com.techcomfort.landvaultbackend.payments.internal.exceptions.PaymentException;
 import com.techcomfort.landvaultbackend.payments.internal.paystack.PaystackClient;
@@ -93,7 +95,15 @@ public class PaymentConfirmationService {
                 // The receipt is issued in this same transaction (documents module): money confirmed
                 // and its receipt commit together, or neither does.
                 events.publishEvent(new PaymentSucceeded(payment.getId()));
-                if (!checkoutApi.recordPaymentReceived(payment.getTransactionId(), payment.getReference())) {
+                // 3b: an instalment or pay-off doesn't move the purchase — it stays on the plan, and
+                // finance verifies the payment itself. It only needs the plan to still be running.
+                boolean planPayment = payment.getPurpose() == PaymentPurpose.INSTALMENT
+                        || payment.getPurpose() == PaymentPurpose.BALANCE;
+                boolean received = planPayment
+                        ? checkoutApi.transactionForBuyer(payment.getTransactionId(), payment.getBuyerUserId())
+                        .filter(PayableTransaction::isOnPlan).isPresent()
+                        : checkoutApi.recordPaymentReceived(payment.getTransactionId(), payment.getReference());
+                if (!received) {
                     // Real money for a purchase no longer waiting for it — abandoned, its plot
                     // back on sale. Recorded truthfully; a person decides (decided with the user).
                     payment.setReviewReason("Paid after the purchase stopped waiting for payment (abandoned, or "

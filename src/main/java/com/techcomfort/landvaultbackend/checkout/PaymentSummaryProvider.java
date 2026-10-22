@@ -1,6 +1,7 @@
 package com.techcomfort.landvaultbackend.checkout;
 
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -13,4 +14,7 @@ import java.util.UUID;
 public interface PaymentSummaryProvider {
 
     Map<UUID, PaymentSummary> summariesFor(Collection<UUID> transactionIds);
+
+    /** 3b: every succeeded, unflagged payment on each purchase, oldest first — an instalment plan has many. */
+    Map<UUID, List<PlanPayment>> succeededPaymentsFor(Collection<UUID> transactionIds);
 }

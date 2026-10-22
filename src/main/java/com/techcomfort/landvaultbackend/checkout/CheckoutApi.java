@@ -17,6 +17,19 @@ public interface CheckoutApi {
     /** The buyer's own transaction, or empty — someone else's is indistinguishable from none. */
     Optional<PayableTransaction> transactionForBuyer(UUID transactionId, UUID buyerUserId);
 
+    /**
+     * 3b: these purchases, if they are this company's and on their plan, as
+     * finance-queue rows — read under the caller's RLS, so a branch officer
+     * sees only their branch's.
+     */
+    List<FinanceQueueRow> onPlan(UUID tenantId, Collection<UUID> transactionIds);
+
+    /**
+     * 3b: every instalment verified — the plot ON_PLAN becomes SOLD, the
+     * purchase verified and the final letter issued, together or not at all.
+     */
+    FinanceDecision completePlan(UUID transactionId, UUID tenantId, UUID financeUserId);
+
     /** Each instalment purchase's plan and fixed schedule, by transaction id; outright purchases have none. */
     Map<UUID, PlanSchedule> schedulesOf(Collection<UUID> transactionIds);
 

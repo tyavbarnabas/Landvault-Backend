@@ -107,6 +107,7 @@
     <include file="changes/099-estate-payment-plans.xml" relativeToChangelogFile="true"/>
     <include file="changes/100-transaction-schedules.xml" relativeToChangelogFile="true"/>
     <include file="changes/101-instalment-deposit.xml" relativeToChangelogFile="true"/>
+    <include file="changes/102-instalment-payments.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

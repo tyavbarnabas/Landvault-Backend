@@ -86,6 +86,8 @@ public class LatePaymentService {
             throw FinanceVerificationService.failure(decision);
         }
         payment.setReviewReason(null);
+        payment.setFinanceVerifiedAt(Instant.now());
+        payment.setFinanceVerifiedBy(scope.userId());
         payments.save(payment);
         auditApi.record(AuditEntryRequest.of(scope.userId(), "payment.late_allocated", "payment", payment.getId(),
                 tenantId, "Late payment " + payment.getReference() + " accepted; " + sale.plotLabel() + " allocated."));

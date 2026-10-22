@@ -128,6 +128,15 @@ public class PlotLockGateway {
         return updated == 1;
     }
 
+    /** 3b: the last instalment is verified — the plot held on the plan is sold. */
+    public boolean sellFromPlan(UUID plotId) {
+        int updated = entityManager.createNativeQuery("UPDATE plots SET status = 'SOLD', updated_at = now() "
+                        + "WHERE id = :plotId AND status = 'ON_PLAN' AND deleted = false")
+                .setParameter("plotId", plotId)
+                .executeUpdate();
+        return updated == 1;
+    }
+
     /**
      * Late money: a plot still for sale becomes sold, under the selling
      * company's own row-level security — the same reasoning as {@link #sell}.

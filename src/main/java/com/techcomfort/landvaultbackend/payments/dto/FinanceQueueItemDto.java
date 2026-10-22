@@ -4,6 +4,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.UUID;
 
 /**
@@ -30,11 +31,18 @@ public record FinanceQueueItemDto(
                 The estate's allocation letter is approved, so verifying issues the buyer's letter. When false, \
                 verifying is refused (`LETTER_NOT_APPROVED`) until the Executive Director approves it.""")
         boolean letterApproved,
-        @Schema(description = "`full_price`, or `deposit` for an instalment plan: verifying a deposit holds the plot "
-                + "on the plan and issues the provisional allocation letter; it doesn't sell the plot.")
+        @Schema(description = "`full_price`; on an instalment plan `deposit` (verifying holds the plot on the plan and "
+                + "issues the provisional allocation letter), `instalment`, or `balance` (everything left, paid off). "
+                + "Verifying the last instalment, or a balance, sells the plot and issues the final letter.")
         String paymentFor,
         @Schema(description = "The instalment plan's name; null when paying in full.", nullable = true)
-        String planName
+        String planName,
+        @Schema(description = "For an `instalment`: which one, e.g. 3.", nullable = true)
+        Integer instalmentSequence,
+        @Schema(description = "For an `instalment` or `balance`: how many the plan has, e.g. 12.", nullable = true)
+        Integer instalmentCount,
+        @Schema(description = "For an `instalment`: when it falls due.", nullable = true)
+        LocalDate dueDate
 ) {
 
     /**

@@ -49,6 +49,17 @@ public interface SettlementAlertSender {
 
     void purchaseDecided(PurchaseDecisionAlert alert);
 
+    /**
+     * 3b: one instalment verified, the plan still running.
+     *
+     * @param nextDueDate   e.g. "22 December 2026"; null when nothing is left after this (never expected here)
+     */
+    record InstalmentAlert(String to, String plotLabel, String estateName, String amount, int instalmentsPaid,
+                           int instalmentCount, String nextDueDate, String nextDueAmount, String purchaseUrl) {
+    }
+
+    void instalmentVerified(InstalmentAlert alert);
+
     void refundNeedsAccount(RefundNeedsAccountAlert alert);
 
     void refundProblem(RefundProblemAlert alert);

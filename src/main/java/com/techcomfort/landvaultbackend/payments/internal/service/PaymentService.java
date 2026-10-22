@@ -4,6 +4,7 @@ import com.techcomfort.landvaultbackend.audit.AuditApi;
 import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
 import com.techcomfort.landvaultbackend.checkout.CheckoutApi;
 import com.techcomfort.landvaultbackend.checkout.PayableTransaction;
+import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
 import com.techcomfort.landvaultbackend.common.TenantContext;
 import com.techcomfort.landvaultbackend.common.TenantScope;
 import com.techcomfort.landvaultbackend.identity.IdentityApi;
@@ -22,11 +23,14 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -56,11 +60,26 @@ public class PaymentService {
     public record Started(PaymentDto payment, boolean created) {
     }
 
+    /** What this payment is for, and how much. */
+    private record Due(BigDecimal amount, PaymentPurpose purpose, Integer instalmentSequence) {
+    }
+
+    /**
+     * Starts the next payment: the full price, a plan's deposit, or — once the
+     * deposit is verified (3b) — the next instalment, or with {@code balance}
+     * everything still owed. Always from the fixed schedule, never the request.
+     */
     @Transactional
-    public Started start(UUID transactionId) {
+    public Started start(UUID transactionId, boolean balance) {
         UUID buyerId = currentScope().userId();
         PayableTransaction transaction = checkoutApi.transactionForBuyer(transactionId, buyerId)
                 .orElseThrow(PaymentException.TransactionNotFound::new);
+        if (transaction.isOnPlan()) {
+            return start(transaction, buyerId, instalmentDue(transaction, balance));
+        }
+        if (balance) {
+            throw new PaymentException.NothingToPayOff();
+        }
         if (!transaction.isPendingPayment()) {
             throw new PaymentException.TransactionNotPayable(transaction.status());
         }
@@ -75,11 +94,41 @@ public class PaymentService {
         if (checkoutApi.offerFor(transactionId).filter(offer -> !offer.accepted()).isPresent()) {
             throw new PaymentException.OfferNotAccepted();
         }
-        // NGN only, above zero, whole kobo — refused here before Paystack is ever called.
-        long amountKobo = PaystackAmounts.toKobo(transaction.amountDue(), transaction.currency());
+        return start(transaction, buyerId, new Due(transaction.amountDue(),
+                transaction.isInstalment() ? PaymentPurpose.DEPOSIT : PaymentPurpose.OUTRIGHT, null));
+    }
 
+    /**
+     * 3b, decision 7: one instalment at a time — the next only once the
+     * current one is verified — or the whole balance in one payment.
+     */
+    private Due instalmentDue(PayableTransaction transaction, boolean balance) {
+        PlanSchedule schedule = checkoutApi.schedulesOf(List.of(transaction.id())).get(transaction.id());
+        if (schedule == null) {
+            throw new PaymentException.PlanNotSupported(transaction.plan());
+        }
+        PlanProgress progress = PlanProgress.of(schedule, payments.findAllByTransactionIdOrderByCreatedAtAsc(
+                transaction.id()));
+        if (progress.awaitingFinance().isPresent()) {
+            throw new PaymentException.InstalmentAwaitingVerification();
+        }
+        if (progress.complete()) {
+            throw new PaymentException.TransactionNotPayable("paid in full");
+        }
+        return balance ? new Due(progress.balance(), PaymentPurpose.BALANCE, null)
+                : progress.next().map(i -> new Due(i.amount(), PaymentPurpose.INSTALMENT, i.sequence())).orElseThrow();
+    }
+
+    private Started start(PayableTransaction transaction, UUID buyerId, Due due) {
+        UUID transactionId = transaction.id();
+        // NGN only, above zero, whole kobo — refused here before Paystack is ever called.
+        long amountKobo = PaystackAmounts.toKobo(due.amount(), transaction.currency());
+
+        // The open link is reused only for the same thing at the same amount.
         Optional<Payment> open = payments.findFirstByTransactionIdAndStatusOrderByCreatedAtDesc(
-                transactionId, PaymentStatus.INITIALIZED);
+                transactionId, PaymentStatus.INITIALIZED)
+                .filter(p -> p.getPurpose() == due.purpose() && p.getAmountKobo() == amountKobo
+                        && Objects.equals(p.getInstalmentSequence(), due.instalmentSequence()));
         if (open.isPresent() && open.get().getCreatedAt().plus(linkReuseWindow).isAfter(Instant.now())) {
             return new Started(toDto(open.get()), false);
         }
@@ -97,7 +146,8 @@ public class PaymentService {
                 .currency(transaction.currency())
                 .amountKobo(amountKobo)
                 .status(PaymentStatus.INITIALIZED)
-                .purpose(transaction.isInstalment() ? PaymentPurpose.DEPOSIT : PaymentPurpose.OUTRIGHT)
+                .purpose(due.purpose())
+                .instalmentSequence(due.instalmentSequence())
                 .build());
         String reference = payment.getReference();
         Map<String, Object> metadata = new LinkedHashMap<>();

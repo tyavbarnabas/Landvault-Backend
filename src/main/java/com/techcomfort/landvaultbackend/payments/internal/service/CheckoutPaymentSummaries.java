@@ -1,6 +1,7 @@
 package com.techcomfort.landvaultbackend.payments.internal.service;
 
 import com.techcomfort.landvaultbackend.checkout.PaymentSummary;
+import com.techcomfort.landvaultbackend.checkout.PlanPayment;
 import com.techcomfort.landvaultbackend.checkout.PaymentSummaryProvider;
 import com.techcomfort.landvaultbackend.payments.ReceiptLookup;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
@@ -16,6 +17,7 @@ import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -37,6 +39,25 @@ public class CheckoutPaymentSummaries implements PaymentSummaryProvider {
     private final PaymentRepository payments;
     private final RefundRepository refunds;
     private final ReceiptLookup receiptLookup;
+
+    @Override
+    @Transactional(readOnly = true)
+    public Map<UUID, List<PlanPayment>> succeededPaymentsFor(Collection<UUID> transactionIds) {
+        if (transactionIds.isEmpty()) {
+            return Map.of();
+        }
+        List<Payment> paid = payments.findAllByTransactionIdIn(transactionIds).stream()
+                .filter(p -> p.getStatus() == PaymentStatus.SUCCEEDED && p.getReviewReason() == null)
+                .sorted(Comparator.comparing(Payment::getCreatedAt))
+                .toList();
+        Map<UUID, ReceiptLookup.ReceiptRef> receipts = receiptLookup.receiptsFor(paid.stream().map(Payment::getId).toList());
+        return paid.stream().collect(Collectors.groupingBy(Payment::getTransactionId, Collectors.mapping(p -> {
+            ReceiptLookup.ReceiptRef receipt = receipts.get(p.getId());
+            return new PlanPayment(p.getReference(), p.getPurpose().name().toLowerCase(Locale.ROOT),
+                    p.getInstalmentSequence(), p.getAmount(), p.getPaidAt(), p.getFinanceVerifiedAt(),
+                    receipt == null ? null : receipt.id());
+        }, Collectors.toList())));
+    }
 
     @Override
     @Transactional(readOnly = true)

@@ -59,6 +59,49 @@ public class CheckoutApiImpl implements CheckoutApi {
 
     @Override
     @Transactional(readOnly = true)
+    public List<FinanceQueueRow> onPlan(UUID tenantId, Collection<UUID> transactionIds) {
+        if (transactionIds.isEmpty()) {
+            return List.of();
+        }
+        Map<UUID, Boolean> letters = new HashMap<>();
+        return transactions.findOnPlan(tenantId, transactionIds).stream().map(r -> new FinanceQueueRow(
+                (UUID) r[0], (String) r[1], (UUID) r[2], (String) r[3], (UUID) r[4],
+                r[5] == null ? "Plot " + r[6] : "Block " + r[5] + ", Plot " + r[6],
+                (UUID) r[7], (BigDecimal) r[8], Currency.valueOf((String) r[9]), (Instant) r[10],
+                letters.computeIfAbsent((UUID) r[2], letterGate::letterReady),
+                (BigDecimal) r[11], (String) r[12])).toList();
+    }
+
+    @Override
+    @Transactional
+    public FinanceDecision completePlan(UUID transactionId, UUID tenantId, UUID financeUserId) {
+        Optional<Reservation> locked = lockForFinance(transactionId, tenantId);
+        if (locked.isEmpty()) {
+            return FinanceDecision.NOT_FOUND;
+        }
+        Transaction transaction = transactions.findById(transactionId).orElseThrow();
+        if (transaction.getStatus() != TransactionStatus.ON_PLAN) {
+            return FinanceDecision.NOT_ON_PLAN;
+        }
+        // The final letter is issued now, from the estate's current approved setup.
+        if (!letterGate.letterReady(transaction.getEstateId())) {
+            return FinanceDecision.LETTER_NOT_APPROVED;
+        }
+        if (!plotLockGateway.sellFromPlan(transaction.getPlotId())) {
+            return FinanceDecision.PLOT_NOT_ON_PLAN;
+        }
+        if (transactions.completePlan(transactionId) != 1) {
+            throw new IllegalStateException("Transaction " + transactionId + " left on_plan while locked");
+        }
+        auditApi.record(AuditEntryRequest.of(financeUserId, "transaction.verified", "transaction", transactionId,
+                tenantId, "Plan " + transaction.getPlanName() + " for " + transaction.getReference()
+                        + " paid in full and verified by finance; plot " + transaction.getPlotId() + " sold."));
+        publishAllocated(transaction, locked.get().getCreatedAt(), financeUserId, false);
+        return FinanceDecision.DONE;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public Map<UUID, PlanSchedule> schedulesOf(Collection<UUID> transactionIds) {
         return transactionIds.isEmpty() ? Map.of()
                 : transactionService.schedulesOf(transactions.findAllById(transactionIds));
