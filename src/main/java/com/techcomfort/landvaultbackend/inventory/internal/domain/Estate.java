@@ -140,6 +140,10 @@ public class Estate extends AbstractEntity {
     @Column(name = "fees_version", nullable = false)
     private Integer feesVersion;
 
+    /** Which {@code estate_payment_plans} version is current; 0 = never declared (outright only). */
+    @Column(name = "payment_plans_version", nullable = false)
+    private Integer paymentPlansVersion;
+
     /**
      * One-time grandfathering for estates already published when disclosure
      * shipped — see changeset 056. Never set for a new estate.
@@ -155,6 +159,9 @@ public class Estate extends AbstractEntity {
         }
         if (feesVersion == null) {
             feesVersion = 0;
+        }
+        if (paymentPlansVersion == null) {
+            paymentPlansVersion = 0;
         }
         if (feesDeclarationExempt == null) {
             feesDeclarationExempt = false;

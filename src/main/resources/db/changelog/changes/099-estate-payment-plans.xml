@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Instalment plans, phase 1 (PL-1, PL-2): what a developer declares. See
+        AGENTS.md, "Instalment plans".
+
+        Declared like fees and versioned the same way: a declaration replaces
+        the set as a new version (estates.payment_plans_version points at the
+        current one) and earlier versions stay as history. HomeTrue works out
+        every figure from these terms; nothing here is an amount a buyer pays.
+        An empty declaration means "outright only".
+    -->
+    <changeSet id="099-create-estate-payment-plans" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE estates ADD COLUMN payment_plans_version integer NOT NULL DEFAULT 0;
+            COMMENT ON COLUMN estates.payment_plans_version IS
+                'Which estate_payment_plans version is current; 0 = never declared (outright only).';
+
+            CREATE TABLE estate_payment_plans (
+                id                  uuid PRIMARY KEY,
+                tenant_id           uuid,
+                branch_id           uuid,
+                created_at          timestamptz NOT NULL,
+                created_by          varchar(255),
+                updated_at          timestamptz,
+                updated_by          varchar(255),
+                deleted             boolean NOT NULL DEFAULT false,
+
+                estate_id           uuid NOT NULL REFERENCES estates (id),
+                version             integer NOT NULL,
+                sort_order          integer NOT NULL,
+                name                varchar(80) NOT NULL,
+
+                -- Exactly one: a share of the plan total (premium included), or a
+                -- fixed amount in the tier's currency.
+                deposit_pct         numeric(5, 2),
+                deposit_amount      numeric(19, 4),
+                instalment_count    integer NOT NULL,
+                frequency           varchar(16) NOT NULL,
+                premium_pct         numeric(5, 2) NOT NULL DEFAULT 0,
+
+                CONSTRAINT chk_estate_payment_plans_deposit_one
+                    CHECK ((deposit_pct IS NULL) <> (deposit_amount IS NULL)),
+                CONSTRAINT chk_estate_payment_plans_deposit_pct
+                    CHECK (deposit_pct IS NULL OR (deposit_pct >= 1 AND deposit_pct < 100)),
+                CONSTRAINT chk_estate_payment_plans_deposit_amount
+                    CHECK (deposit_amount IS NULL OR deposit_amount > 0),
+                CONSTRAINT chk_estate_payment_plans_count
+                    CHECK (instalment_count BETWEEN 1 AND 60),
+                CONSTRAINT chk_estate_payment_plans_frequency
+                    CHECK (frequency IN ('MONTHLY', 'QUARTERLY')),
+                CONSTRAINT chk_estate_payment_plans_premium
+                    CHECK (premium_pct >= 0 AND premium_pct <= 100),
+                CONSTRAINT uq_estate_payment_plans_version_order UNIQUE (estate_id, version, sort_order)
+            );
+            CREATE INDEX idx_estate_payment_plans_estate_version ON estate_payment_plans (estate_id, version);
+            REVOKE DELETE, TRUNCATE ON estate_payment_plans FROM ${appDbUsername};
+            COMMENT ON TABLE estate_payment_plans IS
+                'Instalment plans a developer declares for an estate, versioned like estate_fees; HomeTrue computes the deposit and instalments from them. See AGENTS.md, "Instalment plans".';
+
+            ALTER TABLE estate_payment_plans ENABLE ROW LEVEL SECURITY;
+            ALTER TABLE estate_payment_plans FORCE ROW LEVEL SECURITY;
+            CREATE POLICY estate_payment_plans_platform ON estate_payment_plans FOR ALL
+                USING (current_setting('landvault.platform_scope', true) = 'on')
+                WITH CHECK (current_setting('landvault.platform_scope', true) = 'on');
+            CREATE POLICY estate_payment_plans_tenant ON estate_payment_plans FOR ALL
+                USING (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                )
+                WITH CHECK (
+                    current_setting('landvault.tenant_id', true) IS NOT NULL
+                    AND current_setting('landvault.tenant_id', true) != ''
+                    AND tenant_id::text = current_setting('landvault.tenant_id', true)
+                    AND (
+                        current_setting('landvault.branch_id', true) IS NULL
+                        OR current_setting('landvault.branch_id', true) = ''
+                        OR branch_id IS NULL
+                        OR branch_id::text = current_setting('landvault.branch_id', true)
+                    )
+                );
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE estate_payment_plans;
+            ALTER TABLE estates DROP COLUMN payment_plans_version;
+        ]]></rollback>
+    </changeSet>
+
+    <!--
+        The current plans, published like fees (059): eligible estates only,
+        current version only, SELECT only, security_barrier.
+    -->
+    <changeSet id="099-create-marketplace-payment-plans-view" author="landvault">
+        <sql><![CDATA[
+            CREATE VIEW marketplace_payment_plans WITH (security_barrier = true) AS
+            SELECT
+                p.id                AS plan_id,
+                p.estate_id         AS estate_id,
+                p.sort_order        AS sort_order,
+                p.name              AS name,
+                p.deposit_pct       AS deposit_pct,
+                p.deposit_amount    AS deposit_amount,
+                p.instalment_count  AS instalment_count,
+                p.frequency         AS frequency,
+                p.premium_pct       AS premium_pct
+            FROM estate_payment_plans p
+            JOIN estates e ON e.id = p.estate_id
+            JOIN marketplace_estate_eligibility el ON el.estate_id = p.estate_id AND el.eligible
+            WHERE p.deleted = false AND p.version = e.payment_plans_version;
+
+            REVOKE ALL ON marketplace_payment_plans FROM PUBLIC;
+            REVOKE ALL ON marketplace_payment_plans FROM ${appDbUsername};
+            GRANT SELECT ON marketplace_payment_plans TO ${appDbUsername};
+        ]]></sql>
+        <rollback>
+            DROP VIEW marketplace_payment_plans;
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

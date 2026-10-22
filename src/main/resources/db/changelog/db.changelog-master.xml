@@ -104,6 +104,7 @@
     <include file="changes/096-wishlist-items.xml" relativeToChangelogFile="true"/>
     <include file="changes/097-buyer-addresses.xml" relativeToChangelogFile="true"/>
     <include file="changes/098-offer-letters.xml" relativeToChangelogFile="true"/>
+    <include file="changes/099-estate-payment-plans.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

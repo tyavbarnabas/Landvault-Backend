@@ -43,8 +43,19 @@ public record ExitCostsDto(
         @Schema(description = "Assumes payment in full — a maximum exposure, not a personal figure.")
         RefundOutcomeDto ifYouWithdraw,
 
-        @Schema(description = "Late-payment penalties, in naira rather than percentages.")
+        @Schema(description = """
+                Late-payment penalties in naira, on **one instalment** of `penaltyBasisPlan` at this tier \
+                (decided with the user: a penalty is a share of the overdue instalment, the highest step \
+                reached applying). Empty when the estate offers no instalment plans — an outright buyer \
+                has nothing to fall behind on. Each plan's own figures are on the tier's `paymentPlans`.""")
         List<PenaltyStepDto> ifYouFallBehind,
+
+        @Schema(description = "The plan `ifYouFallBehind` is worked out on; null when there are no plans.",
+                nullable = true)
+        String penaltyBasisPlan,
+
+        @Schema(description = "The instalment those penalties are a share of.", nullable = true)
+        BigDecimal penaltyBasisInstalment,
 
         @Schema(description = "What triggers revocation, the notice given, and what happens to money "
                 + "already paid.")

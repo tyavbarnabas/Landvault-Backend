@@ -272,7 +272,7 @@ No `Authorization` header needed (or sent). Rate-limited: 429 with `Retry-After`
 - **Plot `availability` on the map is only `AVAILABLE` or `UNAVAILABLE`.** Reserved and sold are deliberately indistinguishable. Plots carry `priceTierId` and `isCorner` but no price: compute it from the tier and `cornerPremiumPct`, as `priceForPlot()` already does.
 - **A price filter only matches listings priced in the requested `currency`.**
 
-Differences from the frontend's current services, all in AGENTS.md: the path is `/api/marketplace/estates`, not `/listings`; plots come from `/geojson`, not a paginated `/listings/{id}/plots`; plot status is collapsed; `paymentPlans` is absent (nothing stores it yet), so the frontend's `paymentPlans.includes(...)` filter needs guarding.
+Differences from the frontend's current services, all in AGENTS.md: the path is `/api/marketplace/estates`, not `/listings`; plots come from `/geojson`, not a paginated `/listings/{id}/plots`; plot status is collapsed; there is no listing-level `paymentPlans` list of plan types — each `priceTiers[]` entry carries its own declared `paymentPlans` with figures (see "Instalment plans" below), so the frontend's `paymentPlans.includes(...)` filter should check whether any tier has plans.
 
 ### Full cost disclosure (tenant portal) — **built**
 | Method | Path | Request | Response |
@@ -292,6 +292,33 @@ There is **no frontend service for any of this yet** — these are new
 endpoints with no counterpart in `~/landvault/src/services/`. The public half
 arrives inside the existing marketplace payload (below), so a listing page
 gets it without a new call.
+
+### Instalment plans (portal + marketplace) — **phase 1 built** (changeset 099)
+
+| Method | Path | Request | Response |
+|---|---|---|---|
+| GET | `/api/portal/estates/{id}/payment-plans` | — | `PaymentPlans` (`portal.estates.view`) |
+| PUT | `/api/portal/estates/{id}/payment-plans` | `{ plans: [{ name, depositPct?, depositAmount?, instalmentCount, frequency, premiumPct? }] }` | `PaymentPlans` (`portal.estates.manage`) |
+
+- The developer declares **terms only**; HomeTrue works out every figure. **The premium applies to the whole price; a
+  percentage deposit is a share of that total**; the instalments split the rest evenly, leftover kobo on the last.
+  Example: ₦15M, 30%, 12 monthly, 10% premium → total ₦16.5M, deposit ₦4.95M, 12 × ₦962,500.
+- Exactly one of `depositPct` (1–99.99) and `depositAmount` (fixed, in the tier's currency). `instalmentCount` 1–60,
+  `frequency` `monthly` | `quarterly`, `premiumPct` 0–100 (none when left out). At most 10 plans; names unique.
+  Errors: `VALIDATION_ERROR`, `INVALID_REQUEST`.
+- A PUT replaces the set as a new `version` (like fees); `[]` means outright only. No HomeTrue review.
+- `PaymentPlans`: `{ version, plans: [{ id, name, depositPct, depositAmount, instalmentCount, frequency, premiumPct,
+  quotes: [{ tierId, tierLabel, currency, price, planTotal, premium, deposit, instalmentCount, instalment,
+  lastInstalment }] }] }` — quoted per open tier, for a non-corner plot; a tier where a fixed deposit leaves nothing
+  to pay is left out.
+- **Marketplace**: each `priceTiers[]` entry now has **`paymentPlans`**:
+  `[{ planId, name, frequency, deposit, instalmentCount, instalment, lastInstalment, planTotal, premium,
+  ifAnInstalmentIsLate: [{ monthsLate, penaltyPct, amount }] }]` — empty for an outright-only estate. Replace the
+  checkout plan picker's hard-coded 20% deposit with these figures.
+- **Change to `costDisclosure.exitCosts.ifYouFallBehind`**: penalties are now a share of **one instalment** (of the
+  estate's first plan at the basis tier — named in the new `penaltyBasisPlan` and `penaltyBasisInstalment`), not of
+  the whole price. It is **empty when the estate has no plans** (an outright buyer has nothing to fall behind on).
+- Not built yet: choosing a plan at checkout, the plan on the offer letter, paying instalments.
 
 ### Publication now has SEVEN conditions, not five
 
