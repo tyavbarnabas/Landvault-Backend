@@ -45,8 +45,9 @@ public record OwnedPlotDto(
         boolean titleVerified,
         @Schema(description = "`development` or `investment`.")
         String intent,
-        @Schema(description = "`outright` (the only plan that can be bought today).")
+        @Schema(description = "`outright` or `installment`.")
         String plan,
+        @Schema(description = "What the buyer pays: the agreed price, or on an instalment plan the plan total.")
         BigDecimal totalPrice,
         @Schema(description = "What finance has verified as paid. Zero while pending verification: equity doesn't "
                 + "advance until finance signs off.")
@@ -54,17 +55,19 @@ public record OwnedPlotDto(
         String currency,
         @Schema(description = "When finance verified the sale. Null while pending verification.")
         LocalDate acquiredDate,
-        @Schema(description = "`pending_verification` or `completed` today; the other statuses arrive with "
-                + "installments, documents, upgrades and resale.")
+        @Schema(description = "`pending_verification`, `installment_active` (deposit verified, plan running) or `completed` "
+                + "(paid in full) today; the other statuses arrive with arrears, documents, upgrades and resale.")
         String status,
+        @Schema(description = "On an active plan: the first unpaid instalment's due date. Null otherwise.", nullable = true)
         LocalDate nextDueDate,
+        @Schema(description = "On an active plan: the first unpaid instalment's amount. Null otherwise.", nullable = true)
         BigDecimal nextDueAmount,
         List<PortfolioPaymentDto> payments,
         Integer installmentMonths,
         Integer installmentsPaid,
         @Schema(description = "Only while `in_arrears`; null today.")
         ArrearsDto arrears,
-        @Schema(description = "Null: no plan that can be restructured can be bought yet.")
+        @Schema(description = "Null: restructuring isn't built yet.")
         String restructureStatus,
         @Schema(description = "The owned plot this one replaced (an upgrade). Null today.")
         UUID supersedes
