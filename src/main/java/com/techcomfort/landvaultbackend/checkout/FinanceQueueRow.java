@@ -23,8 +23,17 @@ public record FinanceQueueRow(
         /** What the payment being verified must be: the full price, or an instalment plan's deposit. */
         BigDecimal amountDue,
         /** The instalment plan's name, or null when paying in full. */
-        String planName
+        String planName,
+        /** Phase 5a: the buyer withdrew from this plan; a payment may still await finance. */
+        boolean planWithdrawn
 ) {
+
+    public FinanceQueueRow(UUID transactionId, String transactionReference, UUID estateId, String estateName,
+                           UUID plotId, String plotLabel, UUID buyerUserId, BigDecimal totalPrice, Currency currency,
+                           Instant awaitingSince, boolean letterApproved, BigDecimal amountDue, String planName) {
+        this(transactionId, transactionReference, estateId, estateName, plotId, plotLabel, buyerUserId, totalPrice,
+                currency, awaitingSince, letterApproved, amountDue, planName, false);
+    }
 
     /** True when the payment being verified is an instalment plan's deposit, not the full price. */
     public boolean isDeposit() {

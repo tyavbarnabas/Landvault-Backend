@@ -21,6 +21,7 @@ import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.SQLRestriction;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -150,6 +151,13 @@ public class Transaction extends AbstractEntity {
      */
     @Column(name = "penalties_refundable", updatable = false)
     private Boolean penaltiesRefundable;
+
+    /** Phase 5a: when the buyer withdrew from the plan (written by the once-only status change). */
+    @Column(name = "withdrawn_at")
+    private Instant withdrawnAt;
+
+    @Column(name = "withdrawal_reason")
+    private String withdrawalReason;
 
     /** Empty on purchases opened before addresses were collected. */
     public Optional<PostalAddress> buyerAddress() {

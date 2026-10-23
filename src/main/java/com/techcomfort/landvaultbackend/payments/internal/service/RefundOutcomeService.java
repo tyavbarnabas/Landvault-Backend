@@ -15,6 +15,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -56,7 +57,7 @@ public class RefundOutcomeService {
         if (payment.isEmpty()) {
             return Outcome.NOT_OURS;
         }
-        return refunds.findLiveForUpdate(payment.get().getId(), RefundStatus.FAILED)
+        return refunds.findInFlightForUpdate(payment.get().getId())
                 .map(this::refresh).orElse(Outcome.NOT_OURS);
     }
 
@@ -102,8 +103,15 @@ public class RefundOutcomeService {
         switch (paystackSays) {
             case PROCESSED -> payments.findById(refund.getPaymentId()).ifPresent(payment -> {
                 // Refunded: nothing is owed any more. refund_requested_at stays as history.
-                payment.setReviewReason(null);
-                payments.save(payment);
+                // 5a: unless this was one part and more is still owed (a rejected
+                // payment after a withdrawal) — then it stays flagged.
+                BigDecimal returned = refunds.findAllByPaymentIdInOrderByCreatedAtDesc(List.of(payment.getId()))
+                        .stream().filter(r -> r.getStatus() == RefundStatus.PROCESSED)
+                        .map(Refund::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
+                if (returned.compareTo(payment.owedBack()) >= 0) {
+                    payment.setReviewReason(null);
+                    payments.save(payment);
+                }
             });
             case NEEDS_ATTENTION -> identityApi.emailOf(refund.getBuyerUserId()).ifPresent(to -> payments
                     .findById(refund.getPaymentId()).ifPresent(payment -> buyerNotifier.afterCommit(

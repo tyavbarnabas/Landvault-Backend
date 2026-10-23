@@ -231,6 +231,56 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
         log.info("Instalment verification delivered to a buyer");
     }
 
+    /** Phase 5a. Factual: what was paid, what comes back, what the developer keeps, and what happens next. */
+    @Override
+    public void planWithdrawn(WithdrawalAlert alert) {
+        SimpleMailMessage message = new SimpleMailMessage();
+        message.setFrom(fromAddress);
+        message.setTo(alert.to());
+        String figures = """
+                Paid on the plan:            NGN %s
+                Returned to the buyer:       NGN %s
+                Kept by the developer:       NGN %s
+                """.formatted(alert.paid(), alert.refund(), alert.developerKeeps());
+        if (alert.toDeveloper()) {
+            message.setSubject("A buyer withdrew from their plan: " + alert.purchaseReference());
+            message.setText("""
+                    Hello,
+
+                    The buyer on purchase %s (%s) has withdrawn from their instalment plan, on the refund terms \
+                    your estate declared. The plot is back on sale.
+
+                    %s
+                    HomeTrue returns the buyer's part from the money it holds in escrow. Your shares already \
+                    verified are paid out as usual.%s%s
+
+                    See it under Finance > Plans in your HomeTrue portal.
+                    """.formatted(alert.purchaseReference(), alert.planName(), figures,
+                    alert.awaitingFinance() == null ? "" : "\n\nOne payment is still waiting for your finance team to "
+                            + "verify it. Your share of it, NGN " + alert.awaitingFinance() + ", is held for you and "
+                            + "paid out once it is verified.",
+                    alert.reason() == null ? "" : "\n\nThe buyer's reason: " + alert.reason()));
+        } else {
+            message.setSubject("You have withdrawn from your plan: " + alert.purchaseReference());
+            message.setText("""
+                    Hello,
+
+                    You have withdrawn from your instalment plan (%s) for purchase %s, on the refund terms set \
+                    out in your offer letter. The plot is no longer held for you.
+
+                    %s
+                    HomeTrue holds your part and returns it to you through the payment provider, payment by \
+                    payment. We'll email you if we need a bank account from you.
+
+                    See your purchase and the refund:
+
+                        %s
+                    """.formatted(alert.planName(), alert.purchaseReference(), figures, alert.purchaseUrl()));
+        }
+        mailSender.send(message);
+        log.info("Plan withdrawal delivered to the {}", alert.toDeveloper() ? "developer" : "buyer");
+    }
+
     /**
      * AR-3. Factual and calm, like the conflict guidance: what is due, by when,
      * and what happens next — never a threat.

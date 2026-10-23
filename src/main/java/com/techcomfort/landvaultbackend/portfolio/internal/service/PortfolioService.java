@@ -195,7 +195,9 @@ public class PortfolioService implements PortfolioApi {
         boolean paidOff = verified.stream().anyMatch(p -> "balance".equals(p.purpose()));
         Set<Integer> paidInstalments = verified.stream().filter(p -> "instalment".equals(p.purpose()))
                 .map(PlanPayment::instalmentSequence).collect(Collectors.toSet());
-        Optional<PlanSchedule.Instalment> next = paidOff ? Optional.empty() : schedule.instalments().stream()
+        // 5a: a withdrawn plan owes nothing more.
+        boolean ended = paidOff || o.getStatus() == OwnedPlotStatus.WITHDRAWN;
+        Optional<PlanSchedule.Instalment> next = ended ? Optional.empty() : schedule.instalments().stream()
                 .filter(i -> !paidInstalments.contains(i.sequence())).findFirst();
         List<PortfolioPaymentDto> history = planPayments.stream().map(p -> new PortfolioPaymentDto(p.reference(),
                 p.paidAt() == null ? null : LocalDate.ofInstant(p.paidAt(), NIGERIA), p.amount(), o.getCurrency().name(),

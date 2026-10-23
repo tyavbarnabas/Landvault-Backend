@@ -9,6 +9,7 @@ import com.techcomfort.landvaultbackend.payments.internal.controllers.PaystackWe
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalFinanceController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalLatePaymentController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalPlanController;
+import com.techcomfort.landvaultbackend.payments.internal.controllers.WithdrawalController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalPayoutController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalSettlementController;
 import org.springframework.http.HttpStatus;
@@ -27,7 +28,7 @@ import java.util.stream.Collectors;
 @RestControllerAdvice(assignableTypes = {PaymentController.class, PaystackWebhookController.class,
         PortalFinanceController.class, PortalSettlementController.class, AdminSettlementAccountController.class,
         AdminPayoutController.class, PortalPayoutController.class, AdminRefundController.class,
-        PortalLatePaymentController.class, PortalPlanController.class})
+        PortalLatePaymentController.class, PortalPlanController.class, WithdrawalController.class})
 public class PaymentExceptionHandler {
 
     @ExceptionHandler(PaymentException.class)
@@ -61,6 +62,8 @@ public class PaymentExceptionHandler {
             case PaymentException.PlotNoLongerAvailable e -> body(HttpStatus.CONFLICT, e, "PLOT_NO_LONGER_AVAILABLE");
             case PaymentException.LetterNotApproved e -> body(HttpStatus.CONFLICT, e, "LETTER_NOT_APPROVED");
             case PaymentException.LateDepositNotSupported e -> body(HttpStatus.CONFLICT, e, "LATE_DEPOSIT_NOT_SUPPORTED");
+            case PaymentException.PlanNotWithdrawable e -> body(HttpStatus.CONFLICT, e, "PLAN_NOT_WITHDRAWABLE");
+            case PaymentException.WithdrawalQuoteChanged e -> body(HttpStatus.CONFLICT, e, "WITHDRAWAL_QUOTE_CHANGED");
             case PaymentException.RefundNotDue e -> body(HttpStatus.NOT_FOUND, e, "REFUND_NOT_DUE");
             case PaymentException.RefundInProgress e -> body(HttpStatus.CONFLICT, e, "REFUND_IN_PROGRESS");
             case PaymentException.RefundNotFound e -> body(HttpStatus.NOT_FOUND, e, "REFUND_NOT_FOUND");
@@ -70,6 +73,7 @@ public class PaymentExceptionHandler {
             case PaymentException.CompanyWideScopeRequired e -> body(HttpStatus.FORBIDDEN, e, "COMPANY_WIDE_SCOPE_REQUIRED");
             case PaymentException.SaleAlreadyPaid e -> body(HttpStatus.CONFLICT, e, "SALE_ALREADY_PAID");
             case PaymentException.HeldInEscrow e -> body(HttpStatus.CONFLICT, e, "HELD_IN_ESCROW");
+            case PaymentException.WithdrawnPlanPaid e -> body(HttpStatus.CONFLICT, e, "WITHDRAWN_PLAN_PAID");
             case PaymentException.PayoutInProgress e -> body(HttpStatus.CONFLICT, e, "PAYOUT_IN_PROGRESS");
             case PaymentException.CompanyNotActive e -> body(HttpStatus.CONFLICT, e, "COMPANY_NOT_ACTIVE");
             case PaymentException.NoApprovedPayoutAccount e -> body(HttpStatus.CONFLICT, e, "NO_APPROVED_PAYOUT_ACCOUNT");

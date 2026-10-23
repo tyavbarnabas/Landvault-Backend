@@ -354,7 +354,22 @@ gets it without a new call.
   `penaltiesRefundable` (required when `penaltyTiers` is non-empty); the listing shows it as
   `exitCosts.penaltiesRefundable` and the offer letter states it. Reminder emails go 7 days and 1 day before, on the
   first day overdue and on entering arrears. Developers: `GET /api/portal/finance/plans?status=` (see Portal finance).
-  **Not built yet (phase 5)**: withdrawal, revocation, restructure and penalty waivers.
+  **Phase 5a built** (changeset 106): **withdrawal**. A buyer on a running plan (`on_plan`) may withdraw at any time,
+  with no one's approval, on the refund terms copied onto the purchase. `GET /api/transactions/{id}/withdrawal`
+  (`client.checkout.reserve`, own purchase) → `{ transactionId, status, withdrawnAt, terms: { deductionPct,
+  appliesTo, penaltiesRefundable }, paid, refund, developerKeeps, currency, payments: [{ reference, paymentFor,
+  instalmentSequence, amount, penaltyAmount, developerKeeps, refund, awaitingFinance, refundStatus }] }` — a **quote**
+  while `on_plan` (nothing happens), the settled record once `withdrawn`. Show it, then `POST` the same route
+  `{ refund, reason? }` naming the quote's `refund`; if it no longer matches → 409 `WITHDRAWAL_QUOTE_CHANGED`
+  (nothing happened; fetch the quote again). Each payment comes back less the developer's declared share; a payment
+  Paystack confirmed but finance hasn't verified (`awaitingFinance: true`) counts the same. On success: the purchase
+  is `withdrawn` (`TransactionDto.withdrawnAt`), the plot is back on sale, the portfolio entry's `status` is
+  `withdrawn` (not counted in the summary; no next due date), the provisional allocation letter's `status` is
+  `withdrawn`, the buyer and the developer's Executive Directors are emailed, and each payment's part goes on the
+  Super Admin's refunds-due list. Pay afterwards → `TRANSACTION_NOT_PAYABLE`; withdrawing again → 409
+  `PLAN_NOT_WITHDRAWABLE` (also for outright purchases, a deposit not yet verified, or a paid-off plan). A receipt
+  reads `refunded` only once its payment came back **in full**.
+  **Not built yet (phase 5)**: revocation, restructure and penalty waivers.
 
 ### Publication now has SEVEN conditions, not five
 
@@ -977,6 +992,9 @@ Director approves the estate's letter — show it on the row and disable Verify;
 `PAYMENT_NOT_CONFIRMED` / `PLOT_NOT_RESERVED` / `LETTER_NOT_APPROVED`, 403 `COMPANY_SCOPE_REQUIRED`.
 Phase 4: a plan payment's `expectedAmount` includes any late-payment penalty it carries; `penaltyAmount` and
 `penalties[]` (`{ instalmentSequence, monthsLate, penaltyPct, amount }`) show it as its own line.
+Phase 5a: a payment on a plan the buyer **withdrew** from can still be in the queue (`planWithdrawn: true`).
+Verifying it makes the developer's declared share of it payable (the buyer's part is already being returned);
+rejecting it returns that share to the buyer too. Both answer `{ status: "withdrawn" }`.
 
 **Running plans and arrears (phase 4)**: `GET /api/portal/finance/plans?status=` (`portal.payments.verify`, own
 company; a branch officer sees only their branch's) → `[{ transactionId, transactionReference, estateId, estateName,
@@ -1035,6 +1053,9 @@ verified plan payment | `release` what HomeTrue held, once the plan completes),
 is everything owed now and unpaid. `PayoutDto` adds `tranche` and `sharePaymentId`.
 Instalment purchases appear while on their plan, as soon as a share is owed. 409
 `HELD_IN_ESCROW`: every share owed so far is paid; the rest waits for completion.
+Phase 5a: a **withdrawn** plan stays on the list while the developer's shares are unpaid; nothing is ever
+released (the buyer gets it back). Its `heldInEscrow` is only the developer's share of a payment their finance
+hasn't verified yet, paid once they verify it. 409 `WITHDRAWN_PLAN_PAID`: every share owed so far is paid.
 
 **Payments, step 8c — payout outcomes.** `GET /api/portal/payouts` (`portal.payments.verify`,
 company-wide; 403 `COMPANY_WIDE_SCOPE_REQUIRED` when narrowed to a branch) → the company's
@@ -1056,6 +1077,9 @@ bank picker (`GET /api/payments/banks`) and `POST /api/payments/{reference}/refu
 `POST /api/admin/refunds` `{ paymentReference }`, `POST /api/admin/refunds/{id}/send-to-account`.
 Errors: 404 `REFUND_NOT_DUE`, `REFUND_NOT_FOUND`; 409 `REFUND_IN_PROGRESS`,
 `REFUND_NOT_AWAITING_ACCOUNT`, `REFUND_ACCOUNT_MISSING`; 503 `REFUND_OUTCOME_UNKNOWN`.
+Phase 5a: a payment can be refunded **in parts** — after a plan withdrawal only the buyer's part is owed, and if
+finance later rejects that payment the developer's share follows as a second refund. The due list's `amount` is what
+is still to send; one refund per payment is in flight at a time. A buyer's `GET …/refund` shows the newest one.
 
 **Late money (developer finance).** `portal.payments.verify`. `GET /api/portal/finance/late-payments`
 → `[{ transactionId, transactionReference, estateName, plotLabel, buyerName, buyerEmail,

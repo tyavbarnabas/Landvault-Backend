@@ -21,10 +21,19 @@ public interface RefundRepository extends JpaRepository<Refund, UUID> {
     @Query("SELECT r FROM Refund r WHERE r.id = :id")
     Optional<Refund> findByIdForUpdate(@Param("id") UUID id);
 
-    /** The payment's refund that isn't failed — at most one, by the unique index — locked. */
+    /**
+     * The payment's refund still in flight — neither failed nor processed; at
+     * most one, by the unique index — locked. A payment may have had others
+     * (5a: refunded in parts).
+     */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("SELECT r FROM Refund r WHERE r.paymentId = :paymentId AND r.status <> :failed")
-    Optional<Refund> findLiveForUpdate(@Param("paymentId") UUID paymentId, @Param("failed") RefundStatus failed);
+    @Query("SELECT r FROM Refund r WHERE r.paymentId = :paymentId AND r.status NOT IN :finished")
+    Optional<Refund> findInFlightForUpdate(@Param("paymentId") UUID paymentId,
+                                           @Param("finished") Collection<RefundStatus> finished);
+
+    default Optional<Refund> findInFlightForUpdate(UUID paymentId) {
+        return findInFlightForUpdate(paymentId, RefundStatus.FINISHED);
+    }
 
     List<Refund> findAllByPaymentIdInOrderByCreatedAtDesc(Collection<UUID> paymentIds);
 

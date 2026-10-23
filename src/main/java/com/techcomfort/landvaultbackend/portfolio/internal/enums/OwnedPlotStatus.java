@@ -19,7 +19,9 @@ public enum OwnedPlotStatus {
     IN_ARREARS,
     UPGRADE_PENDING,
     TRANSFERRED,
-    SUPERSEDED;
+    SUPERSEDED,
+    /** Phase 5a: the buyer withdrew from their plan; the plot went back on sale. */
+    WITHDRAWN;
 
     public String getValue() {
         return name().toLowerCase(Locale.ROOT);
@@ -27,6 +29,6 @@ public enum OwnedPlotStatus {
 
     /** Still the buyer's: retired records stay in the ledger but never count in totals (PF-2). */
     public boolean activelyOwned() {
-        return this != TRANSFERRED && this != SUPERSEDED;
+        return this != TRANSFERRED && this != SUPERSEDED && this != WITHDRAWN;
     }
 }

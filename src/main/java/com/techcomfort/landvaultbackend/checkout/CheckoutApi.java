@@ -1,5 +1,6 @@
 package com.techcomfort.landvaultbackend.checkout;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
@@ -29,6 +30,29 @@ public interface CheckoutApi {
      * purchase verified and the final letter issued, together or not at all.
      */
     FinanceDecision completePlan(UUID transactionId, UUID tenantId, UUID financeUserId);
+
+    /**
+     * Phase 5a: the buyer's own running plan ends — the purchase becomes
+     * {@code withdrawn} and the plot goes back on sale with its original
+     * availability, together or not at all ({@link PlanWithdrawn} is published
+     * inside). False, changing nothing, if it isn't theirs or isn't on its plan.
+     * The money is the payments module's to settle.
+     */
+    boolean withdraw(UUID transactionId, UUID buyerUserId, String reason);
+
+    /**
+     * Phase 5a: an instalment purchase's escrow terms as copied when it opened,
+     * and its land price — read from the purchase alone (no plot join), so a
+     * buyer's request can work out a withdrawal. Empty for outright purchases.
+     */
+    Optional<PlanEscrow> escrowOf(UUID transactionId);
+
+    /** Phase 5a: when the buyer withdrew from this plan, if they did. */
+    Optional<Instant> withdrawnAt(UUID transactionId);
+
+    /** @param landPrice the agreed price, the TOTAL_PRICE basis (plan premium not included) */
+    record PlanEscrow(BigDecimal landPrice, VerifiedSale.Escrow escrow) {
+    }
 
     /**
      * Phase 4: running plans (deposit verified, not paid off), under the

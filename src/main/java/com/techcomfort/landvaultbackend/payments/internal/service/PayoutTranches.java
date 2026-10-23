@@ -10,8 +10,11 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -22,7 +25,8 @@ import java.util.UUID;
  * when the plan completes. So a buyer who withdraws on the declared terms is
  * refunded from money HomeTrue still holds. A late-payment penalty the
  * buyer wouldn't get back on withdrawal (phase 4) is paid out with its
- * payment's share in full. See AGENTS.md, "Instalment plans".
+ * payment's share in full. On a withdrawal (5a) the same shares say what the
+ * buyer gets back. See AGENTS.md, "Instalment plans".
  */
 final class PayoutTranches {
 
@@ -48,21 +52,72 @@ final class PayoutTranches {
             return new Owed(List.of(new Tranche(SALE, sale.totalPrice(), null)), null);
         }
         VerifiedSale.Escrow escrow = sale.escrow();
-        List<Payment> verified = payments.stream()
+        List<Payment> verified = verified(payments);
+        Map<Payment, BigDecimal> shares = shares(escrow, sale.totalPrice(), verified);
+        List<Tranche> tranches = new ArrayList<>();
+        shares.forEach((p, share) -> {
+            if (share.signum() > 0) {
+                tranches.add(new Tranche(SHARE_PREFIX + p.getId(), share, p));
+            }
+        });
+        BigDecimal paid = sum(verified.stream().map(Payment::getAmount).toList());
+        BigDecimal held = paid.subtract(sum(shares.values()));
+        if (escrow.withdrawn()) {
+            // 5a: what was held goes back to the buyer, never to the developer.
+            // Still held for them: their share of a payment finance hasn't
+            // verified yet — paid out once it is (decided with the user).
+            Map<Payment, BigDecimal> withAwaiting = shares(escrow, sale.totalPrice(), countedOnWithdrawal(payments));
+            return new Owed(tranches, sum(withAwaiting.values()).subtract(sum(shares.values())));
+        }
+        if (escrow.planComplete()) {
+            if (held.signum() > 0) {
+                tranches.add(new Tranche(RELEASE, held, null));
+            }
+            held = BigDecimal.ZERO;
+        }
+        return new Owed(tranches, held);
+    }
+
+    /** Finance-verified succeeded payments, in the order they were verified. */
+    static List<Payment> verified(List<Payment> payments) {
+        return payments.stream()
                 .filter(p -> p.getStatus() == PaymentStatus.SUCCEEDED && p.getFinanceVerifiedAt() != null)
                 .sorted(Comparator.comparing(Payment::getFinanceVerifiedAt).thenComparing(Payment::getCreatedAt,
                         Comparator.nullsLast(Comparator.<Instant>naturalOrder())))
                 .toList();
+    }
+
+    /**
+     * 5a: the payments a withdrawal settles — every verified one, then any
+     * Paystack confirmed that finance hasn't verified yet (and hasn't
+     * rejected), counted as if verified next (decided with the user: the buyer
+     * gets their part at once; the developer's share waits for finance). That
+     * is also the order finance verifying it later produces, so the figures
+     * never move.
+     */
+    static List<Payment> countedOnWithdrawal(List<Payment> payments) {
+        List<Payment> counted = new ArrayList<>(verified(payments));
+        payments.stream()
+                .filter(p -> p.getStatus() == PaymentStatus.SUCCEEDED && p.getFinanceVerifiedAt() == null
+                        && p.getReviewReason() == null && p.getPurpose() != PaymentPurpose.OUTRIGHT)
+                .sorted(Comparator.comparing(Payment::getPaidAt, Comparator.nullsLast(Comparator.<Instant>naturalOrder()))
+                        .thenComparing(Payment::getCreatedAt, Comparator.nullsLast(Comparator.<Instant>naturalOrder())))
+                .forEach(counted::add);
+        return counted;
+    }
+
+    /**
+     * The developer's share of each payment, in the order given: what they
+     * keep if the buyer withdraws. {@code landPrice} is the TOTAL_PRICE basis.
+     */
+    static Map<Payment, BigDecimal> shares(VerifiedSale.Escrow escrow, BigDecimal landPrice, List<Payment> ordered) {
         // TOTAL_PRICE: the deduction is a fixed sum on the land price, kept from
         // the first payments until it's reached; nothing more after that.
-        BigDecimal cap = escrow.appliesTo() == RefundAppliesTo.TOTAL_PRICE
-                ? pctOf(escrow.deductionPct(), sale.totalPrice()) : null;
-        List<Tranche> tranches = new ArrayList<>();
-        BigDecimal paid = BigDecimal.ZERO;
-        BigDecimal shares = BigDecimal.ZERO;
+        BigDecimal cap = escrow.appliesTo() == RefundAppliesTo.TOTAL_PRICE && escrow.deductionPct() != null
+                ? pctOf(escrow.deductionPct(), landPrice) : null;
+        Map<Payment, BigDecimal> shares = new LinkedHashMap<>();
         BigDecimal deducted = BigDecimal.ZERO; // towards the TOTAL_PRICE cap; penalties don't count
-        for (Payment p : verified) {
-            paid = paid.add(p.getAmount());
+        for (Payment p : ordered) {
             // Phase 4: a penalty the buyer wouldn't get back on withdrawal isn't
             // held — it's the developer's in full; a refundable one is escrowed
             // like the rest of the payment.
@@ -77,20 +132,13 @@ final class PayoutTranches {
                 share = escrowed.min(cap.subtract(deducted).max(BigDecimal.ZERO));
             }
             deducted = deducted.add(share);
-            share = share.add(kept);
-            if (share.signum() > 0) {
-                shares = shares.add(share);
-                tranches.add(new Tranche(SHARE_PREFIX + p.getId(), share, p));
-            }
+            shares.put(p, share.add(kept));
         }
-        BigDecimal held = paid.subtract(shares);
-        if (escrow.planComplete()) {
-            if (held.signum() > 0) {
-                tranches.add(new Tranche(RELEASE, held, null));
-            }
-            held = BigDecimal.ZERO;
-        }
-        return new Owed(tranches, held);
+        return shares;
+    }
+
+    private static BigDecimal sum(Collection<BigDecimal> amounts) {
+        return amounts.stream().reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     /** Rounded down to the kobo: the developer is never paid a kobo more than they'd keep. */

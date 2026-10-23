@@ -115,4 +115,20 @@ public class Payment extends AbstractEntity {
     /** When this payment was found to be owed back to the buyer; null when nothing is owed. */
     @Column(name = "refund_requested_at")
     private Instant refundRequestedAt;
+
+    /**
+     * How much of this payment is owed back once {@link #refundRequestedAt} is
+     * set; null means all of it. Part of it on a plan withdrawal (changeset 106).
+     */
+    @Column(name = "refund_amount")
+    private BigDecimal refundAmount;
+
+    /** Why it is owed back, for the refund; falls back to {@link #reviewReason}. */
+    @Column(name = "refund_reason")
+    private String refundReason;
+
+    /** What is owed back in all, once a refund is requested. */
+    public BigDecimal owedBack() {
+        return refundAmount != null ? refundAmount : amount;
+    }
 }

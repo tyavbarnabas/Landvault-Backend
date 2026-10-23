@@ -49,7 +49,12 @@ public record FinanceQueueItemDto(
                 + "paying (each line in `penalties`). Zero when nothing was late.")
         BigDecimal penaltyAmount,
         @Schema(description = "One line per late instalment the payment carries a penalty for.")
-        List<PenaltyLine> penalties
+        List<PenaltyLine> penalties,
+
+        @Schema(description = "Phase 5a: the buyer withdrew from this plan after paying. Verifying releases only "
+                + "your declared share of this payment (the buyer's part is already being returned); rejecting it "
+                + "returns your share to the buyer too.")
+        boolean planWithdrawn
 ) {
 
     /** A penalty charged on one instalment: the step reached and its amount. */

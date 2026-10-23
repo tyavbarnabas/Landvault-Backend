@@ -43,6 +43,11 @@ public record PayableTransaction(
         return "on_plan".equals(status);
     }
 
+    /** Phase 5a: the buyer withdrew from their instalment plan. */
+    public boolean isWithdrawn() {
+        return "withdrawn".equals(status);
+    }
+
     public boolean isInstalment() {
         return "installment".equals(plan);
     }

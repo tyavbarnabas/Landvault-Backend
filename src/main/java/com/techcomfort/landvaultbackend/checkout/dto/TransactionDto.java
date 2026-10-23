@@ -65,7 +65,8 @@ public record TransactionDto(
 
         @Schema(nullable = true) Integer installmentMonths,
 
-        @Schema(description = "pending_payment, awaiting_finance, verified, rejected or abandoned.",
+        @Schema(description = "pending_payment, awaiting_finance, on_plan, verified, rejected, abandoned or "
+                + "withdrawn.",
                 example = "pending_payment")
         String status,
 
@@ -91,6 +92,10 @@ public record TransactionDto(
         @Schema(description = "Once the deposit is verified (`on_plan`, or `verified` when paid off): where the "
                 + "plan stands today — each instalment's status and any penalty, and `arrears` while one is late. "
                 + "Worked out on every read, never stored. Null otherwise.", nullable = true)
-        PlanStanding standing
+        PlanStanding standing,
+
+        @Schema(description = "Phase 5a: when the buyer withdrew from their plan (`withdrawn`). The refund "
+                + "breakdown is at `GET /api/transactions/{id}/withdrawal`. Null otherwise.", nullable = true)
+        Instant withdrawnAt
 ) {
 }

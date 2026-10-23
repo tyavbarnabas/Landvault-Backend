@@ -10,7 +10,8 @@ import java.util.UUID;
 public record FinanceDecisionDto(
         UUID transactionId,
         @Schema(description = "verified (plot sold), on_plan (an instalment plan's deposit or instalment verified; the "
-                + "plot is held on the plan), rejected (plot back on sale) or refund_due (late money sent to refund)")
+                + "plot is held on the plan), rejected (plot back on sale), refund_due (late money sent to refund) or withdrawn (a payment on a plan the "
+                + "buyer withdrew from: verifying releases the developer's share; rejecting returns it to the buyer)")
         String status,
         @Schema(description = "The buyer's allocation letter, issued with the sale — or, for a "
                 + "deposit (`on_plan`), the provisional letter. Null otherwise.", nullable = true)

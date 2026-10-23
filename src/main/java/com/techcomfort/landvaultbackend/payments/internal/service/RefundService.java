@@ -22,6 +22,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
@@ -33,7 +35,8 @@ import java.util.stream.Collectors;
 
 /**
  * Refunds (decided with the user): a Super Admin returns the FULL amount a
- * buyer paid for a plot they never got, once. Where Paystack can't return a
+ * buyer paid for a plot they never got — or (5a) the part owed back after a
+ * plan withdrawal, the developer keeping their declared share. Where Paystack can't return a
  * bank-transfer payment on its own, the buyer gives an account in their own
  * name and the Super Admin sends it there. See AGENTS.md, "Payments", refunds.
  */
@@ -64,14 +67,19 @@ public class RefundService {
         }
         Map<UUID, List<Refund>> byPayment = refunds.findAllByPaymentIdInOrderByCreatedAtDesc(
                 owed.stream().map(Payment::getId).toList()).stream().collect(Collectors.groupingBy(Refund::getPaymentId));
+        // Owed and nothing in flight; 5a: a payment refunded in part (the buyer's
+        // share) is due again only for what's left, e.g. after finance rejects it.
         return owed.stream()
                 .filter(p -> byPayment.getOrDefault(p.getId(), List.of()).stream()
-                        .allMatch(r -> r.getStatus() == RefundStatus.FAILED))
+                        .allMatch(r -> RefundStatus.FINISHED.contains(r.getStatus())))
+                .filter(p -> remaining(p, byPayment).signum() > 0)
                 .map(p -> new RefundDueDto(p.getId(), p.getReference(), p.getTransactionId(),
                         identityApi.fullNameOf(p.getBuyerUserId()).orElse(null),
-                        identityApi.emailOf(p.getBuyerUserId()).orElse(null), p.getAmount(), p.getCurrency().name(),
-                        p.getChannel(), p.getLast4(), p.getPaidAt(), p.getReviewReason(), p.getRefundRequestedAt(),
-                        byPayment.getOrDefault(p.getId(), List.of()).stream().findFirst()
+                        identityApi.emailOf(p.getBuyerUserId()).orElse(null), remaining(p, byPayment),
+                        p.getCurrency().name(), p.getChannel(), p.getLast4(), p.getPaidAt(),
+                        p.getRefundReason() != null ? p.getRefundReason() : p.getReviewReason(), p.getRefundRequestedAt(),
+                        byPayment.getOrDefault(p.getId(), List.of()).stream()
+                                .filter(r -> r.getStatus() == RefundStatus.FAILED).findFirst()
                                 .map(r -> toDto(r, p)).orElse(null)))
                 .toList();
     }
@@ -93,17 +101,22 @@ public class RefundService {
 
     /**
      * Saves the refund, then asks Paystack — deliberately not one transaction,
-     * like payouts. A resend after a lost reply simply asks again: Paystack
-     * never refunds more than was paid, so a duplicate is refused, not paid.
+     * like payouts. A resend after a lost reply first asks Paystack whether it
+     * already has this refund (by our note): with refunds in parts (5a), a
+     * duplicate part fits within what was paid, so Paystack would pay it.
      */
     public RefundDto start(String paymentReference) {
         UUID actor = requireTwoFactor();
         RefundRecorder.Prepared prepared = recorder.prepare(paymentReference, actor);
         PaystackClient.Refund answer;
         try {
-            answer = paystack.createRefund(prepared.paymentReference(), prepared.amountKobo(),
-                    "Refund for your HomeTrue payment " + prepared.paymentReference(),
-                    "HomeTrue refund " + prepared.refundId());
+            Optional<PaystackClient.Refund> already = prepared.resend()
+                    ? paystack.findRefundByMerchantNote(prepared.merchantNote(),
+                    prepared.createdAt().minus(Duration.ofDays(1)))
+                    : Optional.empty();
+            answer = already.isPresent() ? already.get() : paystack.createRefund(prepared.paymentReference(),
+                    prepared.amountKobo(), "Refund for your HomeTrue payment " + prepared.paymentReference(),
+                    prepared.merchantNote());
         } catch (PaymentException.GatewayUnavailable e) {
             log.warn("Refund {} sent to Paystack with no answer; kept as sending", prepared.refundId());
             throw new PaymentException.RefundOutcomeUnknown("Paystack didn't answer.");
@@ -170,7 +183,7 @@ public class RefundService {
     @Transactional
     public BuyerRefundDto submitAccount(String paymentReference, String bankCode, String accountNumber) {
         Payment payment = ownPayment(paymentReference);
-        Refund refund = refunds.findLiveForUpdate(payment.getId(), RefundStatus.FAILED)
+        Refund refund = refunds.findInFlightForUpdate(payment.getId())
                 .orElseThrow(PaymentException.RefundNotFound::new);
         if (refund.getStatus() != RefundStatus.NEEDS_ATTENTION) {
             throw new PaymentException.RefundNotAwaitingAccount(refund.getStatus().wire());
@@ -191,6 +204,12 @@ public class RefundService {
     }
 
     // --- helpers ---
+
+    private static BigDecimal remaining(Payment payment, Map<UUID, List<Refund>> byPayment) {
+        return payment.owedBack().subtract(byPayment.getOrDefault(payment.getId(), List.of()).stream()
+                .filter(r -> r.getStatus() != RefundStatus.FAILED)
+                .map(Refund::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add));
+    }
 
     private void askBuyerForAccount(Refund refund, String paymentReference) {
         identityApi.emailOf(refund.getBuyerUserId()).ifPresent(to -> buyerNotifier.afterCommit(

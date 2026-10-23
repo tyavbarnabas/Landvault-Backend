@@ -1,6 +1,7 @@
 package com.techcomfort.landvaultbackend.payments.internal.enums;
 
 import java.util.Locale;
+import java.util.Set;
 
 /** One refund's state. Persisted by name; the wire value is lowercase with dashes, like Paystack's. */
 public enum RefundStatus {
@@ -12,8 +13,11 @@ public enum RefundStatus {
     NEEDS_ATTENTION,
     /** The money is back with the buyer. */
     PROCESSED,
-    /** Paystack couldn't refund it. The only state from which the payment may be refunded again. */
+    /** Paystack couldn't refund it: that part of the payment may be refunded again. */
     FAILED;
+
+    /** No longer in flight: a payment with only these may be refunded (again, or for another part). */
+    public static final Set<RefundStatus> FINISHED = Set.of(FAILED, PROCESSED);
 
     /** Unrecognised is PENDING — "not finished", never a failure that would allow a second refund. */
     public static RefundStatus fromPaystack(String status) {
