@@ -27,6 +27,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -73,8 +74,10 @@ public class PaymentService {
             this(amount, purpose, instalmentSequence, List.of());
         }
 
+        /** Whole kobo, two decimals — the same scale as the payment's own amount. */
         BigDecimal penaltyTotal() {
-            return penalties.stream().map(l -> l.penalty().amount()).reduce(BigDecimal.ZERO, BigDecimal::add);
+            return penalties.stream().map(l -> l.penalty().amount()).reduce(BigDecimal.ZERO, BigDecimal::add)
+                    .setScale(2, RoundingMode.UNNECESSARY);
         }
 
         BigDecimal total() {

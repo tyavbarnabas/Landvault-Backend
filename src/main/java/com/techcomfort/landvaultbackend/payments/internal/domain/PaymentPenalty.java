@@ -35,6 +35,6 @@ public class PaymentPenalty extends AbstractAppendOnlyEntity {
     @Column(name = "penalty_pct", nullable = false, updatable = false, precision = 5, scale = 2)
     private BigDecimal penaltyPct;
 
-    @Column(name = "amount", nullable = false, updatable = false, precision = 19, scale = 4)
+    @Column(name = "amount", nullable = false, updatable = false, precision = 19, scale = 2)
     private BigDecimal amount;
 }

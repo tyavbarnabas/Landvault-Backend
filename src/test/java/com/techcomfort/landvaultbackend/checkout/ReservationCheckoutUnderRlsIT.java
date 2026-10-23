@@ -2385,10 +2385,10 @@ class ReservationCheckoutUnderRlsIT {
 
         String reference = payPlan(purchase, false);
         assertThat(queryString("SELECT amount || '/' || penalty_amount FROM payments WHERE reference = '" + reference
-                + "'")).isEqualTo("8085000.00/385000.0000");
+                + "'")).isEqualTo("8085000.00/385000.00");
         assertThat(queryString("SELECT pp.instalment_sequence || '/' || pp.months_late || '/' || pp.penalty_pct || '/' "
                 + "|| pp.amount FROM payment_penalties pp JOIN payments p ON p.id = pp.payment_id WHERE p.reference = '" + reference
-                + "'")).isEqualTo("1/1/5.00/385000.0000");
+                + "'")).isEqualTo("1/1/5.00/385000.00");
         paystackSays(reference, "success", 808_500_000L, "NGN", "Approved");
         assertThat(confirm(buyer, reference).getBody()).contains("\"status\":\"succeeded\"", "\"penaltyAmount\":385000");
         assertThat(get("/api/checkout/transactions/" + purchase.id(), buyer.token(), TransactionDto.class).getBody()

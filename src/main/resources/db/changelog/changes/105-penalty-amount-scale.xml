@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Penalties are charged in whole kobo, like the payment they're part of:
+        two decimals, the same as payments.amount (changeset 070). 104 made them
+        numeric(19,4), so a payment read back said "0.0000" where a new one said
+        "0" — the same payment shown two ways. Every value written so far is
+        whole kobo, so nothing is lost.
+    -->
+    <changeSet id="105-penalty-amount-scale" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE payments ALTER COLUMN penalty_amount TYPE numeric(19, 2);
+            ALTER TABLE payment_penalties ALTER COLUMN amount TYPE numeric(19, 2);
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE payment_penalties ALTER COLUMN amount TYPE numeric(19, 4);
+            ALTER TABLE payments ALTER COLUMN penalty_amount TYPE numeric(19, 4);
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>
