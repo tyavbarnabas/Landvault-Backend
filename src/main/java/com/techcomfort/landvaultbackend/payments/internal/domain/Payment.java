@@ -69,7 +69,7 @@ public class Payment extends AbstractEntity {
      */
     @Builder.Default
     @Column(name = "penalty_amount", nullable = false, updatable = false)
-    private BigDecimal penaltyAmount = BigDecimal.ZERO;
+    private BigDecimal penaltyAmount = new BigDecimal("0.00");
 
     /** When the developer's finance verified this payment — never automatic (changeset 102). */
     @Column(name = "finance_verified_at")
