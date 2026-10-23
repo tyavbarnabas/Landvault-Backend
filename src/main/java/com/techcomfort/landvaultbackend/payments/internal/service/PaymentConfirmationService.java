@@ -106,16 +106,17 @@ public class PaymentConfirmationService {
                 boolean received = planPayment
                         ? purchase.filter(PayableTransaction::isOnPlan).isPresent()
                         : checkoutApi.recordPaymentReceived(payment.getTransactionId(), payment.getReference());
-                if (!received && purchase.filter(PayableTransaction::isWithdrawn).isPresent()) {
-                    // 5a: paid after the buyer withdrew. Nothing to decide — it goes back in full.
-                    payment.setReviewReason("Paid after the buyer withdrew from the plan; refund in full.");
+                Optional<String> ended = purchase.filter(t -> t.isWithdrawn() || t.isRevoked())
+                        .map(t -> t.isRevoked() ? "the plan was revoked" : "you withdrew from the plan");
+                if (!received && ended.isPresent()) {
+                    // 5a/5b: paid after the plan ended. Nothing to decide — it goes back in full.
+                    payment.setReviewReason("Paid after the plan ended (" + purchase.get().status() + "); refund in full.");
                     payment.setRefundRequestedAt(Instant.now());
-                    payment.setRefundReason("Paid after you withdrew from the plan — returned in full.");
+                    payment.setRefundReason("Paid after " + ended.get() + " — returned in full.");
                     payments.saveAndFlush(payment);
-                    audit(payment, "payment.refund_due", "Paystack confirmed this payment after the buyer withdrew "
-                            + "from the plan; flagged for a full refund.");
-                    log.warn("Payment {} succeeded after its plan was withdrawn; flagged for refund",
-                            payment.getReference());
+                    audit(payment, "payment.refund_due", "Paystack confirmed this payment after the plan ended ("
+                            + purchase.get().status() + "); flagged for a full refund.");
+                    log.warn("Payment {} succeeded after its plan ended; flagged for refund", payment.getReference());
                 } else if (!received) {
                     // Real money for a purchase no longer waiting for it — abandoned, its plot
                     // back on sale. Recorded truthfully; a person decides (decided with the user).

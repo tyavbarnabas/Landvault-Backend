@@ -86,6 +86,23 @@ public interface SettlementAlertSender {
 
     void planWithdrawn(WithdrawalAlert alert);
 
+    /** Phase 5b: which step of a revocation the buyer is being told about. */
+    enum RevocationStage { NOTICE, CANCELLED, CLEARED, REVOKED }
+
+    /**
+     * Phase 5b: to the buyer, at each step of a revocation. Amounts are plain
+     * naira strings. {@code totalDue}: what is overdue with its penalties, for
+     * a notice; {@code refund}/{@code developerKeeps}: what a revocation returns
+     * (a notice says what it would). {@code note}: the developer's reason for a
+     * notice, or their note on cancelling; may be null.
+     */
+    record RevocationAlert(String to, RevocationStage stage, String purchaseReference, String planName,
+                           String plotLabel, int afterMonths, String deadline, String totalDue, String refund,
+                           String developerKeeps, String note, String purchaseUrl) {
+    }
+
+    void planRevocation(RevocationAlert alert);
+
     void refundNeedsAccount(RefundNeedsAccountAlert alert);
 
     void refundProblem(RefundProblemAlert alert);

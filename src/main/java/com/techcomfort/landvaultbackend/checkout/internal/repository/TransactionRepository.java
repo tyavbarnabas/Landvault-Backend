@@ -75,7 +75,7 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
 
     /**
      * Sales the seller is owed on, for payouts: verified ones, (3c)
-     * instalment purchases on their plan, and (5a) withdrawn plans — the
+     * instalment purchases on their plan, and (5a/5b) withdrawn or revoked plans — the
      * developer's declared share is still theirs. Rows: transaction id, reference,
      * seller tenant id, estate name, block name, plot number, total price,
      * currency, verified at (the last status change), plan, status, escrow
@@ -86,13 +86,13 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
             + "t.penalties_refundable "
             + "FROM transactions t JOIN plots p ON p.id = t.plot_id JOIN estates e ON e.id = t.estate_id "
             + "LEFT JOIN blocks b ON b.id = p.block_id "
-            + "WHERE (t.status = 'VERIFIED' OR (t.status IN ('ON_PLAN', 'WITHDRAWN') AND t.plan = 'INSTALLMENT')) "
+            + "WHERE (t.status = 'VERIFIED' OR (t.status IN ('ON_PLAN', 'WITHDRAWN', 'REVOKED') AND t.plan = 'INSTALLMENT')) "
             + "AND (CAST(:id AS uuid) IS NULL OR t.id = :id) "
             + "ORDER BY t.updated_at", nativeQuery = true)
     List<Object[]> findVerifiedSales(@Param("id") UUID id);
 
     /**
-     * 3b: instalment purchases on their plan — or (5a) withdrawn from it, whose
+     * 3b: instalment purchases on their plan — or (5a/5b) withdrawn or revoked, whose
      * last payment may still await finance — for the finance queue: the same
      * columns as {@link #findAwaitingFinance} plus the status, under the
      * caller's RLS.
@@ -102,7 +102,7 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
             + "t.plan_name, t.status "
             + "FROM transactions t JOIN plots p ON p.id = t.plot_id JOIN estates e ON e.id = t.estate_id "
             + "LEFT JOIN blocks b ON b.id = p.block_id "
-            + "WHERE t.status IN ('ON_PLAN', 'WITHDRAWN') AND t.seller_tenant_id = :tenantId AND t.id IN (:ids)", nativeQuery = true)
+            + "WHERE t.status IN ('ON_PLAN', 'WITHDRAWN', 'REVOKED') AND t.seller_tenant_id = :tenantId AND t.id IN (:ids)", nativeQuery = true)
     List<Object[]> findOnPlan(@Param("tenantId") UUID tenantId, @Param("ids") Collection<UUID> ids);
 
     /**
@@ -129,6 +129,12 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
     @Query(value = "UPDATE transactions SET status = 'WITHDRAWN', withdrawn_at = now(), withdrawal_reason = :reason, "
             + "updated_at = now() WHERE id = :id AND status = 'ON_PLAN'", nativeQuery = true)
     int withdraw(@Param("id") UUID id, @Param("reason") String reason);
+
+    /** Once only: phase 5b, the developer revokes a running plan. */
+    @Modifying
+    @Query(value = "UPDATE transactions SET status = 'REVOKED', revoked_at = now(), revocation_reason = :reason, "
+            + "updated_at = now() WHERE id = :id AND status = 'ON_PLAN'", nativeQuery = true)
+    int revoke(@Param("id") UUID id, @Param("reason") String reason);
 
     /**
      * Late money. Rows: transaction id, reference, estate name, block name,

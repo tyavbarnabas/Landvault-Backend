@@ -57,6 +57,7 @@ public class FinanceVerificationService {
     private final SettlementAlertSender alerts;
     private final BuyerNotifier buyerNotifier;
     private final PaymentPenaltyRepository penalties;
+    private final RevocationNotices revocationNotices;
 
     private static final List<PaymentPurpose> PLAN_PAYMENTS = List.of(PaymentPurpose.INSTALMENT, PaymentPurpose.BALANCE);
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.UK);
@@ -182,7 +183,7 @@ public class FinanceVerificationService {
                 row.amountDue(), row.currency().name(), row.awaitingSince(), record,
                 payment.isPresent() && matches(payment.get(), row), row.letterApproved(),
                 row.isDeposit() ? "deposit" : "full_price", row.planName(), null, null, null, BigDecimal.ZERO, List.of(),
-                false);
+                false, false);
     }
 
     // ------------------------------------------------------------------ 3b: instalments
@@ -215,16 +216,19 @@ public class FinanceVerificationService {
             throw new PaymentException.PaymentNotConfirmed();
         }
         markVerified(payment, actor);
-        if (pp.row().planWithdrawn()) {
-            // 5a: the buyer already left the plan and has their part back; verifying
-            // only makes the developer's share of this payment payable (decided with the user).
+        if (pp.row().planEnded()) {
+            // 5a/5b: the plan already ended (withdrawn or revoked) and the buyer's part is
+            // owed back; verifying only makes the developer's share of this payment payable.
             auditApi.record(AuditEntryRequest.of(actor, "payment.instalment_verified", "payment", payment.getId(),
                     tenantId, describe(payment, pp.schedule()) + " for " + pp.row().transactionReference()
-                            + " verified by finance after the buyer withdrew; the developer's share is now payable."));
-            return FinanceDecisionDto.of(payment.getTransactionId(), "withdrawn");
+                            + " verified by finance after the plan ended (" + pp.row().planStatus()
+                            + "); the developer's share is now payable."));
+            return FinanceDecisionDto.of(payment.getTransactionId(), pp.row().planStatus());
         }
         PlanProgress after = PlanProgress.of(pp.schedule(),
                 payments.findAllByTransactionIdOrderByCreatedAtAsc(payment.getTransactionId()));
+        // 5b: a notice of revocation ends once the buyer has caught up.
+        revocationNotices.clearIfCaughtUp(pp.row(), after);
         auditApi.record(AuditEntryRequest.of(actor, "payment.instalment_verified", "payment", payment.getId(), tenantId,
                 describe(payment, pp.schedule()) + " for " + pp.row().transactionReference() + " verified by finance ("
                         + after.instalmentsPaid() + " of " + pp.schedule().instalments().size() + " paid)."));
@@ -256,19 +260,19 @@ public class FinanceVerificationService {
         Payment payment = pp.payment();
         payment.setReviewReason("Refund due: finance rejected this payment — " + reason);
         payment.setRefundRequestedAt(Instant.now());
-        if (pp.row().planWithdrawn()) {
-            // 5a: the buyer's part is already owed back; now the developer's share is too.
+        if (pp.row().planEnded()) {
+            // 5a/5b: the buyer's part is already owed back; now the developer's share is too.
             payment.setRefundAmount(null);
-            payment.setRefundReason("The developer's finance rejected this payment after you withdrew — "
+            payment.setRefundReason("The developer's finance rejected this payment after your plan ended — "
                     + "returned in full.");
         }
         payments.save(payment);
         auditApi.record(AuditEntryRequest.of(actor, "payment.refund_due", "payment", payment.getId(), tenantId,
                 describe(payment, pp.schedule()) + " " + payment.getReference()
-                        + (pp.row().planWithdrawn() ? " rejected by finance after the buyer withdrew; flagged for a "
+                        + (pp.row().planEnded() ? " rejected by finance after the plan ended; flagged for a "
                         + "full refund." : " rejected by finance and flagged for refund; the plan continues.")));
         tellBuyer(pp.row(), payment.getAmount(), false, reason, Optional.empty(), false);
-        return FinanceDecisionDto.of(payment.getTransactionId(), pp.row().planWithdrawn() ? "withdrawn" : "on_plan");
+        return FinanceDecisionDto.of(payment.getTransactionId(), pp.row().planStatus());
     }
 
     /**
@@ -305,7 +309,7 @@ public class FinanceVerificationService {
                         .sorted(Comparator.comparing(PaymentPenalty::getInstalmentSequence))
                         .map(l -> new FinanceQueueItemDto.PenaltyLine(l.getInstalmentSequence(), l.getMonthsLate(),
                                 l.getPenaltyPct(), l.getAmount()))
-                        .toList(), row.planWithdrawn());
+                        .toList(), row.planWithdrawn(), row.planRevoked());
     }
 
     private void markVerified(Payment payment, UUID actor) {

@@ -6,6 +6,7 @@ import com.techcomfort.landvaultbackend.common.FeeType;
 import com.techcomfort.landvaultbackend.common.InstalmentPlanCalculator;
 import com.techcomfort.landvaultbackend.common.PageResponse;
 import com.techcomfort.landvaultbackend.common.PageResponses;
+import com.techcomfort.landvaultbackend.common.RevocationTerms;
 import com.techcomfort.landvaultbackend.common.geojson.GeoJsonFeatureCollectionDto;
 import com.techcomfort.landvaultbackend.common.geojson.GeoJsonFeatureDto;
 import com.techcomfort.landvaultbackend.common.geojson.GeoJsonPolygonWriter;
@@ -433,9 +434,10 @@ public class MarketplaceQueryService {
 
         ExitCostsDto.RevocationDto revocation = defaults == null ? null
                 : new ExitCostsDto.RevocationDto(
-                        defaults.getRevocationTrigger(),
-                        defaults.getRevocationNoticeDays(),
-                        defaults.getOnRevocationRefund(),
+                        defaults.getRevocationAfterMonths(),
+                        RevocationTerms.offered(defaults.getRevocationAfterMonths(),
+                                defaults.getRevocationNoticeDays()).noticeDays(),
+                        true,
                         defaults.getDevelopmentDeadlineMonths(),
                         defaults.isTransferRequiresConsent());
 

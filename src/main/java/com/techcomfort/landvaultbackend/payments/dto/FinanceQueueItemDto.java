@@ -54,7 +54,11 @@ public record FinanceQueueItemDto(
         @Schema(description = "Phase 5a: the buyer withdrew from this plan after paying. Verifying releases only "
                 + "your declared share of this payment (the buyer's part is already being returned); rejecting it "
                 + "returns your share to the buyer too.")
-        boolean planWithdrawn
+        boolean planWithdrawn,
+
+        @Schema(description = "Phase 5b: you revoked this plan after the buyer fell behind. As for a withdrawal: "
+                + "verifying releases only your share of this payment; rejecting returns your share to the buyer too.")
+        boolean planRevoked
 ) {
 
     /** A penalty charged on one instalment: the step reached and its amount. */

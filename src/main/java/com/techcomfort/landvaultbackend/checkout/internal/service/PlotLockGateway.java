@@ -94,7 +94,9 @@ public class PlotLockGateway {
      * {@code landvault_release_withdrawn_plot} — the buyer's request has no
      * tenant scope. The function takes only the purchase and checks it is
      * withdrawn; the plot and the status it returns to come from the
-     * purchase's own rows.
+     * purchase's own rows. Phase 5b: a revoked purchase's plot too (changeset
+     * 107) — the developer's own staff could release it under their RLS, but
+     * one path for both keeps the size resync and the status check in one place.
      */
     public boolean releaseWithdrawn(UUID transactionId, String actor) {
         Object result = entityManager

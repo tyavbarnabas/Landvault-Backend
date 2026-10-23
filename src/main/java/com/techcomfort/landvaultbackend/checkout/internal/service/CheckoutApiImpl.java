@@ -12,6 +12,7 @@ import com.techcomfort.landvaultbackend.checkout.FinanceDecision;
 import com.techcomfort.landvaultbackend.checkout.FinanceQueueRow;
 import com.techcomfort.landvaultbackend.checkout.PayableTransaction;
 import com.techcomfort.landvaultbackend.checkout.PendingPurchase;
+import com.techcomfort.landvaultbackend.checkout.PlanRevoked;
 import com.techcomfort.landvaultbackend.checkout.PlanWithdrawn;
 import com.techcomfort.landvaultbackend.checkout.PlotAllocated;
 import com.techcomfort.landvaultbackend.checkout.RunningPlan;
@@ -25,6 +26,7 @@ import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
 import com.techcomfort.landvaultbackend.checkout.internal.repository.ReservationRepository;
 import com.techcomfort.landvaultbackend.checkout.internal.repository.TransactionRepository;
+import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
@@ -53,6 +55,7 @@ public class CheckoutApiImpl implements CheckoutApi {
     private final AllocationLetterGate letterGate;
     private final OfferLetters offerLetters;
     private final TransactionService transactionService;
+    private final EntityManager entityManager;
 
     @Override
     @Transactional(readOnly = true)
@@ -72,7 +75,7 @@ public class CheckoutApiImpl implements CheckoutApi {
                 r[5] == null ? "Plot " + r[6] : "Block " + r[5] + ", Plot " + r[6],
                 (UUID) r[7], (BigDecimal) r[8], Currency.valueOf((String) r[9]), (Instant) r[10],
                 letters.computeIfAbsent((UUID) r[2], letterGate::letterReady),
-                (BigDecimal) r[11], (String) r[12], "WITHDRAWN".equals(r[13]))).toList();
+                (BigDecimal) r[11], (String) r[12], "WITHDRAWN".equals(r[13]), "REVOKED".equals(r[13]))).toList();
     }
 
     @Override
@@ -109,12 +112,56 @@ public class CheckoutApiImpl implements CheckoutApi {
 
     @Override
     @Transactional(readOnly = true)
+    public Optional<PayableTransaction> planForSeller(UUID transactionId, UUID tenantId) {
+        return transactions.findById(transactionId)
+                .filter(t -> t.getPlan() == PaymentPlan.INSTALLMENT)
+                .filter(t -> tenantId.equals(t.getSellerTenantId()))
+                .filter(t -> plotLockGateway.isVisible(t.getPlotId()))
+                .map(CheckoutApiImpl::toPayable);
+    }
+
+    @Override
+    @Transactional
+    public boolean revoke(UUID transactionId, UUID tenantId, UUID actorUserId, String reason) {
+        Optional<Reservation> locked = lockForFinance(transactionId, tenantId);
+        if (locked.isEmpty()) {
+            return false;
+        }
+        Transaction transaction = transactions.findById(transactionId).orElseThrow();
+        if (transactions.revoke(transactionId, reason) != 1) {
+            return false;
+        }
+        // The update is native: reload the copy this request already holds, so
+        // anything read afterwards in it (the response) sees `revoked`.
+        entityManager.refresh(transaction);
+        // From here every step must happen: an exception rolls the revocation back.
+        if (!plotLockGateway.releaseWithdrawn(transactionId, actorUserId.toString())) {
+            throw new IllegalStateException("Plot " + transaction.getPlotId() + " of revoked purchase "
+                    + transactionId + " was not on the plan");
+        }
+        auditApi.record(AuditEntryRequest.of(actorUserId, "transaction.revoked", "transaction", transactionId,
+                tenantId, "Plan " + transaction.getPlanName() + " on " + transaction.getReference()
+                        + " revoked by the developer after the notice ran out; the plot is back on sale. Reason: "
+                        + reason));
+        events.publishEvent(new PlanRevoked(transactionId, transaction.getBuyerUserId(), transaction.getPlotId(),
+                tenantId));
+        return true;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<Instant> revokedAt(UUID transactionId) {
+        return transactions.findById(transactionId).map(Transaction::getRevokedAt);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public Optional<PlanEscrow> escrowOf(UUID transactionId) {
         return transactions.findById(transactionId).filter(t -> t.getPlan() == PaymentPlan.INSTALLMENT)
                 .map(t -> new PlanEscrow(t.getTotalPrice(), new VerifiedSale.Escrow(
                         t.getStatus() == TransactionStatus.VERIFIED, t.getEscrowDeductionPct(),
                         t.getEscrowAppliesTo(), !Boolean.FALSE.equals(t.getPenaltiesRefundable()),
-                        t.getStatus() == TransactionStatus.WITHDRAWN)));
+                        t.getStatus() == TransactionStatus.WITHDRAWN, t.getStatus() == TransactionStatus.REVOKED)));
     }
 
     @Override
@@ -392,7 +439,7 @@ public class CheckoutApiImpl implements CheckoutApi {
                 (BigDecimal) r[6], Currency.valueOf((String) r[7]), (Instant) r[8],
                 !"INSTALLMENT".equals(r[9]) ? null : new VerifiedSale.Escrow("VERIFIED".equals(r[10]),
                         (BigDecimal) r[11], r[12] == null ? null : RefundAppliesTo.valueOf((String) r[12]),
-                        !Boolean.FALSE.equals(r[13]), "WITHDRAWN".equals(r[10])));
+                        !Boolean.FALSE.equals(r[13]), "WITHDRAWN".equals(r[10]), "REVOKED".equals(r[10])));
     }
 
     private static PayableTransaction toPayable(Transaction t) {

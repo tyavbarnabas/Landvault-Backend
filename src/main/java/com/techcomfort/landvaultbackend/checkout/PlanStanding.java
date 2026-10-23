@@ -3,6 +3,7 @@ package com.techcomfort.landvaultbackend.checkout;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -19,8 +20,41 @@ public record PlanStanding(
         List<InstalmentStatus> instalments,
         @Schema(description = "Present while an instalment is overdue or in arrears; null otherwise.",
                 nullable = true)
-        Arrears arrears
+        Arrears arrears,
+        @Schema(description = "Phase 5b: when this plan could be revoked, and any notice given. Null when the plan "
+                + "has no revocation terms or is paid off.", nullable = true)
+        Revocation revocation
 ) {
+
+    public PlanStanding(String status, List<InstalmentStatus> instalments, Arrears arrears) {
+        this(status, instalments, arrears, null);
+    }
+
+    /**
+     * Phase 5b, worked out on every read except the notice, which is a record.
+     *
+     * @param revocableFrom the day the oldest late instalment makes the plan revocable if still unpaid;
+     *                      null while nothing is late
+     * @param revocableNow  that day has come and the instalment is still unpaid (a payment waiting for
+     *                      finance counts as paid)
+     * @param notice        the open notice of revocation, if one has been given
+     */
+    @Schema(name = "PlanRevocationStanding")
+    public record Revocation(
+            @Schema(description = "Revocable once an instalment is unpaid this many whole months past its due date.")
+            int afterMonthsUnpaid,
+            @Schema(description = "The notice the buyer is given before a revocation can be confirmed.")
+            int noticeDays,
+            @Schema(nullable = true) LocalDate revocableFrom,
+            boolean revocableNow,
+            @Schema(nullable = true) Notice notice
+    ) {
+    }
+
+    /** An open notice: the buyer has until {@code deadline} (inclusive, Lagos) to pay what is overdue. */
+    @Schema(name = "RevocationNotice")
+    public record Notice(String reason, Instant givenAt, LocalDate deadline, int instalmentSequence) {
+    }
 
     /**
      * @param status      `upcoming`, `due_today`, `overdue`, `in_arrears`, `awaiting_verification` or `paid`

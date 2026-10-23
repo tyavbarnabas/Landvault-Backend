@@ -69,6 +69,7 @@ public class DocumentService {
     private static final String VALID = "valid";
     private static final String REFUNDED = "refunded";
     private static final String WITHDRAWN = "withdrawn";
+    private static final String REVOKED = "revoked";
 
     private final ReceiptRepository receipts;
     private final AllocationLetterRepository letters;
@@ -275,7 +276,8 @@ public class DocumentService {
 
     /**
      * Phase 5a, never stored: a provisional letter whose buyer withdrew from
-     * the plan no longer holds the plot. A final letter is always valid.
+     * the plan (or, 5b, whose plan was revoked) no longer holds the plot. A
+     * final letter is always valid.
      */
     private String status(AllocationLetter letter) {
         if (letter.getKind() != LetterKind.PROVISIONAL) {
@@ -283,7 +285,7 @@ public class DocumentService {
         }
         String purchase = checkoutApi.transactionForBuyer(letter.getTransactionId(), letter.getBuyerUserId())
                 .map(PayableTransaction::status).orElse(null);
-        return "withdrawn".equals(purchase) ? WITHDRAWN : VALID;
+        return "withdrawn".equals(purchase) ? WITHDRAWN : "revoked".equals(purchase) ? REVOKED : VALID;
     }
 
     private DocumentDto toDto(OfferLetter o, String status, OfferLetterAcceptance acceptance) {

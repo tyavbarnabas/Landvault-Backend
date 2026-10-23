@@ -65,8 +65,8 @@ public record TransactionDto(
 
         @Schema(nullable = true) Integer installmentMonths,
 
-        @Schema(description = "pending_payment, awaiting_finance, on_plan, verified, rejected, abandoned or "
-                + "withdrawn.",
+        @Schema(description = "pending_payment, awaiting_finance, on_plan, verified, rejected, abandoned, "
+                + "withdrawn or revoked.",
                 example = "pending_payment")
         String status,
 
@@ -91,11 +91,18 @@ public record TransactionDto(
 
         @Schema(description = "Once the deposit is verified (`on_plan`, or `verified` when paid off): where the "
                 + "plan stands today — each instalment's status and any penalty, and `arrears` while one is late. "
-                + "Worked out on every read, never stored. Null otherwise.", nullable = true)
+                + "Worked out on every read, never stored. Phase 5b: `revocation` says when the plan could be "
+                + "revoked and carries any notice given. Null otherwise.", nullable = true)
         PlanStanding standing,
 
         @Schema(description = "Phase 5a: when the buyer withdrew from their plan (`withdrawn`). The refund "
                 + "breakdown is at `GET /api/transactions/{id}/withdrawal`. Null otherwise.", nullable = true)
-        Instant withdrawnAt
+        Instant withdrawnAt,
+
+        @Schema(description = "Phase 5b: when the developer revoked the plan (`revoked`), after notice the buyer "
+                + "didn't act on. Settled exactly as a withdrawal: the breakdown is at "
+                + "`GET /api/transactions/{id}/withdrawal`. Null otherwise. A notice still running is "
+                + "`standing.revocation.notice`.", nullable = true)
+        Instant revokedAt
 ) {
 }

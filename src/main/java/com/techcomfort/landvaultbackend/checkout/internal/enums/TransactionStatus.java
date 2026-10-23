@@ -51,7 +51,13 @@ public enum TransactionStatus {
      * Phase 5a: the buyer withdrew from their instalment plan on the declared
      * refund terms; the plot went back on sale. Backend-added.
      */
-    WITHDRAWN("withdrawn");
+    WITHDRAWN("withdrawn"),
+    /**
+     * Phase 5b: the developer revoked the plan after the buyer fell behind and
+     * the notice ran out; the plot went back on sale and the buyer is refunded
+     * as on withdrawal. Backend-added.
+     */
+    REVOKED("revoked");
 
     private final String value;
 

@@ -3,10 +3,14 @@ package com.techcomfort.landvaultbackend.payments.internal.service;
 import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
 import com.techcomfort.landvaultbackend.checkout.PlanStanding;
 import com.techcomfort.landvaultbackend.common.LatePaymentTerms;
+import com.techcomfort.landvaultbackend.common.RevocationTerms;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
 import com.techcomfort.landvaultbackend.payments.internal.domain.PaymentPenalty;
+import com.techcomfort.landvaultbackend.payments.internal.domain.PlanRevocation;
+import com.techcomfort.landvaultbackend.payments.internal.enums.RevocationStatus;
 import com.techcomfort.landvaultbackend.payments.internal.repository.PaymentPenaltyRepository;
 import com.techcomfort.landvaultbackend.payments.internal.repository.PaymentRepository;
+import com.techcomfort.landvaultbackend.payments.internal.repository.PlanRevocationRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,6 +22,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -35,6 +40,7 @@ public class PlanStandings {
 
     private final PaymentRepository payments;
     private final PaymentPenaltyRepository penalties;
+    private final PlanRevocationRepository revocations;
 
     public static LocalDate today() {
         return LocalDate.now(LAGOS);
@@ -59,11 +65,39 @@ public class PlanStandings {
     @Transactional(readOnly = true)
     public Map<UUID, PlanStanding> standingsOf(Map<UUID, PlanSchedule> schedules, LocalDate today) {
         Map<UUID, PlanStanding> out = new HashMap<>();
-        progressOf(schedules).forEach((id, progress) -> out.put(id, standing(progress, today)));
+        Map<UUID, PlanRevocation> notices = schedules.isEmpty() ? Map.of()
+                : revocations.findByTransactionIdInAndStatus(schedules.keySet(), RevocationStatus.NOTICE).stream()
+                .collect(Collectors.toMap(PlanRevocation::getTransactionId, r -> r));
+        progressOf(schedules).forEach((id, progress) -> out.put(id,
+                standing(progress, today, Optional.ofNullable(notices.get(id)))));
         return out;
     }
 
     static PlanStanding standing(PlanProgress progress, LocalDate today) {
+        return standing(progress, today, Optional.empty());
+    }
+
+    static PlanStanding standing(PlanProgress progress, LocalDate today, Optional<PlanRevocation> notice) {
+        PlanStanding standing = arrearsStanding(progress, today);
+        return new PlanStanding(standing.status(), standing.instalments(), standing.arrears(),
+                progress.complete() ? null : revocation(progress, today, notice));
+    }
+
+    /** Phase 5b: when the plan could be revoked, and the open notice. Null with no terms. */
+    private static PlanStanding.Revocation revocation(PlanProgress progress, LocalDate today,
+                                                      Optional<PlanRevocation> notice) {
+        RevocationTerms terms = progress.schedule().lateTerms().revocation();
+        if (terms == null) {
+            return null;
+        }
+        return new PlanStanding.Revocation(terms.afterMonths(), terms.noticeDays(),
+                progress.oldestLate(today).map(s -> terms.revocableFrom(s.instalment().dueDate())).orElse(null),
+                progress.revocationTrigger(today).isPresent(),
+                notice.map(n -> new PlanStanding.Notice(n.getReason(), n.getNoticeGivenAt(), n.getDeadline(),
+                        n.getInstalmentSequence())).orElse(null));
+    }
+
+    private static PlanStanding arrearsStanding(PlanProgress progress, LocalDate today) {
         List<PlanProgress.InstalmentStanding> standings = progress.standings(today);
         List<PlanStanding.InstalmentStatus> instalments = standings.stream().map(s -> new PlanStanding.InstalmentStatus(
                 s.instalment().sequence(), s.instalment().dueDate(), s.instalment().amount(), s.standing().wire(),

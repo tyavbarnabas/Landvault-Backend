@@ -4,6 +4,7 @@ import com.techcomfort.landvaultbackend.common.LatePaymentTerms;
 import com.techcomfort.landvaultbackend.marketplace.EstateEligibility;
 import com.techcomfort.landvaultbackend.marketplace.MarketplaceApi;
 import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
+import com.techcomfort.landvaultbackend.common.RevocationTerms;
 import com.techcomfort.landvaultbackend.marketplace.OfferedPlan;
 import com.techcomfort.landvaultbackend.marketplace.OfferedRefundTerms;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.PlotView;
@@ -67,6 +68,7 @@ public class MarketplaceApiImpl implements MarketplaceApi {
         return defaultTerms.findByEstateIdIn(List.of(estateId)).stream().findFirst()
                 .map(d -> new LatePaymentTerms(penaltyTiers.findByEstateIdInOrderByMonthsLateAsc(List.of(estateId))
                         .stream().map(t -> new LatePaymentTerms.Step(t.getMonthsLate(), t.getPenaltyPct())).toList(),
-                        d.isPenaltiesRefundable()));
+                        d.isPenaltiesRefundable(),
+                        RevocationTerms.offered(d.getRevocationAfterMonths(), d.getRevocationNoticeDays())));
     }
 }

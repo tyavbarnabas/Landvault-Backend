@@ -50,6 +50,24 @@ public interface CheckoutApi {
     /** Phase 5a: when the buyer withdrew from this plan, if they did. */
     Optional<Instant> withdrawnAt(UUID transactionId);
 
+    /**
+     * Phase 5b: this company's instalment purchase, if the caller can see its
+     * plot (row-level security walls another branch's). Any status.
+     */
+    Optional<PayableTransaction> planForSeller(UUID transactionId, UUID tenantId);
+
+    /**
+     * Phase 5b: the developer revokes a running plan — the purchase becomes
+     * {@code revoked} and the plot goes back on sale with its original
+     * availability, together or not at all ({@link PlanRevoked} is published
+     * inside). False, changing nothing, if it isn't this company's or isn't on
+     * its plan. The money is the payments module's to settle.
+     */
+    boolean revoke(UUID transactionId, UUID tenantId, UUID actorUserId, String reason);
+
+    /** Phase 5b: when this plan was revoked, if it was. */
+    Optional<Instant> revokedAt(UUID transactionId);
+
     /** @param landPrice the agreed price, the TOTAL_PRICE basis (plan premium not included) */
     record PlanEscrow(BigDecimal landPrice, VerifiedSale.Escrow escrow) {
     }

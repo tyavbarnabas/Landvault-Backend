@@ -15,11 +15,13 @@ import java.util.UUID;
 public record WithdrawalDto(
         UUID transactionId,
 
-        @Schema(description = "`on_plan`: a quote — nothing has happened yet. `withdrawn`: what was settled.",
+        @Schema(description = "`on_plan`: a quote — nothing has happened yet. `withdrawn`: what was settled. "
+                + "`revoked` (phase 5b): the developer revoked the plan, settled exactly as a withdrawal.",
                 example = "on_plan")
         String status,
 
-        @Schema(nullable = true) Instant withdrawnAt,
+        @Schema(description = "When the plan ended: withdrawn, or (`revoked`) revoked.", nullable = true)
+        Instant withdrawnAt,
 
         @Schema(description = "The refund terms copied onto the purchase when it opened.") Terms terms,
 

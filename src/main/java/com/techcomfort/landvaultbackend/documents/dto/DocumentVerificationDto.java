@@ -12,7 +12,8 @@ import java.time.Instant;
 @Schema(name = "DocumentVerification")
 public record DocumentVerificationDto(
         @Schema(description = "`valid` or `refunded` (the payment was later returned in full); a provisional "
-                + "allocation letter `withdrawn` (the buyer left the plan); for an offer letter `issued`, "
+                + "allocation letter `withdrawn` (the buyer left the plan) or `revoked` (the developer revoked it); "
+                + "for an offer letter `issued`, "
                 + "`accepted` or `lapsed`. Unknown codes are a 404.")
         String status,
         @Schema(description = "`receipt`, `allocation_letter` or `offer_letter`") String documentType,

@@ -26,14 +26,11 @@ public class DefaultTermsView {
     @Column(name = "default_terms_id")
     private UUID defaultTermsId;
 
-    @Column(name = "revocation_trigger")
-    private String revocationTrigger;
-
     @Column(name = "revocation_notice_days")
     private Integer revocationNoticeDays;
 
-    @Column(name = "on_revocation_refund")
-    private String onRevocationRefund;
+    @Column(name = "revocation_after_months")
+    private Integer revocationAfterMonths;
 
     @Column(name = "development_deadline_months")
     private Integer developmentDeadlineMonths;

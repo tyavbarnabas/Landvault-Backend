@@ -62,8 +62,8 @@ final class PayoutTranches {
         });
         BigDecimal paid = sum(verified.stream().map(Payment::getAmount).toList());
         BigDecimal held = paid.subtract(sum(shares.values()));
-        if (escrow.withdrawn()) {
-            // 5a: what was held goes back to the buyer, never to the developer.
+        if (escrow.ended()) {
+            // 5a/5b: withdrawn or revoked — what was held goes back to the buyer, never to the developer.
             // Still held for them: their share of a payment finance hasn't
             // verified yet — paid out once it is (decided with the user).
             Map<Payment, BigDecimal> withAwaiting = shares(escrow, sale.totalPrice(), countedOnWithdrawal(payments));

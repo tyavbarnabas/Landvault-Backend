@@ -2,6 +2,7 @@ package com.techcomfort.landvaultbackend.portfolio.internal.service;
 
 import com.techcomfort.landvaultbackend.audit.AuditApi;
 import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
+import com.techcomfort.landvaultbackend.checkout.PlanRevoked;
 import com.techcomfort.landvaultbackend.checkout.PlanWithdrawn;
 import com.techcomfort.landvaultbackend.checkout.PlotAllocated;
 import com.techcomfort.landvaultbackend.portfolio.internal.domain.OwnedPlot;
@@ -83,6 +84,22 @@ public class PortfolioAllocationListener {
                 owned.getId(), event.sellerTenantId(), "Buyer " + event.buyerUserId() + " withdrew from the plan for plot "
                         + event.plotId() + " (sale " + event.transactionId() + ")."));
         log.info("Owned plot {} withdrawn for sale {}", owned.getId(), event.transactionId());
+    }
+
+    /** Phase 5b: the developer revoked the plan — the record stays as history, no longer the buyer's. */
+    @EventListener
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void on(PlanRevoked event) {
+        OwnedPlot owned = ownedPlots.findByTransactionIdAndBuyerUserId(event.transactionId(), event.buyerUserId())
+                .filter(o -> o.getStatus() == OwnedPlotStatus.INSTALLMENT_ACTIVE)
+                .orElseThrow(() -> new IllegalStateException("No active plan to revoke for sale "
+                        + event.transactionId()));
+        owned.setStatus(OwnedPlotStatus.REVOKED);
+        ownedPlots.saveAndFlush(owned);
+        auditApi.record(AuditEntryRequest.of(null, "portfolio.plan_revoked", "owned_plot", owned.getId(),
+                event.sellerTenantId(), "The developer revoked the plan for plot " + event.plotId() + " (sale "
+                        + event.transactionId() + "); no longer buyer " + event.buyerUserId() + "'s."));
+        log.info("Owned plot {} revoked for sale {}", owned.getId(), event.transactionId());
     }
 
     /** 3b: the last instalment is verified — the plan's record is now owned outright. */

@@ -4,6 +4,7 @@ import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.DueTrigger;
 import com.techcomfort.landvaultbackend.common.FeeType;
 import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
+import com.techcomfort.landvaultbackend.common.RevocationTerms;
 import com.techcomfort.landvaultbackend.inventory.EstateDocumentFacts;
 import org.junit.jupiter.api.Test;
 
@@ -35,8 +36,7 @@ class DisclosureClausesTest {
                 fixed(FeeType.FACILITY_MANAGEMENT, "150000", DueTrigger.ANNUAL, false)));
         var refund = new EstateDocumentFacts.RefundTerms(1, new BigDecimal("20.00"), 90, RefundAppliesTo.TOTAL_PRICE,
                 List.of(FeeType.APPLICATION));
-        var terms = new EstateDocumentFacts.DefaultTerms(1, "Failure to begin development within 24 months.", 30,
-                "Money paid is refunded less the 20% deduction.", 24, true, List.of());
+        var terms = new EstateDocumentFacts.DefaultTerms(1, new RevocationTerms(6, 30), 24, true, List.of());
 
         assertThat(DisclosureClauses.of(facts(fees, refund, terms))).containsExactly(
                 "That an application fee of ₦10,000.00 is payable on application, and is not refundable.",
@@ -44,7 +44,7 @@ class DisclosureClausesTest {
                 "That a facility management fee of ₦150,000.00 is payable every year for as long as the allottee holds the plot.",
                 "That if the allottee withdraws, 20% of the total price is deducted and the balance refunded within 90 days; the application fee is not refunded.",
                 "That the allottee shall begin development within 24 months of allocation.",
-                "That the allocation may be revoked for failure to begin development within 24 months, after 30 days' written notice. If it is, money paid is refunded less the 20% deduction.",
+                "That, for a plot bought on an instalment plan, the allocation may be revoked if an instalment remains unpaid 6 months after its due date, after at least 30 days' written notice, during which paying what is overdue stops it. If it is revoked, the allottee is refunded exactly what withdrawing from the plan would return.",
                 "That the allottee may not sell, transfer or assign the plot without the developer's written consent.",
                 DisclosureClauses.PAY_ONLY_THROUGH_HOMETRUE);
     }

@@ -438,9 +438,12 @@ class FullCostDisclosureUnderRlsIT {
                 .isTrue();
         assertThat(exit.ifYouFallBehind()).isNotEmpty();
         assertThat(exit.ifYouWithdraw().totalLoss().signum()).isPositive();
-        assertThat(exit.revocation().onRevocationRefund())
-                .as("and what happens to money already paid is stated, which neither real letter did")
-                .isNotBlank();
+        assertThat(exit.revocation().afterMonthsUnpaid())
+                .as("when the land can be taken back is a number the buyer reads before paying (phase 5b)")
+                .isEqualTo(12);
+        assertThat(exit.revocation().refundedAsOnWithdrawal())
+                .as("and what happens to money already paid is stated: what a withdrawal returns")
+                .isTrue();
         assertThat(exit.basisLandPrice())
                 .as("the figures name the tier they were computed against")
                 .isEqualByComparingTo(TOP_RANK_LAND);
@@ -633,9 +636,8 @@ class FullCostDisclosureUnderRlsIT {
         ResponseEntity<String> defaults = restTemplate.exchange(
                 "/api/portal/estates/" + estateId + "/default-terms", HttpMethod.PUT,
                 entity(developer.token(), """
-                        {"revocationTrigger":"Payment more than 12 months overdue.",
+                        {"revocationAfterMonths":12,
                          "revocationNoticeDays":30,
-                         "onRevocationRefund":"Payments to date are refunded less a 20% administrative charge.",
                          "developmentDeadlineMonths":3,
                          "transferRequiresConsent":true,
                          "penaltyTiers":[{"monthsLate":3,"penaltyPct":5.00},

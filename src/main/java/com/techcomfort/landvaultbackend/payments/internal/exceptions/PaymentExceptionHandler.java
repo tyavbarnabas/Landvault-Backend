@@ -9,6 +9,7 @@ import com.techcomfort.landvaultbackend.payments.internal.controllers.PaystackWe
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalFinanceController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalLatePaymentController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalPlanController;
+import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalRevocationController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.WithdrawalController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalPayoutController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalSettlementController;
@@ -28,7 +29,8 @@ import java.util.stream.Collectors;
 @RestControllerAdvice(assignableTypes = {PaymentController.class, PaystackWebhookController.class,
         PortalFinanceController.class, PortalSettlementController.class, AdminSettlementAccountController.class,
         AdminPayoutController.class, PortalPayoutController.class, AdminRefundController.class,
-        PortalLatePaymentController.class, PortalPlanController.class, WithdrawalController.class})
+        PortalLatePaymentController.class, PortalPlanController.class, WithdrawalController.class,
+        PortalRevocationController.class})
 public class PaymentExceptionHandler {
 
     @ExceptionHandler(PaymentException.class)
@@ -74,6 +76,15 @@ public class PaymentExceptionHandler {
             case PaymentException.SaleAlreadyPaid e -> body(HttpStatus.CONFLICT, e, "SALE_ALREADY_PAID");
             case PaymentException.HeldInEscrow e -> body(HttpStatus.CONFLICT, e, "HELD_IN_ESCROW");
             case PaymentException.WithdrawnPlanPaid e -> body(HttpStatus.CONFLICT, e, "WITHDRAWN_PLAN_PAID");
+            case PaymentException.RevokedPlanPaid e -> body(HttpStatus.CONFLICT, e, "REVOKED_PLAN_PAID");
+            case PaymentException.PlanNotRevocable e -> body(HttpStatus.CONFLICT, e, "PLAN_NOT_REVOCABLE");
+            case PaymentException.RevocationTermsMissing e -> body(HttpStatus.CONFLICT, e, "REVOCATION_TERMS_MISSING");
+            case PaymentException.RevocationNotDue e -> body(HttpStatus.CONFLICT, e, "REVOCATION_NOT_DUE");
+            case PaymentException.RevocationAlreadyNotified e -> body(HttpStatus.CONFLICT, e, "REVOCATION_ALREADY_NOTIFIED");
+            case PaymentException.NoOpenRevocation e -> body(HttpStatus.CONFLICT, e, "NO_OPEN_REVOCATION");
+            case PaymentException.RevocationNoticeRunning e -> body(HttpStatus.CONFLICT, e, "REVOCATION_NOTICE_RUNNING");
+            case PaymentException.RevocationRequiresCompanyWideScope e ->
+                    body(HttpStatus.FORBIDDEN, e, "REVOCATION_REQUIRES_COMPANY_WIDE_SCOPE");
             case PaymentException.PayoutInProgress e -> body(HttpStatus.CONFLICT, e, "PAYOUT_IN_PROGRESS");
             case PaymentException.CompanyNotActive e -> body(HttpStatus.CONFLICT, e, "COMPANY_NOT_ACTIVE");
             case PaymentException.NoApprovedPayoutAccount e -> body(HttpStatus.CONFLICT, e, "NO_APPROVED_PAYOUT_ACCOUNT");

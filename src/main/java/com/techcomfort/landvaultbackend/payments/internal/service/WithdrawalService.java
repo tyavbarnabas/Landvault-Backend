@@ -54,13 +54,14 @@ public class WithdrawalService {
     private final AuditApi auditApi;
     private final SettlementAlertSender alerts;
     private final BuyerNotifier buyerNotifier;
+    private final RevocationNotices notices;
 
     /** The quote while the plan runs; what was settled once withdrawn. The buyer's own purchase only. */
     @Transactional(readOnly = true)
     public WithdrawalDto get(UUID transactionId) {
         PayableTransaction purchase = ownPurchase(transactionId);
         CheckoutApi.PlanEscrow escrow = escrowOf(purchase);
-        if (purchase.isWithdrawn()) {
+        if (purchase.isWithdrawn() || purchase.isRevoked()) {
             return settled(purchase, escrow);
         }
         return quote(purchase, escrow, payments.findAllByTransactionIdOrderByCreatedAtAsc(transactionId)).dto();
@@ -82,6 +83,23 @@ public class WithdrawalService {
             throw new PaymentException.PlanNotWithdrawable(purchase.status());
         }
         Instant now = Instant.now();
+        flagRefunds(purchase, quote, purchase.buyerUserId(), now, "You withdrew from your plan", "the buyer withdrew");
+        // 5b: a notice of revocation running at the time is overtaken.
+        notices.closeOnWithdrawal(transactionId);
+        log.info("Buyer {} withdrew from plan {}: refund {}, developer keeps {}", purchase.buyerUserId(),
+                transactionId, quote.refund(), quote.developerKeeps());
+        tell(purchase, quote, why);
+        return quote.withdrawn(now).dto();
+    }
+
+    /**
+     * Each counted payment is owed back less the developer's share — the same
+     * for a withdrawal and (5b) a revocation.
+     *
+     * @param why    what the buyer reads, e.g. "You withdrew from your plan"
+     * @param whyLog what the audit entry says happened, e.g. "the buyer withdrew"
+     */
+    void flagRefunds(PayableTransaction purchase, Quote quote, UUID actor, Instant now, String why, String whyLog) {
         quote.shares().forEach((payment, share) -> {
             BigDecimal back = payment.getAmount().subtract(share);
             if (back.signum() <= 0) {
@@ -89,24 +107,41 @@ public class WithdrawalService {
             }
             payment.setRefundAmount(back);
             payment.setRefundRequestedAt(now);
-            payment.setRefundReason("You withdrew from your plan: returned on the declared terms"
+            payment.setRefundReason(why + ": returned on the declared terms"
                     + (share.signum() > 0 ? "; the developer keeps NGN " + share.toPlainString() + "." : "."));
             payments.save(payment);
-            auditApi.record(AuditEntryRequest.of(purchase.buyerUserId(), "payment.refund_due", "payment",
+            auditApi.record(AuditEntryRequest.of(actor, "payment.refund_due", "payment",
                     payment.getId(), purchase.sellerTenantId(), "Payment " + payment.getReference() + ": NGN "
-                            + back.toPlainString() + " owed back after the buyer withdrew; the developer keeps NGN "
+                            + back.toPlainString() + " owed back after " + whyLog + "; the developer keeps NGN "
                             + share.toPlainString() + "."));
         });
-        log.info("Buyer {} withdrew from plan {}: refund {}, developer keeps {}", purchase.buyerUserId(),
-                transactionId, quote.refund(), quote.developerKeeps());
-        tell(purchase, quote, why);
-        return quote.withdrawn(now).dto();
+    }
+
+    /**
+     * 5b: what a running plan would return if it ended now — the figures a
+     * revocation settles on. The successful payments are locked first, as for
+     * a withdrawal.
+     */
+    Quote quoteToEnd(PayableTransaction purchase) {
+        CheckoutApi.PlanEscrow escrow = escrowOf(purchase);
+        payments.findLockedByTransactionIdAndStatus(purchase.id(), PaymentStatus.SUCCEEDED);
+        return quote(purchase, escrow, payments.findAllByTransactionIdOrderByCreatedAtAsc(purchase.id()));
+    }
+
+    /** 5b: what an ended plan settled on, as recorded on its payments. */
+    WithdrawalDto settledRecord(PayableTransaction purchase) {
+        return settled(purchase, escrowOf(purchase));
+    }
+
+    /** 5b: the same figures, read only — for the developer's screen and the notice email. */
+    Quote preview(PayableTransaction purchase) {
+        return quote(purchase, escrowOf(purchase), payments.findAllByTransactionIdOrderByCreatedAtAsc(purchase.id()));
     }
 
     // --- the figures ---
 
     /** @param shares what the developer keeps of each payment counted, in settlement order */
-    private record Quote(UUID transactionId, String status, Instant withdrawnAt, VerifiedSale.Escrow escrow,
+    record Quote(UUID transactionId, String status, Instant withdrawnAt, VerifiedSale.Escrow escrow,
                          Map<Payment, BigDecimal> shares, BigDecimal paid, BigDecimal refund,
                          BigDecimal developerKeeps, BigDecimal awaitingFinanceShare, String currency) {
 
@@ -157,8 +192,9 @@ public class WithdrawalService {
         }).toList();
         BigDecimal paid = sum(lines.stream().map(WithdrawalDto.Line::amount).toList());
         BigDecimal refund = sum(lines.stream().map(WithdrawalDto.Line::refund).toList());
-        Instant withdrawnAt = checkoutApi.withdrawnAt(purchase.id()).orElse(null);
-        return new WithdrawalDto(purchase.id(), "withdrawn", withdrawnAt, terms(escrow.escrow()), paid, refund,
+        Instant endedAt = (purchase.isRevoked() ? checkoutApi.revokedAt(purchase.id())
+                : checkoutApi.withdrawnAt(purchase.id())).orElse(null);
+        return new WithdrawalDto(purchase.id(), purchase.status(), endedAt, terms(escrow.escrow()), paid, refund,
                 paid.subtract(refund), purchase.currency().name(), lines);
     }
 

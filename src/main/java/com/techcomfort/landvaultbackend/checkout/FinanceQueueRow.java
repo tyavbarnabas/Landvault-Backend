@@ -25,14 +25,26 @@ public record FinanceQueueRow(
         /** The instalment plan's name, or null when paying in full. */
         String planName,
         /** Phase 5a: the buyer withdrew from this plan; a payment may still await finance. */
-        boolean planWithdrawn
+        boolean planWithdrawn,
+        /** Phase 5b: the developer revoked this plan; a payment may still await finance. */
+        boolean planRevoked
 ) {
 
     public FinanceQueueRow(UUID transactionId, String transactionReference, UUID estateId, String estateName,
                            UUID plotId, String plotLabel, UUID buyerUserId, BigDecimal totalPrice, Currency currency,
                            Instant awaitingSince, boolean letterApproved, BigDecimal amountDue, String planName) {
         this(transactionId, transactionReference, estateId, estateName, plotId, plotLabel, buyerUserId, totalPrice,
-                currency, awaitingSince, letterApproved, amountDue, planName, false);
+                currency, awaitingSince, letterApproved, amountDue, planName, false, false);
+    }
+
+    /** The plan ended early, withdrawn or revoked: the buyer's part of any payment is already owed back. */
+    public boolean planEnded() {
+        return planWithdrawn || planRevoked;
+    }
+
+    /** The purchase's wire status after a plan payment decision. */
+    public String planStatus() {
+        return planRevoked ? "revoked" : planWithdrawn ? "withdrawn" : "on_plan";
     }
 
     /** True when the payment being verified is an instalment plan's deposit, not the full price. */
