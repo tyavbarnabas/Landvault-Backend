@@ -12,6 +12,7 @@ import com.techcomfort.landvaultbackend.checkout.FinanceDecision;
 import com.techcomfort.landvaultbackend.checkout.FinanceQueueRow;
 import com.techcomfort.landvaultbackend.checkout.PayableTransaction;
 import com.techcomfort.landvaultbackend.checkout.PendingPurchase;
+import com.techcomfort.landvaultbackend.checkout.PlanWithdrawn;
 import com.techcomfort.landvaultbackend.checkout.PlotAllocated;
 import com.techcomfort.landvaultbackend.checkout.RunningPlan;
 import com.techcomfort.landvaultbackend.checkout.VerifiedSale;
@@ -71,7 +72,49 @@ public class CheckoutApiImpl implements CheckoutApi {
                 r[5] == null ? "Plot " + r[6] : "Block " + r[5] + ", Plot " + r[6],
                 (UUID) r[7], (BigDecimal) r[8], Currency.valueOf((String) r[9]), (Instant) r[10],
                 letters.computeIfAbsent((UUID) r[2], letterGate::letterReady),
-                (BigDecimal) r[11], (String) r[12])).toList();
+                (BigDecimal) r[11], (String) r[12], "WITHDRAWN".equals(r[13]))).toList();
+    }
+
+    @Override
+    @Transactional
+    public boolean withdraw(UUID transactionId, UUID buyerUserId, String reason) {
+        Transaction transaction = transactions.findByIdAndBuyerUserId(transactionId, buyerUserId).orElse(null);
+        if (transaction == null) {
+            return false;
+        }
+        // The reservation's row lock first, like every other change to this purchase.
+        reservations.findLockedById(transaction.getReservationId()).orElseThrow();
+        if (transactions.withdraw(transactionId, reason) != 1) {
+            return false;
+        }
+        // From here every step must happen: an exception rolls the withdrawal back.
+        if (!plotLockGateway.releaseWithdrawn(transactionId, buyerUserId.toString())) {
+            throw new IllegalStateException("Plot " + transaction.getPlotId() + " of withdrawn purchase "
+                    + transactionId + " was not on the plan");
+        }
+        auditApi.record(AuditEntryRequest.of(buyerUserId, "transaction.withdrawn", "transaction", transactionId,
+                transaction.getSellerTenantId(), "Buyer withdrew from plan " + transaction.getPlanName() + " on "
+                        + transaction.getReference() + "; plot " + transaction.getPlotId() + " is back on sale."
+                        + (reason == null ? "" : " Reason given: " + reason)));
+        events.publishEvent(new PlanWithdrawn(transactionId, buyerUserId, transaction.getPlotId(),
+                transaction.getSellerTenantId()));
+        return true;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<Instant> withdrawnAt(UUID transactionId) {
+        return transactions.findById(transactionId).map(Transaction::getWithdrawnAt);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<PlanEscrow> escrowOf(UUID transactionId) {
+        return transactions.findById(transactionId).filter(t -> t.getPlan() == PaymentPlan.INSTALLMENT)
+                .map(t -> new PlanEscrow(t.getTotalPrice(), new VerifiedSale.Escrow(
+                        t.getStatus() == TransactionStatus.VERIFIED, t.getEscrowDeductionPct(),
+                        t.getEscrowAppliesTo(), !Boolean.FALSE.equals(t.getPenaltiesRefundable()),
+                        t.getStatus() == TransactionStatus.WITHDRAWN)));
     }
 
     @Override
@@ -349,7 +392,7 @@ public class CheckoutApiImpl implements CheckoutApi {
                 (BigDecimal) r[6], Currency.valueOf((String) r[7]), (Instant) r[8],
                 !"INSTALLMENT".equals(r[9]) ? null : new VerifiedSale.Escrow("VERIFIED".equals(r[10]),
                         (BigDecimal) r[11], r[12] == null ? null : RefundAppliesTo.valueOf((String) r[12]),
-                        !Boolean.FALSE.equals(r[13])));
+                        !Boolean.FALSE.equals(r[13]), "WITHDRAWN".equals(r[10])));
     }
 
     private static PayableTransaction toPayable(Transaction t) {

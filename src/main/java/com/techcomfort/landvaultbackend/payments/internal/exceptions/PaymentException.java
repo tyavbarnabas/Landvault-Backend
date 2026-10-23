@@ -251,6 +251,14 @@ public abstract class PaymentException extends RuntimeException {
     }
 
     /** 3c: an instalment plan still running, with every share owed so far paid; the rest waits in escrow. */
+    /** 5a: the buyer withdrew; the developer's verified shares are all paid out. */
+    public static class WithdrawnPlanPaid extends PaymentException {
+        public WithdrawnPlanPaid() {
+            super("The buyer withdrew from this plan, and every share owed to the developer so far has been paid out. "
+                    + "A share of a payment their finance hasn't verified is paid once they verify it.");
+        }
+    }
+
     public static class HeldInEscrow extends PaymentException {
         public HeldInEscrow() {
             super("Everything owed on this purchase so far has been paid out. The rest is held in escrow until "
@@ -301,7 +309,8 @@ public abstract class PaymentException extends RuntimeException {
     public static class RefundOutcomeUnknown extends PaymentException {
         public RefundOutcomeUnknown(String detail) {
             super("We don't know yet whether Paystack accepted this refund — it is kept as 'sending'. " + detail
-                    + " Try again later; Paystack never refunds more than was paid.");
+                    + " Try again later: HomeTrue first asks Paystack whether it already has this refund, so it is "
+                    + "never sent twice.");
         }
     }
 
@@ -343,6 +352,21 @@ public abstract class PaymentException extends RuntimeException {
     public static class OwnPurchase extends PaymentException {
         public OwnPurchase() {
             super("You can't decide on your own purchase. Another finance officer or director must.");
+        }
+    }
+
+    /** 5a: only a plan the buyer is on (deposit verified, not paid off) can be withdrawn from. */
+    public static class PlanNotWithdrawable extends PaymentException {
+        public PlanNotWithdrawable(String status) {
+            super("Only a running instalment plan can be withdrawn from (this purchase is " + status + ").");
+        }
+    }
+
+    /** 5a: the figures moved since the buyer saw them; they confirm again on the new ones. */
+    public static class WithdrawalQuoteChanged extends PaymentException {
+        public WithdrawalQuoteChanged() {
+            super("Your refund figures changed since you looked at them. Check the new figures and confirm again. "
+                    + "Nothing was changed.");
         }
     }
 }

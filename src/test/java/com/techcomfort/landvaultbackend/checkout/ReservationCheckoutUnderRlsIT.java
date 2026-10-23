@@ -43,6 +43,7 @@ import com.techcomfort.landvaultbackend.tenancy.dto.CreateTenantRequest;
 import com.techcomfort.landvaultbackend.tenancy.dto.PrimaryContactDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.SocialsDto;
 import com.techcomfort.landvaultbackend.tenancy.dto.TenantDetailDto;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import com.techcomfort.landvaultbackend.payments.internal.exceptions.PaymentException;
 import com.techcomfort.landvaultbackend.payments.internal.paystack.PaystackAmounts;
@@ -106,6 +107,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.clearInvocations;
@@ -2455,6 +2457,180 @@ class ReservationCheckoutUnderRlsIT {
         instalmentReminders.run(today.plusDays(30));
         assertThat(queryString("SELECT count(*) FROM instalment_reminders WHERE transaction_id = '" + purchase.id()
                 + "' AND instalment_sequence = 1")).as("awaiting finance: never reminded as late").isEqualTo("3");
+    }
+
+    // --- instalment plans, phase 5a: withdrawal (changeset 106) ---
+
+    /**
+     * 20% of what is paid, the short plan: the deposit (₦6.6M) is verified, the
+     * first instalment (₦7.7M) is confirmed by Paystack but finance hasn't
+     * verified it. Withdrawing returns 80% of both at once; the developer keeps
+     * ₦1.32M of the deposit (paid out as usual) and ₦1.54M of the instalment,
+     * held until their finance verifies it. Nobody approves the withdrawal.
+     */
+    @Test
+    void aBuyerWithdrawsOnTheDeclaredTermsAndTheDevelopersShareWaitsForFinance() {
+        declareRefundTerms("{\"deductionPct\":20.00,\"processingDays\":90,\"appliesTo\":\"amount_paid\"}");
+        String before = plotStatus(plotId);
+        TransactionDto purchase = onPlanPurchase(SHORT_PLAN);
+        String deposit = queryString("SELECT reference FROM payments WHERE transaction_id = '" + purchase.id()
+                + "' AND purpose = 'DEPOSIT'");
+        String first = payPlan(purchase, false);
+        paystackSays(first, "success", 770_000_000L, "NGN", "Approved");
+        confirm(buyer, first);
+        String withdrawal = "/api/transactions/" + purchase.id() + "/withdrawal";
+
+        String quote = get(withdrawal, buyer.token(), String.class).getBody();
+        assertThat(quote).contains("\"status\":\"on_plan\"", "\"paid\":14300000", "\"refund\":11440000",
+                "\"developerKeeps\":2860000", "\"appliesTo\":\"amount_paid\"", "\"awaitingFinance\":true");
+        assertThat(plotStatus(plotId)).as("a quote changes nothing").isEqualTo("ON_PLAN");
+        assertThat(get(withdrawal, verifiedBuyer().token(), String.class).getStatusCode())
+                .as("someone else's purchase").isEqualTo(HttpStatus.NOT_FOUND);
+
+        ResponseEntity<String> stale = restTemplate.exchange(withdrawal, HttpMethod.POST,
+                entity(buyer.token(), "{\"refund\":11000000}"), String.class);
+        assertThat(stale.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(stale.getBody()).contains("WITHDRAWAL_QUOTE_CHANGED");
+        assertThat(plotStatus(plotId)).isEqualTo("ON_PLAN");
+
+        // The developer's Executive Directors are emailed; only active accounts receive mail.
+        execute("UPDATE users SET status = 'ACTIVE' WHERE tenant_id = '" + seller.id() + "'");
+        ResponseEntity<String> done = restTemplate.exchange(withdrawal, HttpMethod.POST,
+                entity(buyer.token(), "{\"refund\":11440000.00,\"reason\":\"Moving abroad\"}"), String.class);
+        assertThat(done.getStatusCode()).as(done.getBody()).isEqualTo(HttpStatus.OK);
+        assertThat(done.getBody()).contains("\"status\":\"withdrawn\"", "\"refund\":11440000");
+
+        assertThat(queryString("SELECT status || '/' || withdrawal_reason FROM transactions WHERE id = '"
+                + purchase.id() + "'")).isEqualTo("WITHDRAWN/Moving abroad");
+        assertThat(plotStatus(plotId)).as("back on sale as it was").isEqualTo(before);
+        assertThat(queryString("SELECT status FROM owned_plots WHERE transaction_id = '" + purchase.id() + "'"))
+                .isEqualTo("WITHDRAWN");
+        assertThat(queryString("SELECT string_agg(purpose || '/' || refund_amount, ',' ORDER BY created_at) "
+                + "FROM payments WHERE transaction_id = '" + purchase.id() + "' AND refund_requested_at IS NOT NULL"))
+                .isEqualTo("DEPOSIT/5280000.00,INSTALMENT/6160000.00");
+        assertThat(documents(buyer).items()).filteredOn(d -> "provisional_allocation_letter".equals(d.type()))
+                .singleElement().satisfies(d -> assertThat(d.status()).isEqualTo("withdrawn"));
+        assertThat(portfolio(buyer).items().getFirst().status()).isEqualTo("withdrawn");
+        verify(alerts, atLeastOnce()).planWithdrawn(argThat(a -> !a.toDeveloper()));
+        verify(alerts, atLeastOnce()).planWithdrawn(argThat(a -> a.toDeveloper() && "1540000.00".equals(a.awaitingFinance())));
+
+        String admin = payoutAdmin(true);
+        assertThat(get("/api/admin/refunds/due", admin, String.class).getBody())
+                .contains(deposit, "\"amount\":5280000", first, "\"amount\":6160000");
+        approvedPayoutAccount(seller.id(), "RCP_seller");
+        assertThat(readyFor(admin, purchase)).contains("\"trancheAmount\":1320000", "\"heldInEscrow\":1540000");
+
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        assertThat(get("/api/portal/finance/transactions", officer, String.class).getBody())
+                .contains(first, "\"planWithdrawn\":true");
+        assertThat(financeAction(officer, purchase.id(), "verify", null).getBody()).contains("\"status\":\"withdrawn\"");
+        assertThat(readyFor(admin, purchase))
+                .as("the instalment's share is now the developer's too; nothing is released")
+                .contains("\"amountOwed\":2860000", "\"heldInEscrow\":0").doesNotContain("\"tranche\":\"release\"");
+
+        ResponseEntity<String> again = restTemplate.exchange(withdrawal, HttpMethod.POST,
+                entity(buyer.token(), "{\"refund\":11440000}"), String.class);
+        assertThat(again.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(again.getBody()).contains("PLAN_NOT_WITHDRAWABLE");
+        assertThat(pay(buyer, purchase.id()).getBody()).contains("TRANSACTION_NOT_PAYABLE");
+        assertThat(get(withdrawal, buyer.token(), String.class).getBody())
+                .as("the settled record").contains("\"status\":\"withdrawn\"", "\"refund\":11440000");
+    }
+
+    /**
+     * After a withdrawal, finance rejects the payment that was waiting for
+     * them: the developer's share of it goes back to the buyer too — a second
+     * refund for that payment, for exactly what is left. A resend after a lost
+     * reply asks Paystack first, so a part is never paid twice.
+     */
+    @Test
+    void financeRejectingAPaymentAfterAWithdrawalReturnsTheDevelopersShareToo() {
+        declareRefundTerms("{\"deductionPct\":20.00,\"processingDays\":90,\"appliesTo\":\"amount_paid\"}");
+        TransactionDto purchase = onPlanPurchase(SHORT_PLAN);
+        String first = payPlan(purchase, false);
+        paystackSays(first, "success", 770_000_000L, "NGN", "Approved");
+        confirm(buyer, first);
+        assertThat(restTemplate.exchange("/api/transactions/" + purchase.id() + "/withdrawal", HttpMethod.POST,
+                entity(buyer.token(), "{\"refund\":11440000}"), String.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+        String admin = payoutAdmin(true);
+
+        when(paystack.createRefund(eq(first), anyLong(), any(), any()))
+                .thenThrow(new PaymentException.GatewayUnavailable());
+        assertThat(startRefund(admin, first).getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        when(paystack.findRefundByMerchantNote(anyString(), any()))
+                .thenReturn(Optional.of(new PaystackClient.Refund("R9", "processed", null, null, null)));
+        assertThat(startRefund(admin, first).getBody()).contains("\"status\":\"processed\"", "\"amount\":6160000");
+        verify(paystack, times(1)).createRefund(eq(first), eq(616_000_000L), any(), any());
+        assertThat(get("/api/admin/refunds/due", admin, String.class).getBody()).doesNotContain(first);
+
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        assertThat(financeAction(officer, purchase.id(), "reject", "{\"reason\":\"Not our account\"}").getBody())
+                .contains("\"status\":\"withdrawn\"");
+        assertThat(get("/api/admin/refunds/due", admin, String.class).getBody())
+                .as("only the developer's share is left to return").contains(first, "\"amount\":1540000");
+        when(paystack.createRefund(eq(first), eq(154_000_000L), any(), any()))
+                .thenReturn(new PaystackClient.Refund("R10", "pending", null, null, null));
+        assertThat(startRefund(admin, first).getBody()).contains("\"amount\":1540000");
+        assertThat(get("/api/transactions/" + purchase.id() + "/withdrawal", buyer.token(), String.class).getBody())
+                .contains("\"refund\":12980000", "\"developerKeeps\":1320000");
+        assertThat(readyFor(admin, purchase)).as("the rejected share is no longer held for the developer")
+                .contains("\"heldInEscrow\":0");
+    }
+
+    /**
+     * The buyer's part of a withdrawn payment is on its way when finance
+     * rejects that payment. When that part completes, the payment is still
+     * owed the developer's share, so it stays flagged: it must not drop out
+     * of the refunds due or reappear in finance's queue to be verified.
+     */
+    @Test
+    void aPartRefundCompletingKeepsAPaymentFlaggedWhileMoreIsOwed() {
+        declareRefundTerms("{\"deductionPct\":20.00,\"processingDays\":90,\"appliesTo\":\"amount_paid\"}");
+        TransactionDto purchase = onPlanPurchase(SHORT_PLAN);
+        String first = payPlan(purchase, false);
+        paystackSays(first, "success", 770_000_000L, "NGN", "Approved");
+        confirm(buyer, first);
+        assertThat(restTemplate.exchange("/api/transactions/" + purchase.id() + "/withdrawal", HttpMethod.POST,
+                entity(buyer.token(), "{\"refund\":11440000}"), String.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+        String admin = payoutAdmin(true);
+        when(paystack.createRefund(eq(first), anyLong(), any(), any()))
+                .thenReturn(new PaystackClient.Refund("R11", "pending", null, null, null));
+        assertThat(startRefund(admin, first).getBody()).contains("\"amount\":6160000");
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        assertThat(financeAction(officer, purchase.id(), "reject", "{\"reason\":\"Not our account\"}").getBody())
+                .contains("\"status\":\"withdrawn\"");
+
+        when(paystack.fetchRefund("R11")).thenReturn(new PaystackClient.Refund("R11", "processed", null,
+                Instant.parse("2026-10-23T09:00:00Z"), null));
+        String body = "{\"event\":\"refund.processed\",\"data\":{\"status\":\"processed\","
+                + "\"transaction_reference\":\"" + first + "\",\"amount\":616000000}}";
+        assertThat(webhook(body, PaystackSignature.sign(body.getBytes(StandardCharsets.UTF_8), paystackSecretKey))
+                .getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        assertThat(queryString("SELECT status FROM refunds WHERE paystack_refund_id = 'R11'")).isEqualTo("PROCESSED");
+        assertThat(queryString("SELECT review_reason IS NOT NULL FROM payments WHERE reference = '" + first + "'"))
+                .as("the developer's share is still owed back").isEqualTo("t");
+        assertThat(get("/api/portal/finance/transactions", officer, String.class).getBody())
+                .as("a rejected payment never comes back to be verified").doesNotContain(first);
+        assertThat(get("/api/admin/refunds/due", admin, String.class).getBody()).contains(first, "\"amount\":1540000");
+    }
+
+    /** This purchase's row on the payouts ready list, as JSON — other tests' sales share the list. */
+    private String readyFor(String admin, TransactionDto purchase) {
+        for (JsonNode row : objectMapper.readTree(get("/api/admin/payouts/ready", admin, String.class).getBody())) {
+            if (purchase.id().toString().equals(row.path("transactionId").asString())) {
+                return row.toString();
+            }
+        }
+        throw new AssertionError("Purchase " + purchase.id() + " is not on the ready list");
+    }
+
+    /** Refund terms the plan purchase copies when it opens; the letter approval is renewed, as a disclosure change lapses it. */
+    private void declareRefundTerms(String json) {
+        ResponseEntity<String> response = restTemplate.exchange("/api/portal/estates/" + estateId + "/refund-terms",
+                HttpMethod.PUT, entity(seller.token(), json), String.class);
+        assertThat(response.getStatusCode()).as(response.getBody()).isEqualTo(HttpStatus.OK);
+        execute(LetterApprovalFixture.approvedLetterSql(estateId));
     }
 
     private List<String> remindersFor(TransactionDto purchase) {

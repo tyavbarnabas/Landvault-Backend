@@ -8,6 +8,7 @@ import com.techcomfort.landvaultbackend.payments.internal.domain.Refund;
 import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentStatus;
 import com.techcomfort.landvaultbackend.payments.internal.enums.RefundStatus;
 import com.techcomfort.landvaultbackend.payments.internal.exceptions.PaymentException;
+import com.techcomfort.landvaultbackend.payments.internal.paystack.PaystackAmounts;
 import com.techcomfort.landvaultbackend.payments.internal.paystack.PaystackClient;
 import com.techcomfort.landvaultbackend.payments.internal.repository.PaymentRepository;
 import com.techcomfort.landvaultbackend.payments.internal.repository.RefundRepository;
@@ -16,6 +17,9 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -33,8 +37,16 @@ public class RefundRecorder {
     private final RefundRepository refunds;
     private final AuditApi auditApi;
 
-    /** {@code resend} = an earlier request's reply was lost; Paystack is asked again for the same payment. */
-    public record Prepared(UUID refundId, String paymentReference, long amountKobo, boolean resend) {
+    /**
+     * {@code resend} = an earlier request's reply was lost; Paystack is asked
+     * whether it has that refund (by its note) before it is sent again.
+     */
+    public record Prepared(UUID refundId, String paymentReference, long amountKobo, boolean resend, Instant createdAt) {
+
+        /** Our own note on the refund at Paystack — what finds it again after a lost reply. */
+        public String merchantNote() {
+            return "HomeTrue refund " + refundId;
+        }
     }
 
     @Transactional
@@ -42,24 +54,34 @@ public class RefundRecorder {
         Payment payment = payments.findByReferenceForUpdate(paymentReference)
                 .filter(p -> p.getStatus() == PaymentStatus.SUCCEEDED && p.getRefundRequestedAt() != null)
                 .orElseThrow(PaymentException.RefundNotDue::new);
-        Optional<Refund> live = refunds.findLiveForUpdate(payment.getId(), RefundStatus.FAILED);
-        if (live.isPresent()) {
-            if (live.get().getStatus() == RefundStatus.SENDING) {
-                return new Prepared(live.get().getId(), paymentReference, live.get().getAmountKobo(), true);
+        Optional<Refund> inFlight = refunds.findInFlightForUpdate(payment.getId());
+        if (inFlight.isPresent()) {
+            if (inFlight.get().getStatus() == RefundStatus.SENDING) {
+                Refund sending = inFlight.get();
+                return new Prepared(sending.getId(), paymentReference, sending.getAmountKobo(), true,
+                        sending.getCreatedAt());
             }
-            throw new PaymentException.RefundInProgress(live.get().getStatus().wire());
+            throw new PaymentException.RefundInProgress(inFlight.get().getStatus().wire());
         }
-        // The full amount paid (decided with the user): these buyers never got the plot.
+        // What is owed back (all of it, unless a withdrawal left the developer a
+        // share), less what earlier refunds already returned. Under the payment's
+        // row lock, so two Super Admins can't both send the same part.
+        BigDecimal amount = remaining(payment);
+        if (amount.signum() <= 0) {
+            throw new PaymentException.RefundNotDue();
+        }
+        String reason = payment.getRefundReason() != null ? payment.getRefundReason()
+                : payment.getReviewReason() != null ? payment.getReviewReason() : "Refund owed to the buyer";
         Refund refund = Refund.builder()
                 .paymentId(payment.getId())
                 .transactionId(payment.getTransactionId())
                 .buyerUserId(payment.getBuyerUserId())
                 .sellerTenantId(payment.getSellerTenantId())
-                .amount(payment.getAmount())
+                .amount(amount)
                 .currency(Currency.NGN)
-                .amountKobo(payment.getAmountKobo())
+                .amountKobo(PaystackAmounts.toKobo(amount, Currency.NGN))
                 .status(RefundStatus.SENDING)
-                .reason(payment.getReviewReason() == null ? "Refund owed to the buyer" : payment.getReviewReason())
+                .reason(RefundRecorder.truncate(reason))
                 .initiatedBy(actor)
                 .build();
         try {
@@ -68,9 +90,17 @@ public class RefundRecorder {
             throw new PaymentException.RefundInProgress("being sent");
         }
         auditApi.record(AuditEntryRequest.of(actor, "refund.started", "refund", refund.getId(),
-                payment.getSellerTenantId(), "Refund of NGN " + payment.getAmount().toPlainString() + " for payment "
+                payment.getSellerTenantId(), "Refund of NGN " + amount.toPlainString() + " for payment "
                         + paymentReference + " started."));
-        return new Prepared(refund.getId(), paymentReference, refund.getAmountKobo(), false);
+        return new Prepared(refund.getId(), paymentReference, refund.getAmountKobo(), false, refund.getCreatedAt());
+    }
+
+    /** Owed back on this payment and not yet returned or on its way (failed refunds don't count). */
+    BigDecimal remaining(Payment payment) {
+        BigDecimal returned = refunds.findAllByPaymentIdInOrderByCreatedAtDesc(List.of(payment.getId())).stream()
+                .filter(r -> r.getStatus() != RefundStatus.FAILED)
+                .map(Refund::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
+        return payment.owedBack().subtract(returned);
     }
 
     /** Records Paystack's answer to the request: its refund id and first status. */

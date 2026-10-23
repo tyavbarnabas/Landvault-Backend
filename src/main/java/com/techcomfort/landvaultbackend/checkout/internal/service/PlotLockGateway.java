@@ -90,6 +90,22 @@ public class PlotLockGateway {
     }
 
     /**
+     * Phase 5a: a withdrawn purchase's plot goes back on sale, through
+     * {@code landvault_release_withdrawn_plot} — the buyer's request has no
+     * tenant scope. The function takes only the purchase and checks it is
+     * withdrawn; the plot and the status it returns to come from the
+     * purchase's own rows.
+     */
+    public boolean releaseWithdrawn(UUID transactionId, String actor) {
+        Object result = entityManager
+                .createNativeQuery("SELECT landvault_release_withdrawn_plot(:transactionId, :actor)")
+                .setParameter("transactionId", transactionId)
+                .setParameter("actor", actor)
+                .getSingleResult();
+        return Boolean.TRUE.equals(result);
+    }
+
+    /**
      * Whether the caller can see this plot at all. An ordinary query, so the
      * caller's own row-level security decides: another company's plot, or a
      * plot outside a branch-scoped officer's branch, is simply not there.

@@ -6,7 +6,8 @@ import java.util.UUID;
 
 /**
  * A payment owed back to its buyer with no refund under way. {@code amount}
- * is what will be returned — the full amount paid (decided with the user).
+ * is what will be returned — the full amount paid (decided with the user), or
+ * (5a) what is left of the part owed back after a plan withdrawal.
  * {@code lastAttempt} is a previous failed refund, if any.
  */
 public record RefundDueDto(UUID paymentId, String paymentReference, UUID transactionId, String buyerName,

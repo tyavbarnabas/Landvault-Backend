@@ -123,6 +123,8 @@ public class PaystackClient {
     private static final int BANKS_PER_PAGE = 100;
     /** A guard against a cursor that never ends — Nigeria has a few hundred banks, not thousands. */
     private static final int MAX_BANK_PAGES = 20;
+    private static final int REFUNDS_PER_PAGE = 100;
+    private static final int MAX_REFUND_PAGES = 20;
 
     /**
      * TR-1: every active NGN bank that takes NUBAN transfers. Follows
@@ -324,6 +326,36 @@ public class PaystackClient {
                 .retrieve()
                 .body(String.class));
         return refund(reply);
+    }
+
+    /**
+     * Phase 5a: the refund we started with this {@code merchantNote}, if
+     * Paystack has it — asked before resending one whose reply was lost.
+     * Partial refunds made "Paystack refuses a duplicate" untrue: a second
+     * part fits within what was paid, so it would be paid. Paystack's list
+     * can't filter by payment, so it is read from {@code since}, page by page.
+     */
+    public Optional<Refund> findRefundByMerchantNote(String merchantNote, Instant since) {
+        for (int page = 1; page <= MAX_REFUND_PAGES; page++) {
+            int current = page;
+            JsonNode reply = call(() -> http.get().uri(uri -> uri.path("/refund")
+                            .queryParam("from", since.toString())
+                            .queryParam("perPage", REFUNDS_PER_PAGE)
+                            .queryParam("page", current)
+                            .build())
+                    .retrieve().body(String.class));
+            JsonNode data = reply.path("data");
+            for (JsonNode item : data) {
+                if (merchantNote.equals(text(item, "merchant_note"))) {
+                    return Optional.of(new Refund(text(item, "id"), text(item, "status"), text(reply, "message"),
+                            instant(text(item, "refunded_at")), instant(text(item, "expected_at"))));
+                }
+            }
+            if (data.size() < REFUNDS_PER_PAGE) {
+                return Optional.empty();
+            }
+        }
+        throw new PaymentException.GatewayUnavailable();
     }
 
     public Refund fetchRefund(String refundId) {

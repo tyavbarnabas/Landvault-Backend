@@ -68,6 +68,7 @@ public class DocumentService {
     private static final int USER_AGENT_MAX = 255;
     private static final String VALID = "valid";
     private static final String REFUNDED = "refunded";
+    private static final String WITHDRAWN = "withdrawn";
 
     private final ReceiptRepository receipts;
     private final AllocationLetterRepository letters;
@@ -222,7 +223,7 @@ public class DocumentService {
         Optional<AllocationLetter> letter = letters.findByVerificationCode(normalised);
         if (letter.isPresent()) {
             AllocationLetter l = letter.get();
-            return new DocumentVerificationDto(VALID, letterType(l), l.getNumber(), l.getIssuedAt(), "HomeTrue",
+            return new DocumentVerificationDto(status(l), letterType(l), l.getNumber(), l.getIssuedAt(), "HomeTrue",
                     l.getCompanyName(), l.getEstateName(), l.getEstateLocation(), l.getPlotLabel(),
                     initials(l.getBuyerName()), null);
         }
@@ -270,6 +271,19 @@ public class DocumentService {
             return LAPSED;
         }
         return acceptance == null ? ISSUED : ACCEPTED;
+    }
+
+    /**
+     * Phase 5a, never stored: a provisional letter whose buyer withdrew from
+     * the plan no longer holds the plot. A final letter is always valid.
+     */
+    private String status(AllocationLetter letter) {
+        if (letter.getKind() != LetterKind.PROVISIONAL) {
+            return VALID;
+        }
+        String purchase = checkoutApi.transactionForBuyer(letter.getTransactionId(), letter.getBuyerUserId())
+                .map(PayableTransaction::status).orElse(null);
+        return "withdrawn".equals(purchase) ? WITHDRAWN : VALID;
     }
 
     private DocumentDto toDto(OfferLetter o, String status, OfferLetterAcceptance acceptance) {
@@ -336,7 +350,7 @@ public class DocumentService {
         return new DocumentDto(l.getId(), letterType(l),
                 (l.getKind() == LetterKind.PROVISIONAL ? "Provisional allocation letter " : "Allocation letter ")
                         + l.getNumber() + " — " + l.getPlotLabel() + ", " + l.getEstateName(),
-                l.getNumber(), LocalDate.ofInstant(l.getIssuedAt(), DocumentFormats.NIGERIA), l.getIssuedAt(), VALID,
+                l.getNumber(), LocalDate.ofInstant(l.getIssuedAt(), DocumentFormats.NIGERIA), l.getIssuedAt(), status(l),
                 VerificationCodes.display(l.getVerificationCode()), properties.verifyUrlFor(l.getVerificationCode()),
                 null, l.getPlotId(), l.getTransactionId(), null, null, base + "/pdf", base + "/jpeg", null);
     }

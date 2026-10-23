@@ -359,6 +359,7 @@ public class TransactionService {
                 transaction.buyerAddress().orElse(null),
                 offer,
                 schedule.orElse(null),
-                standing);
+                standing,
+                transaction.getWithdrawnAt());
     }
 }

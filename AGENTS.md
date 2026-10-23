@@ -5175,7 +5175,9 @@ user: A, A, A, A.
 - **Once**: one live refund per payment (unique index, `status <> FAILED`); a
   failed refund frees the payment for another try. Paystack itself also never
   refunds more than was paid — which is what makes resending a `sending` refund
-  safe (a duplicate is refused, not paid).
+  safe (a duplicate is refused, not paid). **Superseded by phase 5a**: payments
+  can be refunded in parts, so the index allows one refund *in flight*, and a
+  resend asks Paystack for the earlier refund first — see "Phase 5a: withdrawal".
 - **Bank-transfer payments come back `needs-attention`** (decision 3): Paystack
   can't return them on its own. The buyer is emailed and gives an account in
   their app; the bank supplies the name, and the reviewer sees
@@ -6409,7 +6411,58 @@ paying**; paying off the balance includes the penalties already reached.
 Proven red: the payment not charging the penalty (`7700000.00/0` instead of `8085000.00/385000`), and finance
 expecting the instalment without its penalty (`amountsMatch: false`).
 
-**Not built (phase 5)**: withdrawal, revocation (developer-started, declared notice), restructure, and penalty waivers.
+### Phase 5a: withdrawal (changeset 106)
+
+Phase 5 is split: 5a withdrawal, 5b revocation, 5c restructure. Decided with the user (2026-10-23), on top of
+decision 15 (a buyer may withdraw at any time, no one's approval, the developer informed):
+
+- **The refund is the escrow, payment by payment** (`PayoutTranches.shares`, the same arithmetic payouts use): each
+  payment comes back less the developer's declared share, which is exactly what HomeTrue holds for it. A refundable
+  penalty is shared like the instalment; a non-refundable one stays with the developer (phase 4).
+- **A payment Paystack confirmed but finance hasn't verified counts as if verified next**
+  (`PayoutTranches.countedOnWithdrawal`) — the user's own design, preferred over a deadline. The buyer gets their part
+  at once, so withdrawing before finance acts gains nothing; HomeTrue holds the developer's share **with no
+  deadline**, paid out once their finance verifies it (finance's queue keeps the row, `planWithdrawn: true`).
+  **If finance rejects it instead**, the share goes back to the buyer too — a second refund for that payment. "As if
+  verified next" is also the order a later verification produces, so the figures never move.
+- **Quote, then confirm** (`GET|POST /api/transactions/{id}/withdrawal`, `WithdrawalService`): the POST names the
+  quote's `refund`; anything different is 409 `WITHDRAWAL_QUOTE_CHANGED` with nothing changed. The successful
+  payments are locked first (the order finance verifying one takes), then checkout locks the reservation.
+- **What happens, together or not at all** (`CheckoutApi.withdraw`): the purchase `ON_PLAN → WITHDRAWN` (once-only
+  update, `withdrawn_at`, optional reason), the plot back on sale with its original availability and tier size, and
+  `PlanWithdrawn` → the portfolio record `WITHDRAWN` (a retired status: out of the summary, no longer holding the
+  plot in `uq_owned_plots_one_owner`). The provisional letter reads `withdrawn` (derived, never stored); a final letter
+  never does. Each payment gets `refund_amount` (its part), `refund_requested_at` and `refund_reason`; a **Super
+  Admin sends each refund** (decided with the user — money leaving needs a person). Buyer and Executive Directors are
+  emailed after commit.
+- **The plot goes back through `landvault_release_withdrawn_plot`**, the ninth `SECURITY DEFINER` escape: the
+  buyer's request has no tenant scope and plots are RLS-policied. It takes only a transaction id, checks the purchase
+  really is `WITHDRAWN`, and takes the plot and the status to restore from the purchase's own rows — a caller can't
+  name a plot or a status. **Proven red** as `SECURITY INVOKER` (the withdrawal became a 500).
+- **The developer's verified shares are still paid out** (decided with the user): they're theirs under the terms.
+  Only the final RELEASE never happens. A withdrawn sale stays on the ready list while shares are owed; its
+  `heldInEscrow` is the share still waiting for finance; 409 `WITHDRAWN_PLAN_PAID` once everything owed is paid.
+- **Money arriving after a withdrawal** (an open link paid late) is flagged for a full refund automatically — nobody
+  has anything to decide.
+- **Refunds in parts.** `payments.refund_amount` (null = all of it); the unique index now allows **one refund in
+  flight** per payment (not one ever), and `RefundRecorder` sends what's owed less what earlier refunds returned,
+  under the payment's row lock. **A resend after a lost reply asks Paystack first**
+  (`PaystackClient.findRefundByMerchantNote`, our `HomeTrue refund <id>` note, listed from the refund's creation):
+  "Paystack never refunds more than was paid" stopped being a guard once a duplicate part fits within the payment.
+  Paystack's refund list can't filter by payment, so it is read page by page. A receipt reads `refunded` only when the
+  whole payment came back.
+
+- **A completed part refund clears the payment's review flag only when nothing more is owed**
+  (`RefundOutcomeService`): otherwise a payment finance rejected after a withdrawal would lose its flag when the
+  buyer's part came back, and reappear in finance's queue to be verified.
+
+Proven red: ignoring the payment awaiting finance (the quote dropped the instalment), resending without asking
+Paystack (a second refund request), the release function as `SECURITY INVOKER`, and clearing the review flag on
+any completed refund (`aPartRefundCompletingKeepsAPaymentFlaggedWhileMoreIsOwed`).
+
+**Not built**: a buyer withdrawing while their deposit still awaits finance (`awaiting_finance`, not yet on the
+plan — refused as `PLAN_NOT_WITHDRAWABLE`), the receipt's partly-refunded state, and revocation (5b), restructure
+(5c) and penalty waivers.
 
 ## A buyer's address (changeset 097)
 

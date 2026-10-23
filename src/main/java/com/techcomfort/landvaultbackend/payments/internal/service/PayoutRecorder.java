@@ -148,7 +148,10 @@ public class PayoutRecorder {
         }
         Owing owing = owing(sale, attempts, paymentsFor(sale));
         if (owing.next() == null) {
-            throw sale.escrow() != null && !sale.escrow().planComplete()
+            // 5a: on a withdrawn plan, nothing more comes to the developer except a
+            // share still waiting for their own finance to verify its payment.
+            throw sale.escrow() != null && sale.escrow().withdrawn() ? new PaymentException.WithdrawnPlanPaid()
+                    : sale.escrow() != null && !sale.escrow().planComplete()
                     ? new PaymentException.HeldInEscrow() : new PaymentException.SaleAlreadyPaid();
         }
         Plan plan = owing.nextPlan();

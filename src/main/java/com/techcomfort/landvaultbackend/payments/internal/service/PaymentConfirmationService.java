@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -99,11 +100,23 @@ public class PaymentConfirmationService {
                 // finance verifies the payment itself. It only needs the plan to still be running.
                 boolean planPayment = payment.getPurpose() == PaymentPurpose.INSTALMENT
                         || payment.getPurpose() == PaymentPurpose.BALANCE;
-                boolean received = planPayment
+                Optional<PayableTransaction> purchase = planPayment
                         ? checkoutApi.transactionForBuyer(payment.getTransactionId(), payment.getBuyerUserId())
-                        .filter(PayableTransaction::isOnPlan).isPresent()
+                        : Optional.empty();
+                boolean received = planPayment
+                        ? purchase.filter(PayableTransaction::isOnPlan).isPresent()
                         : checkoutApi.recordPaymentReceived(payment.getTransactionId(), payment.getReference());
-                if (!received) {
+                if (!received && purchase.filter(PayableTransaction::isWithdrawn).isPresent()) {
+                    // 5a: paid after the buyer withdrew. Nothing to decide — it goes back in full.
+                    payment.setReviewReason("Paid after the buyer withdrew from the plan; refund in full.");
+                    payment.setRefundRequestedAt(Instant.now());
+                    payment.setRefundReason("Paid after you withdrew from the plan — returned in full.");
+                    payments.saveAndFlush(payment);
+                    audit(payment, "payment.refund_due", "Paystack confirmed this payment after the buyer withdrew "
+                            + "from the plan; flagged for a full refund.");
+                    log.warn("Payment {} succeeded after its plan was withdrawn; flagged for refund",
+                            payment.getReference());
+                } else if (!received) {
                     // Real money for a purchase no longer waiting for it — abandoned, its plot
                     // back on sale. Recorded truthfully; a person decides (decided with the user).
                     payment.setReviewReason("Paid after the purchase stopped waiting for payment (abandoned, or "

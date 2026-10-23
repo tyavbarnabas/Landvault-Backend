@@ -72,6 +72,20 @@ public interface SettlementAlertSender {
 
     void instalmentReminder(InstalmentReminderAlert alert);
 
+    /**
+     * Phase 5a: a buyer withdrew from their plan — sent to the buyer, and to
+     * the selling company's Executive Directors ({@code toDeveloper}). Amounts
+     * are plain naira strings. {@code awaitingFinance}: the developer's share of
+     * a payment their finance hasn't verified yet, held until they do; null
+     * when there is none. {@code reason}: the buyer's own words, or null.
+     */
+    record WithdrawalAlert(String to, boolean toDeveloper, String purchaseReference, String planName, String paid,
+                           String refund, String developerKeeps, String awaitingFinance, String reason,
+                           String purchaseUrl) {
+    }
+
+    void planWithdrawn(WithdrawalAlert alert);
+
     void refundNeedsAccount(RefundNeedsAccountAlert alert);
 
     void refundProblem(RefundProblemAlert alert);

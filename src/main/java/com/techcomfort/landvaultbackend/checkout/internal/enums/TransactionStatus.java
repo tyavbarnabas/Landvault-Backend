@@ -46,7 +46,12 @@ public enum TransactionStatus {
      * on the plan (ON_PLAN) while the instalments are paid; verified once the
      * last one is. Backend-added — the frontend's union needs it too.
      */
-    ON_PLAN("on_plan");
+    ON_PLAN("on_plan"),
+    /**
+     * Phase 5a: the buyer withdrew from their instalment plan on the declared
+     * refund terms; the plot went back on sale. Backend-added.
+     */
+    WITHDRAWN("withdrawn");
 
     private final String value;
 

@@ -158,6 +158,60 @@ class PayoutTranchesTest {
         assertThat(owed.heldInEscrow()).isEqualByComparingTo("2000000");
     }
 
+    /**
+     * 5a, the worked example from the decision: 20% of what is paid. A payment
+     * finance hasn't verified counts as if verified next, so the buyer's part
+     * of it comes back at once; a rejected one isn't counted at all.
+     */
+    @Test
+    void aWithdrawalCountsAPaymentAwaitingFinanceAsIfVerifiedNext() {
+        Payment deposit = paid(PaymentPurpose.DEPOSIT, null, "4950000.00", 1);
+        Payment first = paid(PaymentPurpose.INSTALMENT, 1, "962500.00", 2);
+        Payment awaiting = paid(PaymentPurpose.INSTALMENT, 2, "962500.00", 0);
+        awaiting.setFinanceVerifiedAt(null);
+        awaiting.setPaidAt(T0);
+        Payment rejected = paid(PaymentPurpose.INSTALMENT, 2, "962500.00", 0);
+        rejected.setFinanceVerifiedAt(null);
+        rejected.setReviewReason("Refund due: finance rejected this payment — wrong account");
+
+        List<Payment> counted = PayoutTranches.countedOnWithdrawal(List.of(awaiting, rejected, first, deposit));
+        var shares = PayoutTranches.shares(escrow(false, "20.00", RefundAppliesTo.AMOUNT_PAID),
+                new BigDecimal("15000000.00"), counted);
+
+        assertThat(counted).as("verified in order, then the one awaiting finance; never the rejected one")
+                .containsExactly(deposit, first, awaiting);
+        assertThat(shares.values()).usingElementComparator(BigDecimal::compareTo).containsExactly(
+                new BigDecimal("990000"), new BigDecimal("192500"), new BigDecimal("192500"));
+    }
+
+    /**
+     * 5a: once withdrawn, the developer is owed their verified shares and
+     * nothing is released; the share of the payment awaiting finance is held
+     * for them until finance verifies it.
+     */
+    @Test
+    void aWithdrawnPlanOwesOnlyTheSharesAndHoldsTheOneAwaitingFinance() {
+        Payment deposit = paid(PaymentPurpose.DEPOSIT, null, "4950000.00", 1);
+        Payment first = paid(PaymentPurpose.INSTALMENT, 1, "962500.00", 2);
+        Payment awaiting = paid(PaymentPurpose.INSTALMENT, 2, "962500.00", 0);
+        awaiting.setFinanceVerifiedAt(null);
+
+        PayoutTranches.Owed owed = PayoutTranches.of(sale(new VerifiedSale.Escrow(false, new BigDecimal("20.00"),
+                RefundAppliesTo.AMOUNT_PAID, true, true)), List.of(deposit, first, awaiting));
+
+        assertThat(owed.tranches()).extracting(PayoutTranches.Tranche::key)
+                .containsExactly("SHARE:" + deposit.getId(), "SHARE:" + first.getId());
+        assertThat(owed.heldInEscrow()).as("only the developer's share still waiting for finance")
+                .isEqualByComparingTo("192500");
+
+        awaiting.setFinanceVerifiedAt(T0.plusSeconds(86_400L * 9));
+        PayoutTranches.Owed verified = PayoutTranches.of(sale(new VerifiedSale.Escrow(false, new BigDecimal("20.00"),
+                RefundAppliesTo.AMOUNT_PAID, true, true)), List.of(deposit, first, awaiting));
+        assertThat(verified.tranches()).extracting(PayoutTranches.Tranche::key).as("never a release")
+                .containsExactly("SHARE:" + deposit.getId(), "SHARE:" + first.getId(), "SHARE:" + awaiting.getId());
+        assertThat(verified.heldInEscrow()).isZero();
+    }
+
     private static VerifiedSale sale(VerifiedSale.Escrow escrow) {
         return new VerifiedSale(UUID.randomUUID(), "LV-TX", UUID.randomUUID(), "Estate", "Plot 1",
                 new BigDecimal("20000000.0000"), Currency.NGN, T0, escrow);

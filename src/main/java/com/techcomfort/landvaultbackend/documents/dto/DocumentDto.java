@@ -17,7 +17,8 @@ public record DocumentDto(
         @Schema(description = "The day it was issued, in Nigerian time.") LocalDate date,
         Instant issuedAt,
         @Schema(description = """
-                Receipts and allocation letters: `valid`. (`void` and `superseded` are for reissued letters.) A \
+                Receipts and allocation letters: `valid`; a provisional allocation letter is `withdrawn` once \
+                the buyer withdrew from the plan. (`void` and `superseded` are for reissued letters.) A fully \
                 refunded payment's receipt stays valid — the money did arrive — and carries `refundedAt`. Offer \
                 letters: `issued` (waiting for the buyer), `accepted`, or `lapsed` (the purchase was rejected or \
                 abandoned).""") String status,

@@ -38,8 +38,15 @@ public record VerifiedSale(
      *                     when the purchase predates escrow terms — all held
      * @param penaltiesRefundable phase 4: refundable penalties are held like the
      *                     instalment; others are the developer's in full
+     * @param withdrawn    phase 5a: the buyer withdrew — what was held goes back
+     *                     to them, and the developer is owed only their shares
      */
     public record Escrow(boolean planComplete, BigDecimal deductionPct, RefundAppliesTo appliesTo,
-                         boolean penaltiesRefundable) {
+                         boolean penaltiesRefundable, boolean withdrawn) {
+
+        public Escrow(boolean planComplete, BigDecimal deductionPct, RefundAppliesTo appliesTo,
+                      boolean penaltiesRefundable) {
+            this(planComplete, deductionPct, appliesTo, penaltiesRefundable, false);
+        }
     }
 }
