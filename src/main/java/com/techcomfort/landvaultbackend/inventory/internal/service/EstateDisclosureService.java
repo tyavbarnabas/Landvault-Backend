@@ -8,6 +8,7 @@ import com.techcomfort.landvaultbackend.common.FeeType;
 import com.techcomfort.landvaultbackend.common.InstalmentPlanCalculator;
 import com.techcomfort.landvaultbackend.common.PaymentFrequency;
 import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
+import com.techcomfort.landvaultbackend.common.RevocationTerms;
 import com.techcomfort.landvaultbackend.common.TenantContext;
 import com.techcomfort.landvaultbackend.common.TenantScope;
 import com.techcomfort.landvaultbackend.inventory.dto.DeclareDefaultTermsRequest;
@@ -281,9 +282,8 @@ public class EstateDisclosureService {
                 .branchId(estate.getBranchId())
                 .estateId(estateId)
                 .version(version)
-                .revocationTrigger(request.revocationTrigger().trim())
+                .revocationAfterMonths(request.revocationAfterMonths())
                 .revocationNoticeDays(request.revocationNoticeDays())
-                .onRevocationRefund(request.onRevocationRefund().trim())
                 .developmentDeadlineMonths(request.developmentDeadlineMonths())
                 .transferRequiresConsent(Boolean.TRUE.equals(request.transferRequiresConsent()))
                 // No penalties: nothing to refund, so the question doesn't arise.
@@ -470,9 +470,9 @@ public class EstateDisclosureService {
                 .toList();
         return new DefaultTermsDto(
                 terms.getVersion(),
-                terms.getRevocationTrigger(),
+                terms.getRevocationAfterMonths(),
                 terms.getRevocationNoticeDays(),
-                terms.getOnRevocationRefund(),
+                RevocationTerms.offered(terms.getRevocationAfterMonths(), terms.getRevocationNoticeDays()).noticeDays(),
                 terms.getDevelopmentDeadlineMonths(),
                 Boolean.TRUE.equals(terms.getTransferRequiresConsent()),
                 tierDtos,

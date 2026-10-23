@@ -48,6 +48,11 @@ public record PayableTransaction(
         return "withdrawn".equals(status);
     }
 
+    /** Phase 5b: the developer revoked the plan. */
+    public boolean isRevoked() {
+        return "revoked".equals(status);
+    }
+
     public boolean isInstalment() {
         return "installment".equals(plan);
     }

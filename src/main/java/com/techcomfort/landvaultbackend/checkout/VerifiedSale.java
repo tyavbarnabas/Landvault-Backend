@@ -40,13 +40,25 @@ public record VerifiedSale(
      *                     instalment; others are the developer's in full
      * @param withdrawn    phase 5a: the buyer withdrew — what was held goes back
      *                     to them, and the developer is owed only their shares
+     * @param revoked      phase 5b: the developer revoked the plan — settled exactly
+     *                     as a withdrawal
      */
     public record Escrow(boolean planComplete, BigDecimal deductionPct, RefundAppliesTo appliesTo,
-                         boolean penaltiesRefundable, boolean withdrawn) {
+                         boolean penaltiesRefundable, boolean withdrawn, boolean revoked) {
 
         public Escrow(boolean planComplete, BigDecimal deductionPct, RefundAppliesTo appliesTo,
                       boolean penaltiesRefundable) {
-            this(planComplete, deductionPct, appliesTo, penaltiesRefundable, false);
+            this(planComplete, deductionPct, appliesTo, penaltiesRefundable, false, false);
+        }
+
+        public Escrow(boolean planComplete, BigDecimal deductionPct, RefundAppliesTo appliesTo,
+                      boolean penaltiesRefundable, boolean withdrawn) {
+            this(planComplete, deductionPct, appliesTo, penaltiesRefundable, withdrawn, false);
+        }
+
+        /** The plan ended early, withdrawn or revoked: what was held goes back to the buyer. */
+        public boolean ended() {
+            return withdrawn || revoked;
         }
     }
 }

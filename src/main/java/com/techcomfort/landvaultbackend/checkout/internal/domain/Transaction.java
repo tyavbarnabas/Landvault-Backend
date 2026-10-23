@@ -8,6 +8,7 @@ import com.techcomfort.landvaultbackend.common.PaymentFrequency;
 import com.techcomfort.landvaultbackend.common.PlotIntent;
 import com.techcomfort.landvaultbackend.common.PostalAddress;
 import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
+import com.techcomfort.landvaultbackend.common.RevocationTerms;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -158,6 +159,29 @@ public class Transaction extends AbstractEntity {
 
     @Column(name = "withdrawal_reason")
     private String withdrawalReason;
+
+    /**
+     * Phase 5b: revocable once an instalment is unpaid this many months past
+     * due, and the notice the buyer is given — as offered when it opened, never
+     * changed. Null for outright purchases and plans opened with no terms.
+     */
+    @Column(name = "revocation_after_months", updatable = false)
+    private Integer revocationAfterMonths;
+
+    @Column(name = "revocation_notice_days", updatable = false)
+    private Integer revocationNoticeDays;
+
+    /** Phase 5b: when the developer confirmed the revocation (written by the once-only status change). */
+    @Column(name = "revoked_at")
+    private Instant revokedAt;
+
+    @Column(name = "revocation_reason")
+    private String revocationReason;
+
+    /** Phase 5b: the revocation terms copied onto this purchase, or null. */
+    public RevocationTerms revocationTerms() {
+        return revocationAfterMonths == null ? null : new RevocationTerms(revocationAfterMonths, revocationNoticeDays);
+    }
 
     /** Empty on purchases opened before addresses were collected. */
     public Optional<PostalAddress> buyerAddress() {

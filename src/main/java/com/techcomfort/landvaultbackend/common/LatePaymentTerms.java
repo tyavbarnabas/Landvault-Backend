@@ -20,16 +20,22 @@ import java.util.Optional;
  * @param steps               months late → % of the instalment, as declared
  * @param penaltiesRefundable declared by the developer: whether penalties come
  *                            back, on the refund terms, to a buyer who withdraws
+ * @param revocation          phase 5b: when the plan may be revoked; null when no
+ *                            default terms were declared (not revocable)
  */
-public record LatePaymentTerms(List<Step> steps, boolean penaltiesRefundable) {
+public record LatePaymentTerms(List<Step> steps, boolean penaltiesRefundable, RevocationTerms revocation) {
 
     /** Days after the due date before an unpaid instalment is in arrears. */
     public static final int GRACE_DAYS = 7;
 
-    public static final LatePaymentTerms NONE = new LatePaymentTerms(List.of(), true);
+    public static final LatePaymentTerms NONE = new LatePaymentTerms(List.of(), true, null);
 
     public LatePaymentTerms {
         steps = steps.stream().sorted(Comparator.comparingInt(Step::monthsLate)).toList();
+    }
+
+    public LatePaymentTerms(List<Step> steps, boolean penaltiesRefundable) {
+        this(steps, penaltiesRefundable, null);
     }
 
     public record Step(int monthsLate, BigDecimal penaltyPct) {

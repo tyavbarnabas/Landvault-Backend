@@ -54,8 +54,9 @@ public class PortalPlanService {
                 .collect(Collectors.toMap(RunningPlan::transactionId, Function.identity()));
         Map<UUID, PlanSchedule> schedules = checkoutApi.schedulesOf(plans.keySet());
         LocalDate today = PlanStandings.today();
+        Map<UUID, PlanStanding> standings = planStandings.standingsOf(schedules, today);
         return planStandings.progressOf(schedules).entrySet().stream()
-                .map(e -> toDto(plans.get(e.getKey()), e.getValue(), PlanStandings.standing(e.getValue(), today)))
+                .map(e -> toDto(plans.get(e.getKey()), e.getValue(), standings.get(e.getKey())))
                 .filter(p -> status == null || status.equals(p.status())
                         || ("late".equals(status) && p.arrears() != null))
                 .sorted(Comparator.comparingInt((PortalPlanDto p) -> URGENCY.indexOf(p.status()))
@@ -70,6 +71,6 @@ public class PortalPlanService {
                 plan.planName(), plan.currency().name(), schedule.instalments().size(), progress.instalmentsPaid(),
                 progress.next().map(PlanSchedule.Instalment::dueDate).orElse(null),
                 progress.next().map(PlanSchedule.Instalment::amount).orElse(null), standing.status(),
-                standing.arrears());
+                standing.arrears(), standing.revocation());
     }
 }

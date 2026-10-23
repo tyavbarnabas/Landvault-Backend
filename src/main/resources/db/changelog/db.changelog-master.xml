@@ -112,6 +112,7 @@
     <include file="changes/104-instalment-arrears.xml" relativeToChangelogFile="true"/>
     <include file="changes/105-penalty-amount-scale.xml" relativeToChangelogFile="true"/>
     <include file="changes/106-instalment-withdrawal.xml" relativeToChangelogFile="true"/>
+    <include file="changes/107-instalment-revocation.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

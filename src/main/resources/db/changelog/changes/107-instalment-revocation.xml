@@ -1,0 +1,289 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Phase 5b: a developer revokes an instalment plan the buyer has stopped
+        paying (decided with the user, 2026-10-23: 1B, 2A, 3A, 4A). See
+        AGENTS.md, "Instalment plans", phase 5b.
+
+        - The trigger is a number, not text: revocation_after_months, an
+          instalment unpaid that many months past its due date. HomeTrue's
+          minimum is 3. The free-text trigger and "on revocation" refund are
+          retired (kept as history, no longer written): the refund is always
+          what a withdrawal would return, and HomeTrue words the clause.
+          Existing rows are given 12 months (still in development).
+        - Copied onto the purchase at Proceed to buy, with the notice in days
+          (HomeTrue's minimum, 14, applied), so a later change reaches new
+          buyers only. Running dev plans are given their estate's current terms.
+        - plan_revocations: a notice, then cancelled, cleared, overtaken by a
+          withdrawal, or confirmed. Buyer-owned like transactions (the buyer
+          reads it with no tenant scope), so not RLS-policied; the service
+          walls it by seller and plot visibility.
+        - landvault_release_withdrawn_plot now also releases a REVOKED
+          purchase's plot. Still takes only a transaction id.
+    -->
+    <changeSet id="107-revocation-terms" author="landvault">
+        <sql splitStatements="false"><![CDATA[
+            ALTER TABLE estate_default_terms
+                ADD COLUMN revocation_after_months integer,
+                ALTER COLUMN revocation_trigger DROP NOT NULL,
+                ALTER COLUMN on_revocation_refund DROP NOT NULL;
+            UPDATE estate_default_terms SET revocation_after_months = 12;
+            ALTER TABLE estate_default_terms
+                ALTER COLUMN revocation_after_months SET NOT NULL,
+                ADD CONSTRAINT chk_estate_default_terms_revocation_after
+                    CHECK (revocation_after_months BETWEEN 3 AND 120);
+            COMMENT ON COLUMN estate_default_terms.revocation_after_months IS
+                'Phase 5b: an instalment plan may be revoked once an instalment is unpaid this many whole months past its due date. HomeTrue minimum 3.';
+            COMMENT ON COLUMN estate_default_terms.revocation_trigger IS
+                'Retired by changeset 107 (replaced by revocation_after_months); kept as history, no longer written.';
+            COMMENT ON COLUMN estate_default_terms.on_revocation_refund IS
+                'Retired by changeset 107: a revoked buyer is refunded as on withdrawal. Kept as history, no longer written.';
+
+            -- Appended at the end, so CREATE OR REPLACE keeps the view and its grants.
+            CREATE OR REPLACE VIEW marketplace_default_terms WITH (security_barrier = true) AS
+            SELECT DISTINCT ON (d.estate_id)
+                d.id                          AS default_terms_id,
+                d.estate_id                   AS estate_id,
+                d.revocation_trigger          AS revocation_trigger,
+                d.revocation_notice_days      AS revocation_notice_days,
+                d.on_revocation_refund        AS on_revocation_refund,
+                d.development_deadline_months AS development_deadline_months,
+                d.transfer_requires_consent   AS transfer_requires_consent,
+                d.notes                       AS notes,
+                d.penalties_refundable        AS penalties_refundable,
+                d.revocation_after_months     AS revocation_after_months
+            FROM estate_default_terms d
+            JOIN marketplace_estate_eligibility el ON el.estate_id = d.estate_id AND el.eligible
+            WHERE d.deleted = false
+            ORDER BY d.estate_id, d.version DESC;
+
+            ALTER TABLE transactions
+                ADD COLUMN revocation_after_months integer,
+                ADD COLUMN revocation_notice_days  integer,
+                ADD COLUMN revoked_at              timestamp(6) with time zone,
+                ADD COLUMN revocation_reason       varchar(500);
+            COMMENT ON COLUMN transactions.revocation_after_months IS
+                'Copied at Proceed to buy for an instalment purchase: revocable once an instalment is unpaid this many months past due. Null for outright purchases, and for plans opened with no default terms (not revocable).';
+            COMMENT ON COLUMN transactions.revocation_notice_days IS
+                'Copied with revocation_after_months: the notice the buyer is given, HomeTrue''s minimum (14) applied.';
+            UPDATE transactions t
+               SET revocation_after_months = d.revocation_after_months,
+                   revocation_notice_days = GREATEST(COALESCE(d.revocation_notice_days, 0), 14)
+              FROM (SELECT DISTINCT ON (estate_id) estate_id, revocation_after_months, revocation_notice_days
+                      FROM estate_default_terms WHERE deleted = false
+                     ORDER BY estate_id, version DESC) d
+             WHERE d.estate_id = t.estate_id AND t.plan = 'INSTALLMENT';
+
+            ALTER TABLE owned_plots DROP CONSTRAINT chk_owned_plots_status;
+            ALTER TABLE owned_plots ADD CONSTRAINT chk_owned_plots_status CHECK (status IN (
+                'RESERVED', 'PENDING_VERIFICATION', 'ALLOCATED', 'INSTALLMENT_ACTIVE', 'COMPLETED',
+                'IN_ARREARS', 'UPGRADE_PENDING', 'TRANSFERRED', 'SUPERSEDED', 'WITHDRAWN', 'REVOKED'));
+            DROP INDEX uq_owned_plots_one_owner;
+            CREATE UNIQUE INDEX uq_owned_plots_one_owner ON owned_plots (plot_id)
+                WHERE deleted = false AND status NOT IN ('TRANSFERRED', 'SUPERSEDED', 'WITHDRAWN', 'REVOKED');
+
+            CREATE OR REPLACE FUNCTION landvault_release_withdrawn_plot(p_transaction_id uuid, p_actor varchar)
+            RETURNS boolean
+            LANGUAGE plpgsql
+            SECURITY DEFINER
+            SET search_path = public, pg_temp
+            AS $$
+            DECLARE
+                v_plot_id   uuid;
+                v_restore   varchar;
+                v_tier_type varchar;
+                v_tier_size numeric;
+            BEGIN
+                SELECT t.plot_id, r.previous_plot_status
+                  INTO v_plot_id, v_restore
+                  FROM transactions t
+                  JOIN reservations r ON r.id = t.reservation_id
+                 WHERE t.id = p_transaction_id
+                   AND t.status IN ('WITHDRAWN', 'REVOKED');
+                IF NOT FOUND THEN
+                    RETURN false;
+                END IF;
+                IF v_restore NOT IN ('AVAILABLE_DEV', 'AVAILABLE_INV') THEN
+                    RAISE EXCEPTION 'landvault_release_withdrawn_plot: refusing to set plot status to %', v_restore;
+                END IF;
+
+                -- As 060: the tier row's lock, so a size edit in flight is seen.
+                SELECT pt.tier_type, pt.size_sqm
+                  INTO v_tier_type, v_tier_size
+                  FROM plots p
+                  JOIN price_tiers pt ON pt.id = p.price_tier_id
+                 WHERE p.id = v_plot_id
+                   FOR SHARE OF pt;
+
+                UPDATE plots p
+                   SET status = v_restore,
+                       nominal_size_sqm = CASE WHEN v_tier_type = 'LAND_SIZE'
+                                               THEN v_tier_size
+                                               ELSE p.nominal_size_sqm END,
+                       updated_at = now(),
+                       updated_by = p_actor
+                 WHERE p.id = v_plot_id
+                   AND p.deleted = false
+                   AND p.status = 'ON_PLAN';
+
+                RETURN FOUND;
+            END;
+            $$;
+        ]]></sql>
+        <rollback><![CDATA[
+            CREATE OR REPLACE FUNCTION landvault_release_withdrawn_plot(p_transaction_id uuid, p_actor varchar)
+            RETURNS boolean
+            LANGUAGE plpgsql
+            SECURITY DEFINER
+            SET search_path = public, pg_temp
+            AS $$
+            DECLARE
+                v_plot_id   uuid;
+                v_restore   varchar;
+                v_tier_type varchar;
+                v_tier_size numeric;
+            BEGIN
+                SELECT t.plot_id, r.previous_plot_status
+                  INTO v_plot_id, v_restore
+                  FROM transactions t
+                  JOIN reservations r ON r.id = t.reservation_id
+                 WHERE t.id = p_transaction_id
+                   AND t.status = 'WITHDRAWN';
+                IF NOT FOUND THEN
+                    RETURN false;
+                END IF;
+                IF v_restore NOT IN ('AVAILABLE_DEV', 'AVAILABLE_INV') THEN
+                    RAISE EXCEPTION 'landvault_release_withdrawn_plot: refusing to set plot status to %', v_restore;
+                END IF;
+                SELECT pt.tier_type, pt.size_sqm
+                  INTO v_tier_type, v_tier_size
+                  FROM plots p
+                  JOIN price_tiers pt ON pt.id = p.price_tier_id
+                 WHERE p.id = v_plot_id
+                   FOR SHARE OF pt;
+                UPDATE plots p
+                   SET status = v_restore,
+                       nominal_size_sqm = CASE WHEN v_tier_type = 'LAND_SIZE'
+                                               THEN v_tier_size
+                                               ELSE p.nominal_size_sqm END,
+                       updated_at = now(),
+                       updated_by = p_actor
+                 WHERE p.id = v_plot_id
+                   AND p.deleted = false
+                   AND p.status = 'ON_PLAN';
+                RETURN FOUND;
+            END;
+            $$;
+            DROP INDEX uq_owned_plots_one_owner;
+            CREATE UNIQUE INDEX uq_owned_plots_one_owner ON owned_plots (plot_id)
+                WHERE deleted = false AND status NOT IN ('TRANSFERRED', 'SUPERSEDED', 'WITHDRAWN');
+            ALTER TABLE owned_plots DROP CONSTRAINT chk_owned_plots_status;
+            ALTER TABLE owned_plots ADD CONSTRAINT chk_owned_plots_status CHECK (status IN (
+                'RESERVED', 'PENDING_VERIFICATION', 'ALLOCATED', 'INSTALLMENT_ACTIVE', 'COMPLETED',
+                'IN_ARREARS', 'UPGRADE_PENDING', 'TRANSFERRED', 'SUPERSEDED', 'WITHDRAWN'));
+            ALTER TABLE transactions DROP COLUMN revocation_reason, DROP COLUMN revoked_at,
+                DROP COLUMN revocation_notice_days, DROP COLUMN revocation_after_months;
+            DROP VIEW marketplace_penalty_tiers;
+            DROP VIEW marketplace_default_terms;
+            CREATE VIEW marketplace_default_terms WITH (security_barrier = true) AS
+            SELECT DISTINCT ON (d.estate_id)
+                d.id                          AS default_terms_id,
+                d.estate_id                   AS estate_id,
+                d.revocation_trigger          AS revocation_trigger,
+                d.revocation_notice_days      AS revocation_notice_days,
+                d.on_revocation_refund        AS on_revocation_refund,
+                d.development_deadline_months AS development_deadline_months,
+                d.transfer_requires_consent   AS transfer_requires_consent,
+                d.notes                       AS notes,
+                d.penalties_refundable        AS penalties_refundable
+            FROM estate_default_terms d
+            JOIN marketplace_estate_eligibility el ON el.estate_id = d.estate_id AND el.eligible
+            WHERE d.deleted = false
+            ORDER BY d.estate_id, d.version DESC;
+            CREATE VIEW marketplace_penalty_tiers WITH (security_barrier = true) AS
+            SELECT
+                t.id               AS penalty_tier_id,
+                d.estate_id        AS estate_id,
+                t.months_late      AS months_late,
+                t.penalty_pct      AS penalty_pct
+            FROM estate_default_penalty_tiers t
+            JOIN marketplace_default_terms d ON d.default_terms_id = t.default_terms_id
+            WHERE t.deleted = false;
+            REVOKE ALL ON marketplace_default_terms, marketplace_penalty_tiers FROM PUBLIC;
+            REVOKE ALL ON marketplace_default_terms, marketplace_penalty_tiers FROM ${appDbUsername};
+            GRANT SELECT ON marketplace_default_terms, marketplace_penalty_tiers TO ${appDbUsername};
+            ALTER TABLE estate_default_terms DROP CONSTRAINT chk_estate_default_terms_revocation_after,
+                DROP COLUMN revocation_after_months;
+            UPDATE estate_default_terms SET revocation_trigger = '' WHERE revocation_trigger IS NULL;
+            UPDATE estate_default_terms SET on_revocation_refund = '' WHERE on_revocation_refund IS NULL;
+            ALTER TABLE estate_default_terms ALTER COLUMN revocation_trigger SET NOT NULL,
+                ALTER COLUMN on_revocation_refund SET NOT NULL;
+        ]]></rollback>
+    </changeSet>
+
+    <changeSet id="107-plan-revocations" author="landvault">
+        <sql splitStatements="false"><![CDATA[
+            CREATE TABLE plan_revocations (
+                id                      uuid NOT NULL PRIMARY KEY,
+                tenant_id               uuid,
+                branch_id               uuid,
+                created_at              timestamp(6) with time zone NOT NULL,
+                updated_at              timestamp(6) with time zone,
+                created_by              varchar(255),
+                updated_by              varchar(255),
+                deleted                 boolean NOT NULL DEFAULT false,
+
+                transaction_id          uuid NOT NULL REFERENCES transactions (id),
+                seller_tenant_id        uuid NOT NULL REFERENCES organizations (id),
+                buyer_user_id           uuid NOT NULL REFERENCES users (id),
+                status                  varchar(16) NOT NULL,
+                reason                  varchar(500) NOT NULL,
+                revocation_after_months integer NOT NULL,
+                notice_days             integer NOT NULL,
+                instalment_sequence     integer NOT NULL,
+                instalment_due_date     date NOT NULL,
+                notice_given_at         timestamp(6) with time zone NOT NULL,
+                deadline                date NOT NULL,
+                started_by              uuid NOT NULL REFERENCES users (id),
+                closed_at               timestamp(6) with time zone,
+                closed_by               uuid REFERENCES users (id),
+                close_note              varchar(500),
+
+                CONSTRAINT chk_plan_revocations_status CHECK (status IN
+                    ('NOTICE', 'CANCELLED', 'CLEARED', 'WITHDRAWN', 'REVOKED')),
+                CONSTRAINT chk_plan_revocations_closed CHECK ((status = 'NOTICE') = (closed_at IS NULL)),
+                CONSTRAINT chk_plan_revocations_terms CHECK (revocation_after_months >= 3 AND notice_days >= 14)
+            );
+            CREATE UNIQUE INDEX uq_plan_revocations_one_open ON plan_revocations (transaction_id)
+                WHERE status = 'NOTICE' AND deleted = false;
+            CREATE INDEX idx_plan_revocations_transaction ON plan_revocations (transaction_id, created_at);
+            CREATE INDEX idx_plan_revocations_seller ON plan_revocations (seller_tenant_id, status);
+            REVOKE DELETE, TRUNCATE ON plan_revocations FROM ${appDbUsername};
+            COMMENT ON TABLE plan_revocations IS
+                'Phase 5b: a developer''s revocation of an instalment plan. NOTICE (the buyer has until deadline, inclusive, Lagos, to pay what is overdue), then CANCELLED (developer), CLEARED (the buyer caught up), WITHDRAWN (the buyer withdrew) or REVOKED (confirmed after the deadline). One open notice per purchase. Buyer-owned like transactions: not RLS-policied. Never deleted.';
+            COMMENT ON COLUMN plan_revocations.closed_by IS
+                'Who closed it; null when the system did (a buyer catching up, or withdrawing).';
+
+            INSERT INTO permissions (id, created_at, created_by, deleted, code, description, label, group_code,
+                                     sort_order, requires_company_wide) VALUES
+                (gen_random_uuid(), now(), 'system', false, 'portal.plans.revoke',
+                 'Give a buyer who has fallen behind on an instalment plan notice of revocation, cancel it, and confirm the revocation once the notice has run out. Company-wide roles only.',
+                 'Revoke instalment plans', 'finance', 30, true);
+            INSERT INTO role_permissions (id, created_at, created_by, deleted, role_id, permission_id)
+            SELECT gen_random_uuid(), now(), 'system', false, r.id, p.id
+            FROM roles r, permissions p
+            WHERE p.code = 'portal.plans.revoke' AND r.code = 'executive_director';
+        ]]></sql>
+        <rollback><![CDATA[
+            DELETE FROM role_permissions WHERE permission_id IN
+                (SELECT id FROM permissions WHERE code = 'portal.plans.revoke');
+            DELETE FROM permissions WHERE code = 'portal.plans.revoke';
+            DROP TABLE plan_revocations;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

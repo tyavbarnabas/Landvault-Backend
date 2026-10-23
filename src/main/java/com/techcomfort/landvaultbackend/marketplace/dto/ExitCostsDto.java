@@ -61,8 +61,7 @@ public record ExitCostsDto(
                 + "who withdraws — declared by the developer. Null when no penalty is declared.", nullable = true)
         Boolean penaltiesRefundable,
 
-        @Schema(description = "What triggers revocation, the notice given, and what happens to money "
-                + "already paid.")
+        @Schema(description = "When an instalment plan can be revoked, the notice given, and what is refunded.")
         RevocationDto revocation,
 
         @Schema(description = "True when neither exit is free.") boolean bothPathsCarryACost
@@ -92,11 +91,16 @@ public record ExitCostsDto(
     ) {
     }
 
-    @Schema(name = "RevocationTerms")
+    @Schema(name = "RevocationTerms", description = """
+            Phase 5b: an instalment plan can be revoked once an instalment is `afterMonthsUnpaid` whole \
+            months past its due date and still unpaid. The developer must then give `noticeDays` of \
+            written notice; paying what is overdue before the deadline stops it. If it goes ahead, the \
+            buyer is refunded exactly what withdrawing would return (`withdrawal` above) — never less.""")
     public record RevocationDto(
-            String trigger,
-            @Schema(nullable = true) Integer noticeDays,
-            @Schema(description = "What happens to money already paid.") String onRevocationRefund,
+            @Schema(example = "6") int afterMonthsUnpaid,
+            @Schema(description = "As declared, never under HomeTrue's 14 days.", example = "30") int noticeDays,
+            @Schema(description = "Always true: a revoked buyer gets what a withdrawal would return.")
+            boolean refundedAsOnWithdrawal,
             @Schema(description = "Declared, but nothing tracks the clock yet.", nullable = true)
             Integer developmentDeadlineMonths,
             @Schema(description = "Disclosed here; not enforced, because resale does not exist yet.")

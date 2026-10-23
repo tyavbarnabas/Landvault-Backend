@@ -1,5 +1,7 @@
 package com.techcomfort.landvaultbackend.payments.internal.exceptions;
 
+import java.time.LocalDate;
+
 /** Payment refusals. Never carries a secret key or card detail. */
 public abstract class PaymentException extends RuntimeException {
 
@@ -250,7 +252,6 @@ public abstract class PaymentException extends RuntimeException {
         }
     }
 
-    /** 3c: an instalment plan still running, with every share owed so far paid; the rest waits in escrow. */
     /** 5a: the buyer withdrew; the developer's verified shares are all paid out. */
     public static class WithdrawnPlanPaid extends PaymentException {
         public WithdrawnPlanPaid() {
@@ -259,6 +260,15 @@ public abstract class PaymentException extends RuntimeException {
         }
     }
 
+    /** 5b: the plan was revoked; the developer's verified shares are all paid out. */
+    public static class RevokedPlanPaid extends PaymentException {
+        public RevokedPlanPaid() {
+            super("This plan was revoked, and every share owed to the developer so far has been paid out. A share "
+                    + "of a payment their finance hasn't verified is paid once they verify it.");
+        }
+    }
+
+    /** 3c: an instalment plan still running, with every share owed so far paid; the rest waits in escrow. */
     public static class HeldInEscrow extends PaymentException {
         public HeldInEscrow() {
             super("Everything owed on this purchase so far has been paid out. The rest is held in escrow until "
@@ -367,6 +377,57 @@ public abstract class PaymentException extends RuntimeException {
         public WithdrawalQuoteChanged() {
             super("Your refund figures changed since you looked at them. Check the new figures and confirm again. "
                     + "Nothing was changed.");
+        }
+    }
+
+    /** 5b: only a running plan can be revoked. */
+    public static class PlanNotRevocable extends PaymentException {
+        public PlanNotRevocable(String status) {
+            super("Only a running instalment plan can be revoked (this purchase is " + status + ").");
+        }
+    }
+
+    /** 5b: the purchase was opened with no revocation terms, so it can't be revoked. */
+    public static class RevocationTermsMissing extends PaymentException {
+        public RevocationTermsMissing() {
+            super("This purchase was opened before the estate declared when a plan can be revoked, so it can't be "
+                    + "revoked.");
+        }
+    }
+
+    /** 5b: the declared trigger isn't met — nobody is that far behind. */
+    public static class RevocationNotDue extends PaymentException {
+        public RevocationNotDue(String detail) {
+            super(detail);
+        }
+    }
+
+    /** 5b: one open notice per plan. */
+    public static class RevocationAlreadyNotified extends PaymentException {
+        public RevocationAlreadyNotified(LocalDate deadline) {
+            super("The buyer already has notice of revocation, with until " + deadline + " to pay what is overdue.");
+        }
+    }
+
+    /** 5b: nothing to cancel or confirm. */
+    public static class NoOpenRevocation extends PaymentException {
+        public NoOpenRevocation() {
+            super("There is no open notice of revocation on this plan.");
+        }
+    }
+
+    /** 5b: the buyer still has time. */
+    public static class RevocationNoticeRunning extends PaymentException {
+        public RevocationNoticeRunning(LocalDate deadline) {
+            super("The buyer has until the end of " + deadline + " to pay what is overdue. The revocation can be "
+                    + "confirmed from the day after.");
+        }
+    }
+
+    /** 5b: revocation is a company decision, made with the company-wide view. */
+    public static class RevocationRequiresCompanyWideScope extends PaymentException {
+        public RevocationRequiresCompanyWideScope() {
+            super("Revoking a plan is a company-wide decision. Switch to the company-wide view to do it.");
         }
     }
 }

@@ -29,6 +29,7 @@ import com.techcomfort.landvaultbackend.common.PageResponse;
 import com.techcomfort.landvaultbackend.common.PageResponses;
 import com.techcomfort.landvaultbackend.common.PlotIntent;
 import com.techcomfort.landvaultbackend.common.PostalAddress;
+import com.techcomfort.landvaultbackend.common.RevocationTerms;
 import com.techcomfort.landvaultbackend.identity.IdentityApi;
 import com.techcomfort.landvaultbackend.marketplace.MarketplaceApi;
 import com.techcomfort.landvaultbackend.marketplace.OfferedPlan;
@@ -157,6 +158,11 @@ public class TransactionService {
                         .orElse(null))
                 // Phase 4: whether penalties are refunded, fixed like the price.
                 .penaltiesRefundable(chosen.map(c -> c.lateTerms().penaltiesRefundable()).orElse(null))
+                // Phase 5b: when the plan may be revoked, and the notice, fixed like the price.
+                .revocationAfterMonths(chosen.map(c -> c.lateTerms().revocation()).map(RevocationTerms::afterMonths)
+                        .orElse(null))
+                .revocationNoticeDays(chosen.map(c -> c.lateTerms().revocation()).map(RevocationTerms::noticeDays)
+                        .orElse(null))
                 .buyerAddressLine1(address.line1())
                 .buyerAddressLine2(address.line2())
                 .buyerAddressCity(address.city())
@@ -327,7 +333,8 @@ public class TransactionService {
                 t.getPlanTotal(), t.getPlanPremium(), t.getDepositAmount(), instalments.stream()
                 .sorted(Comparator.comparing(TransactionInstalment::getSequence))
                 .map(i -> new PlanSchedule.Instalment(i.getSequence(), i.getDueDate(), i.getAmount()))
-                .toList(), new LatePaymentTerms(steps, !Boolean.FALSE.equals(t.getPenaltiesRefundable()))));
+                .toList(), new LatePaymentTerms(steps, !Boolean.FALSE.equals(t.getPenaltiesRefundable()),
+                t.revocationTerms())));
     }
 
     private static String generateReference() {
@@ -360,6 +367,7 @@ public class TransactionService {
                 offer,
                 schedule.orElse(null),
                 standing,
-                transaction.getWithdrawnAt());
+                transaction.getWithdrawnAt(),
+                transaction.getRevokedAt());
     }
 }

@@ -1,6 +1,7 @@
 package com.techcomfort.landvaultbackend.inventory.internal.service;
 
 import com.techcomfort.landvaultbackend.common.FeeType;
+import com.techcomfort.landvaultbackend.common.RevocationTerms;
 import com.techcomfort.landvaultbackend.inventory.EstateDocumentFacts;
 import com.techcomfort.landvaultbackend.inventory.EstateDocumentsApi;
 import com.techcomfort.landvaultbackend.inventory.PlotDocumentFacts;
@@ -86,8 +87,8 @@ public class EstateDocumentsApiImpl implements EstateDocumentsApi {
 
     private EstateDocumentFacts.DefaultTerms defaultTerms(UUID estateId) {
         return defaultTerms.findFirstByEstateIdOrderByVersionDesc(estateId).map(terms ->
-                new EstateDocumentFacts.DefaultTerms(terms.getVersion(), terms.getRevocationTrigger(),
-                        terms.getRevocationNoticeDays(), terms.getOnRevocationRefund(),
+                new EstateDocumentFacts.DefaultTerms(terms.getVersion(),
+                        RevocationTerms.offered(terms.getRevocationAfterMonths(), terms.getRevocationNoticeDays()),
                         terms.getDevelopmentDeadlineMonths(), Boolean.TRUE.equals(terms.getTransferRequiresConsent()),
                         penaltyTiers.findByDefaultTermsIdOrderByMonthsLateAsc(terms.getId()).stream()
                                 .map(t -> new EstateDocumentFacts.PenaltyStep(t.getMonthsLate(), t.getPenaltyPct()))

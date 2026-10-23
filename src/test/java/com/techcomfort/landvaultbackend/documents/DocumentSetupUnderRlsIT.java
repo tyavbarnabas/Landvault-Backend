@@ -902,9 +902,8 @@ class DocumentSetupUnderRlsIT {
                         {"deductionPct":20.00,"processingDays":90,"appliesTo":"total_price",
                          "nonRefundableFeeTypes":["application"]}"""},
                 new String[]{"default-terms", """
-                        {"revocationTrigger":"Failure to begin development within 24 months.",
+                        {"revocationAfterMonths":6,
                          "revocationNoticeDays":30,
-                         "onRevocationRefund":"Payments to date are refunded less a 20% administrative charge.",
                          "developmentDeadlineMonths":24, "transferRequiresConsent":true, "penaltyTiers":[]}"""})) {
             ResponseEntity<String> declared = restTemplate.exchange("/api/portal/estates/" + estate + "/" + part[0],
                     HttpMethod.PUT, entity(director, part[1]), String.class);

@@ -369,7 +369,21 @@ gets it without a new call.
   Super Admin's refunds-due list. Pay afterwards → `TRANSACTION_NOT_PAYABLE`; withdrawing again → 409
   `PLAN_NOT_WITHDRAWABLE` (also for outright purchases, a deposit not yet verified, or a paid-off plan). A receipt
   reads `refunded` only once its payment came back **in full**.
-  **Not built yet (phase 5)**: revocation, restructure and penalty waivers.
+  **Phase 5b built** (changeset 107): **revocation**. **Wire change to default terms**: `DeclareDefaultTermsRequest`
+  takes `revocationAfterMonths` (required, 3–120: an instalment that many whole months unpaid makes the plan
+  revocable) and `revocationNoticeDays` (optional, at least 14; left out, 14). `revocationTrigger` and
+  `onRevocationRefund` are **gone** — no longer accepted or returned. `DefaultTerms` returns `revocationAfterMonths`,
+  `revocationNoticeDays` (as declared) and `noticeDaysGiven`. The listing's `exitCosts.revocation` is now
+  `{ afterMonthsUnpaid, noticeDays, refundedAsOnWithdrawal: true, developmentDeadlineMonths, transferRequiresConsent }`
+  (no `trigger`, no `onRevocationRefund`); letters print HomeTrue's own sentence from the number. The terms are
+  **copied onto the purchase** at Proceed to buy: `schedule.lateTerms.revocation: { afterMonths, noticeDays }`.
+  The buyer's `standing.revocation: { afterMonthsUnpaid, noticeDays, revocableFrom, revocableNow, notice }` says
+  when the plan could be revoked and carries an open notice `{ reason, givenAt, deadline, instalmentSequence }` —
+  show it prominently: paying what is overdue before the end of `deadline` (Lagos) stops it, once finance verifies.
+  Once confirmed: purchase `revoked` (`TransactionDto.revokedAt`), portfolio `status: "revoked"`, provisional letter
+  `revoked`, refunds exactly as a withdrawal (`GET /api/transactions/{id}/withdrawal` shows `status: "revoked"`).
+  Developer routes: see Portal finance ("Revoking a plan").
+  **Not built yet (phase 5)**: restructure and penalty waivers.
 
 ### Publication now has SEVEN conditions, not five
 
@@ -1001,7 +1015,33 @@ company; a branch officer sees only their branch's) → `[{ transactionId, trans
 plotId, plotLabel, buyerEmail, planName, currency, instalmentCount, instalmentsPaid, nextDueDate, nextDueAmount,
 status, arrears }]`, most urgent first. `status` is `on_track` | `due_today` | `overdue` | `in_arrears` — the same the
 buyer sees, worked out today; `arrears` as on the purchase's `standing`. Filter `status=` one of those or `late`
-(overdue and in arrears); anything else is 400 `INVALID_STATUS`. Read-only.
+(overdue and in arrears); anything else is 400 `INVALID_STATUS`. Read-only. Phase 5b: each row also carries
+`revocation` (as on the purchase's `standing`), null when the purchase has no revocation terms.
+
+**Revoking a plan (phase 5b)**: new permission `portal.plans.revoke` (Executive Director; company-wide view only —
+otherwise 403 `REVOCATION_REQUIRES_COMPANY_WIDE_SCOPE`); add it to the frontend's list. All under
+`/api/portal/plans/{transactionId}/revocation`, each answering the same `PlanRevocation`:
+`{ transactionId, transactionReference, status, afterMonthsUnpaid, noticeDays, revocableFrom, revocableNow,
+overdueToday, notice, settlement: { paid, refund, developerKeeps, currency }, history: [notice] }` where a notice is
+`{ id, status (notice | cancelled | cleared | withdrawn | revoked), reason, givenAt, deadline, confirmableFrom,
+instalmentSequence, closedAt, closeNote }`. `settlement` is what revoking now would return (exactly a withdrawal),
+or what was settled once revoked.
+- `GET` — the standing above.
+- `POST { reason }` — give notice. Only once an instalment is unpaid `afterMonthsUnpaid` months past due (a payment
+  awaiting finance counts as paid): otherwise 409 `REVOCATION_NOT_DUE`, whose message says when it would be.
+  Also 409 `PLAN_NOT_REVOCABLE` (not running), `REVOCATION_TERMS_MISSING` (opened before terms existed),
+  `REVOCATION_ALREADY_NOTIFIED`. The buyer is emailed the reason, what is overdue, the deadline (today +
+  `noticeDays`) and what a revocation would return. Nothing else changes.
+- `POST /cancel { note? }` — withdraw the notice; the buyer is emailed. 409 `NO_OPEN_REVOCATION`.
+- `POST /confirm` — from the day after the deadline, if the buyer is still that far behind: the purchase becomes
+  `revoked`, the plot goes back on sale, refunds as on withdrawal go on the Super Admin's list, the buyer is emailed.
+  409 `REVOCATION_NOTICE_RUNNING`, `REVOCATION_NOT_DUE` (caught up, or a payment awaits your finance — verify or
+  reject it first), `NO_OPEN_REVOCATION`.
+When finance verifies a payment that brings the buyer back under the trigger (or pays the plan off), the notice
+ends by itself (`cleared`) and the buyer is emailed; a buyer who withdraws during a notice ends it (`withdrawn`).
+Finance queue rows on a revoked plan carry `planRevoked: true` and are handled like `planWithdrawn`; deciding
+answers `{ status: "revoked" }`. Payouts on a revoked plan: shares as usual, never a release — 409
+`REVOKED_PLAN_PAID` once everything owed is paid.
 
 **Payments, step 8a — payout account.** New permissions `portal.settlement.manage`
 (Executive Director) and `admin.payouts.manage` (Super Admin) — add both to the

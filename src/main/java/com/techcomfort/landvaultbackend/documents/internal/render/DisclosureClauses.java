@@ -3,6 +3,7 @@ package com.techcomfort.landvaultbackend.documents.internal.render;
 import com.techcomfort.landvaultbackend.common.DueTrigger;
 import com.techcomfort.landvaultbackend.common.FeeType;
 import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
+import com.techcomfort.landvaultbackend.common.RevocationTerms;
 import com.techcomfort.landvaultbackend.inventory.EstateDocumentFacts;
 
 import java.math.BigDecimal;
@@ -101,10 +102,14 @@ public final class DisclosureClauses {
     }
 
     static String revocation(EstateDocumentFacts.DefaultTerms terms) {
-        String notice = terms.revocationNoticeDays() == null ? ""
-                : ", after " + terms.revocationNoticeDays() + " days' written notice";
-        return "That the allocation may be revoked for " + lowerFirst(trimEnd(terms.revocationTrigger())) + notice
-                + ". If it is, " + lowerFirst(trimEnd(terms.onRevocationRefund())) + ".";
+        // Phase 5b: HomeTrue's wording from the declared number — never the developer's own text.
+        RevocationTerms revocation = terms.revocation();
+        int months = revocation.afterMonths();
+        return "That, for a plot bought on an instalment plan, the allocation may be revoked if an instalment "
+                + "remains unpaid " + months + " month" + (months == 1 ? "" : "s") + " after its due date, after at "
+                + "least " + revocation.noticeDays() + " days' written notice, during which paying what is overdue "
+                + "stops it. If it is revoked, the allottee is refunded exactly what withdrawing from the plan "
+                + "would return.";
     }
 
     private static String feeName(EstateDocumentFacts.Fee fee) {
@@ -151,14 +156,6 @@ public final class DisclosureClauses {
             t = t.substring(0, t.length() - 1).strip();
         }
         return t;
-    }
-
-    /** "Failure to pay" → "failure to pay"; an acronym ("AGIS …") is left alone. */
-    private static String lowerFirst(String text) {
-        if (text.length() < 2 || Character.isUpperCase(text.charAt(1))) {
-            return text;
-        }
-        return Character.toLowerCase(text.charAt(0)) + text.substring(1);
     }
 
     private static boolean blank(String text) {

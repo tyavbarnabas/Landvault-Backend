@@ -18,7 +18,8 @@ public record DocumentDto(
         Instant issuedAt,
         @Schema(description = """
                 Receipts and allocation letters: `valid`; a provisional allocation letter is `withdrawn` once \
-                the buyer withdrew from the plan. (`void` and `superseded` are for reissued letters.) A fully \
+                the buyer withdrew from the plan, or `revoked` once the developer revoked it. (`void` and \
+                `superseded` are for reissued letters.) A fully \
                 refunded payment's receipt stays valid — the money did arrive — and carries `refundedAt`. Offer \
                 letters: `issued` (waiting for the buyer), `accepted`, or `lapsed` (the purchase was rejected or \
                 abandoned).""") String status,

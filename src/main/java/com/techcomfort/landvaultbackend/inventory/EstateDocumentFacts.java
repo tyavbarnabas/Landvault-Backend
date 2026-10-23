@@ -5,6 +5,8 @@ import com.techcomfort.landvaultbackend.common.DueTrigger;
 import com.techcomfort.landvaultbackend.common.FeeType;
 import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
 
+import com.techcomfort.landvaultbackend.common.RevocationTerms;
+
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
@@ -45,9 +47,11 @@ public record EstateDocumentFacts(
                               List<FeeType> nonRefundableFeeTypes) {
     }
 
-    /** @param penaltySteps the declared late-payment steps, earliest first; empty when none */
-    public record DefaultTerms(int version, String revocationTrigger, Integer revocationNoticeDays,
-                               String onRevocationRefund, Integer developmentDeadlineMonths,
+    /**
+     * @param revocation   phase 5b: when a plan may be revoked, HomeTrue's notice minimum applied
+     * @param penaltySteps the declared late-payment steps, earliest first; empty when none
+     */
+    public record DefaultTerms(int version, RevocationTerms revocation, Integer developmentDeadlineMonths,
                                boolean transferRequiresConsent, List<PenaltyStep> penaltySteps) {
     }
 

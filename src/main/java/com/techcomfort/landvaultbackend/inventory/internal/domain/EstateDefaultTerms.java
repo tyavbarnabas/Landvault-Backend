@@ -33,19 +33,18 @@ public class EstateDefaultTerms extends AbstractEntity {
     @Column(name = "version", nullable = false, updatable = false)
     private Integer version;
 
-    @Column(name = "revocation_trigger", nullable = false, columnDefinition = "text")
-    private String revocationTrigger;
+    /**
+     * Phase 5b: revocable once an instalment is unpaid this many whole months
+     * past its due date (HomeTrue minimum 3). Replaced the free-text trigger
+     * and "on revocation" refund (changeset 107): a revoked buyer is refunded
+     * as on withdrawal, and HomeTrue words the clause.
+     */
+    @Column(name = "revocation_after_months", nullable = false)
+    private Integer revocationAfterMonths;
 
+    /** As declared; the buyer is given at least HomeTrue's minimum (14) regardless. */
     @Column(name = "revocation_notice_days")
     private Integer revocationNoticeDays;
-
-    /**
-     * Required, because both source letters are silent on it — and what
-     * happens to money already paid is the single most consequential thing
-     * either of them leaves out.
-     */
-    @Column(name = "on_revocation_refund", nullable = false, columnDefinition = "text")
-    private String onRevocationRefund;
 
     /**
      * Declared data only (DF-4). Nothing tracks or surfaces it: that needs

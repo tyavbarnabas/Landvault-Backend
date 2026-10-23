@@ -2615,6 +2615,169 @@ class ReservationCheckoutUnderRlsIT {
         assertThat(get("/api/admin/refunds/due", admin, String.class).getBody()).contains(first, "\"amount\":1540000");
     }
 
+    // --- instalment plans, phase 5b: revocation (changeset 107) ---
+
+    /**
+     * The developer revokes a plan the buyer stopped paying: only once an
+     * instalment is unpaid as long as the purchase's own terms say (3 months
+     * here), only by the Executive Director, only after the notice runs out.
+     * Then it ends exactly as a withdrawal: plot back on sale, the buyer's
+     * part of the deposit owed back, the developer's share theirs.
+     */
+    @Test
+    void aDeveloperRevokesAPlanOnlyOnceTheTermsAreMetAndTheNoticeHasRunOut() {
+        declareRefundTerms("{\"deductionPct\":20.00,\"processingDays\":90,\"appliesTo\":\"amount_paid\"}");
+        declareDefaultTerms("[]", null);
+        String before = plotStatus(plotId);
+        TransactionDto purchase = onPlanPurchase(SHORT_PLAN);
+        assertThat(queryString("SELECT revocation_after_months || '/' || revocation_notice_days FROM transactions "
+                + "WHERE id = '" + purchase.id() + "'")).as("copied when the purchase opened").isEqualTo("3/30");
+        String director = seller.token();
+        LocalDate today = LocalDate.now(ZoneId.of("Africa/Lagos"));
+
+        assertThat(revocation(director, purchase, "", "{\"reason\":\"Behind\"}").getBody())
+                .as("nothing is late").contains("REVOCATION_NOT_DUE", "Nothing is overdue now");
+        execute("UPDATE transaction_instalments SET due_date = current_date - 40 WHERE transaction_id = '"
+                + purchase.id() + "' AND sequence = 1");
+        ResponseEntity<String> tooSoon = revocation(director, purchase, "", "{\"reason\":\"Behind\"}");
+        assertThat(tooSoon.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(tooSoon.getBody()).as("in arrears, but not 3 months").contains("REVOCATION_NOT_DUE",
+                "reaches that on " + today.minusDays(40).plusMonths(3));
+
+        execute("UPDATE transaction_instalments SET due_date = current_date - 100 WHERE transaction_id = '"
+                + purchase.id() + "' AND sequence = 1");
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        assertThat(revocation(officer, purchase, "", "{\"reason\":\"Behind\"}").getStatusCode())
+                .as("finance can't revoke").isEqualTo(HttpStatus.FORBIDDEN);
+        UUID branch = UUID.fromString(queryString("SELECT id FROM branches WHERE organization_id = '" + seller.id()
+                + "' LIMIT 1"));
+        ResponseEntity<String> narrowed = revocation(staffWithRole(seller.id(), "executive_director", branch),
+                purchase, "", "{\"reason\":\"Behind\"}");
+        assertThat(narrowed.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(narrowed.getBody()).contains("REVOCATION_REQUIRES_COMPANY_WIDE_SCOPE");
+        assertThat(get("/api/portal/plans/" + purchase.id() + "/revocation", director, String.class).getBody())
+                .contains("\"revocableNow\":true", "\"afterMonthsUnpaid\":3", "\"noticeDays\":30",
+                        "\"refund\":5280000", "\"developerKeeps\":1320000");
+
+        ResponseEntity<String> given = revocation(director, purchase, "",
+                "{\"reason\":\"Instalment 1 unpaid since the summer.\"}");
+        assertThat(given.getStatusCode()).as(given.getBody()).isEqualTo(HttpStatus.OK);
+        assertThat(given.getBody()).contains("\"status\":\"notice\"", "\"deadline\":\"" + today.plusDays(30) + "\"");
+        assertThat(plotStatus(plotId)).as("notice changes nothing yet").isEqualTo("ON_PLAN");
+        TransactionDto told = get("/api/checkout/transactions/" + purchase.id(), buyer.token(), TransactionDto.class)
+                .getBody();
+        assertThat(told.standing().revocation().notice().deadline()).isEqualTo(today.plusDays(30));
+        assertThat(told.schedule().lateTerms().revocation().afterMonths()).isEqualTo(3);
+        verify(alerts, atLeastOnce()).planRevocation(argThat(a -> a.stage() == SettlementAlertSender.RevocationStage.NOTICE
+                && "5280000.00".equals(a.refund()) && "7700000.00".equals(a.totalDue())));
+
+        assertThat(revocation(director, purchase, "", "{\"reason\":\"Again\"}").getBody())
+                .contains("REVOCATION_ALREADY_NOTIFIED");
+        assertThat(revocation(director, purchase, "/confirm", null).getBody())
+                .as("the buyer still has time").contains("REVOCATION_NOTICE_RUNNING");
+
+        execute("UPDATE plan_revocations SET deadline = current_date - 1 WHERE transaction_id = '" + purchase.id() + "'");
+        ResponseEntity<String> revoked = revocation(director, purchase, "/confirm", null);
+        assertThat(revoked.getStatusCode()).as(revoked.getBody()).isEqualTo(HttpStatus.OK);
+        JsonNode settled = objectMapper.readTree(revoked.getBody());
+        assertThat(settled.path("status").asString()).as("the response reads the purchase as it now is")
+                .isEqualTo("revoked");
+        assertThat(settled.path("revocableNow").asBoolean()).isFalse();
+        assertThat(settled.path("settlement").path("refund").decimalValue()).isEqualByComparingTo("5280000");
+
+        assertThat(queryString("SELECT status || '/' || revocation_reason FROM transactions WHERE id = '"
+                + purchase.id() + "'")).isEqualTo("REVOKED/Instalment 1 unpaid since the summer.");
+        assertThat(plotStatus(plotId)).as("back on sale as it was").isEqualTo(before);
+        assertThat(queryString("SELECT status FROM owned_plots WHERE transaction_id = '" + purchase.id() + "'"))
+                .isEqualTo("REVOKED");
+        assertThat(queryString("SELECT status FROM plan_revocations WHERE transaction_id = '" + purchase.id() + "'"))
+                .isEqualTo("REVOKED");
+        assertThat(queryString("SELECT string_agg(purpose || '/' || refund_amount, ',') FROM payments "
+                + "WHERE transaction_id = '" + purchase.id() + "' AND refund_requested_at IS NOT NULL"))
+                .as("exactly a withdrawal's figures").isEqualTo("DEPOSIT/5280000.00");
+        assertThat(documents(buyer).items()).filteredOn(d -> "provisional_allocation_letter".equals(d.type()))
+                .singleElement().satisfies(d -> assertThat(d.status()).isEqualTo("revoked"));
+        assertThat(portfolio(buyer).items().getFirst().status()).isEqualTo("revoked");
+        verify(alerts, atLeastOnce()).planRevocation(argThat(a -> a.stage() == SettlementAlertSender.RevocationStage.REVOKED));
+        assertThat(get("/api/transactions/" + purchase.id() + "/withdrawal", buyer.token(), String.class).getBody())
+                .contains("\"status\":\"revoked\"", "\"refund\":5280000");
+
+        String admin = payoutAdmin(true);
+        assertThat(get("/api/admin/refunds/due", admin, String.class).getBody()).contains("\"amount\":5280000");
+        approvedPayoutAccount(seller.id(), "RCP_seller");
+        assertThat(readyFor(admin, purchase)).as("the deposit's share is still the developer's; nothing is released")
+                .contains("\"trancheAmount\":1320000").doesNotContain("\"tranche\":\"release\"");
+        assertThat(revocation(director, purchase, "/confirm", null).getBody()).contains("PLAN_NOT_REVOCABLE");
+        assertThat(pay(buyer, purchase.id()).getBody()).contains("TRANSACTION_NOT_PAYABLE");
+    }
+
+    /**
+     * Paying ends the notice — but only once finance verifies it. While the
+     * payment waits for finance the revocation can't be confirmed; once
+     * verified, the notice is cleared and the plan carries on.
+     */
+    @Test
+    void aBuyerWhoCatchesUpEndsTheNoticeOnceFinanceVerifies() {
+        declareDefaultTerms("[]", null);
+        TransactionDto purchase = onPlanPurchase(SHORT_PLAN);
+        execute("UPDATE transaction_instalments SET due_date = current_date - 100 WHERE transaction_id = '"
+                + purchase.id() + "' AND sequence = 1");
+        String director = seller.token();
+        assertThat(revocation(director, purchase, "", "{\"reason\":\"Behind\"}").getStatusCode())
+                .isEqualTo(HttpStatus.OK);
+
+        String first = payPlan(purchase, false);
+        paystackSays(first, "success", 770_000_000L, "NGN", "Approved");
+        confirm(buyer, first);
+        execute("UPDATE plan_revocations SET deadline = current_date - 1 WHERE transaction_id = '" + purchase.id() + "'");
+        assertThat(revocation(director, purchase, "/confirm", null).getBody())
+                .as("a payment waiting for finance counts as paid")
+                .contains("REVOCATION_NOT_DUE", "waiting for your finance team");
+        assertThat(queryString("SELECT status FROM plan_revocations WHERE transaction_id = '" + purchase.id() + "'"))
+                .as("not cleared until verified").isEqualTo("NOTICE");
+
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        assertThat(financeAction(officer, purchase.id(), "verify", null).getBody()).contains("\"status\":\"on_plan\"");
+        assertThat(queryString("SELECT status || '/' || (closed_by IS NULL) FROM plan_revocations WHERE transaction_id = '"
+                + purchase.id() + "'")).isEqualTo("CLEARED/true");
+        verify(alerts, atLeastOnce()).planRevocation(argThat(a -> a.stage() == SettlementAlertSender.RevocationStage.CLEARED));
+        assertThat(revocation(director, purchase, "/confirm", null).getBody()).contains("NO_OPEN_REVOCATION");
+        assertThat(plotStatus(plotId)).isEqualTo("ON_PLAN");
+    }
+
+    /** The developer can withdraw a notice; a buyer who withdraws while one runs overtakes it. */
+    @Test
+    void aNoticeCanBeCancelledOrOvertakenByTheBuyersWithdrawal() {
+        declareDefaultTerms("[]", null);
+        TransactionDto purchase = onPlanPurchase(SHORT_PLAN);
+        execute("UPDATE transaction_instalments SET due_date = current_date - 100 WHERE transaction_id = '"
+                + purchase.id() + "' AND sequence = 1");
+        String director = seller.token();
+        revocation(director, purchase, "", "{\"reason\":\"Behind\"}");
+        ResponseEntity<String> cancelled = revocation(director, purchase, "/cancel", "{\"note\":\"Agreed a date.\"}");
+        assertThat(cancelled.getStatusCode()).as(cancelled.getBody()).isEqualTo(HttpStatus.OK);
+        assertThat(cancelled.getBody()).contains("\"status\":\"cancelled\"", "Agreed a date.");
+        verify(alerts, atLeastOnce()).planRevocation(argThat(a -> a.stage() == SettlementAlertSender.RevocationStage.CANCELLED
+                && "Agreed a date.".equals(a.note())));
+        assertThat(revocation(director, purchase, "/cancel", null).getBody()).contains("NO_OPEN_REVOCATION");
+
+        assertThat(revocation(director, purchase, "", "{\"reason\":\"Still behind\"}").getStatusCode())
+                .as("a fresh notice after a cancelled one").isEqualTo(HttpStatus.OK);
+        String quote = get("/api/transactions/" + purchase.id() + "/withdrawal", buyer.token(), String.class).getBody();
+        Matcher refund = Pattern.compile("\"refund\":([0-9.]+)").matcher(quote);
+        assertThat(refund.find()).isTrue();
+        assertThat(restTemplate.exchange("/api/transactions/" + purchase.id() + "/withdrawal", HttpMethod.POST,
+                entity(buyer.token(), "{\"refund\":" + refund.group(1) + "}"), String.class).getStatusCode())
+                .isEqualTo(HttpStatus.OK);
+        assertThat(queryString("SELECT string_agg(status, ',' ORDER BY created_at) FROM plan_revocations "
+                + "WHERE transaction_id = '" + purchase.id() + "'")).isEqualTo("CANCELLED,WITHDRAWN");
+    }
+
+    private ResponseEntity<String> revocation(String token, TransactionDto purchase, String action, String body) {
+        return restTemplate.exchange("/api/portal/plans/" + purchase.id() + "/revocation" + action, HttpMethod.POST,
+                entity(token, body), String.class);
+    }
+
     /** This purchase's row on the payouts ready list, as JSON — other tests' sales share the list. */
     private String readyFor(String admin, TransactionDto purchase) {
         for (JsonNode row : objectMapper.readTree(get("/api/admin/payouts/ready", admin, String.class).getBody())) {
@@ -2649,8 +2812,7 @@ class ReservationCheckoutUnderRlsIT {
 
     private static String defaultTermsJson(String tiersJson, Boolean refundable) {
         return """
-                {"revocationTrigger":"Three instalments unpaid.","revocationNoticeDays":30,
-                 "onRevocationRefund":"Refunded less 20%%.","transferRequiresConsent":true,
+                {"revocationAfterMonths":3,"revocationNoticeDays":30,"transferRequiresConsent":true,
                  "penaltyTiers":%s%s}
                 """.formatted(tiersJson, refundable == null ? "" : ",\"penaltiesRefundable\":" + refundable);
     }

@@ -281,6 +281,90 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
         log.info("Plan withdrawal delivered to the {}", alert.toDeveloper() ? "developer" : "buyer");
     }
 
+    @Override
+    public void planRevocation(RevocationAlert alert) {
+        SimpleMailMessage message = new SimpleMailMessage();
+        message.setFrom(fromAddress);
+        message.setTo(alert.to());
+        String plot = alert.plotLabel() + " (purchase " + alert.purchaseReference() + ", " + alert.planName() + ")";
+        switch (alert.stage()) {
+            case NOTICE -> {
+                message.setSubject("Notice of revocation: " + alert.purchaseReference());
+                message.setText("""
+                        Hello,
+
+                        Your instalment plan for %s has an instalment still unpaid %d months after its due \
+                        date. Under the terms in your offer letter, the developer has given you notice that \
+                        they intend to revoke your plan.
+
+                        Pay what is overdue by the end of %s and the notice stops. Paying today would cost:
+
+                            NGN %s
+
+                        If it is not paid by then, the developer may revoke the plan. The plot would no longer \
+                        be held for you, and HomeTrue would return to you exactly what withdrawing returns:
+
+                            Returned to you:         NGN %s
+                            Kept by the developer:   NGN %s
+
+                        You may also withdraw yourself at any time, on the same terms.%s
+
+                        See your plan and pay:
+
+                            %s
+                        """.formatted(plot, alert.afterMonths(), alert.deadline(), alert.totalDue(), alert.refund(),
+                        alert.developerKeeps(), alert.note() == null ? "" : "\n\nThe developer's reason: " + alert.note(),
+                        alert.purchaseUrl()));
+            }
+            case CANCELLED -> {
+                message.setSubject("Notice of revocation withdrawn: " + alert.purchaseReference());
+                message.setText("""
+                        Hello,
+
+                        The developer has withdrawn the notice of revocation on your instalment plan for %s. \
+                        Your plan carries on as before; any instalment still overdue remains due.%s
+
+                            %s
+                        """.formatted(plot, alert.note() == null ? "" : "\n\nTheir note: " + alert.note(),
+                        alert.purchaseUrl()));
+            }
+            case CLEARED -> {
+                message.setSubject("You're back on track: " + alert.purchaseReference());
+                message.setText("""
+                        Hello,
+
+                        Your payment has been verified, and nothing on your instalment plan for %s is overdue \
+                        long enough to revoke it any more. The notice of revocation has ended and your plan \
+                        carries on.
+
+                            %s
+                        """.formatted(plot, alert.purchaseUrl()));
+            }
+            case REVOKED -> {
+                message.setSubject("Your plan has been revoked: " + alert.purchaseReference());
+                message.setText("""
+                        Hello,
+
+                        The notice period on your instalment plan for %s has ended with the overdue amount \
+                        unpaid, and the developer has revoked the plan. The plot is no longer held for you.
+
+                        HomeTrue returns to you exactly what withdrawing would have returned, from the money it \
+                        holds:
+
+                            Returned to you:         NGN %s
+                            Kept by the developer:   NGN %s
+
+                        It is paid back through the payment provider, payment by payment. We'll email you if we \
+                        need a bank account from you.
+
+                            %s
+                        """.formatted(plot, alert.refund(), alert.developerKeeps(), alert.purchaseUrl()));
+            }
+        }
+        mailSender.send(message);
+        log.info("Plan revocation {} delivered to the buyer", alert.stage());
+    }
+
     /**
      * AR-3. Factual and calm, like the conflict guidance: what is due, by when,
      * and what happens next — never a threat.

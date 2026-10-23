@@ -6461,8 +6461,63 @@ Paystack (a second refund request), the release function as `SECURITY INVOKER`, 
 any completed refund (`aPartRefundCompletingKeepsAPaymentFlaggedWhileMoreIsOwed`).
 
 **Not built**: a buyer withdrawing while their deposit still awaits finance (`awaiting_finance`, not yet on the
-plan — refused as `PLAN_NOT_WITHDRAWABLE`), the receipt's partly-refunded state, and revocation (5b), restructure
-(5c) and penalty waivers.
+plan — refused as `PLAN_NOT_WITHDRAWABLE`), the receipt's partly-refunded state, restructure (5c) and penalty
+waivers.
+
+### Phase 5b: revocation (changeset 107)
+
+Decided with the user (2026-10-23: 1B, 2A, 3A, 4A). Revocation exists because nothing else ends a plan the buyer has
+stopped paying: the plot would sit `ON_PLAN` forever and the escrow with it, and developers would revoke off the
+platform anyway — with no notice and no guaranteed refund. On the platform it has rules on both sides.
+
+- **The trigger is a number the buyer reads before paying, never text** (the user's point: "if the payment is not
+  completed within a period, the land will be revoked" must be stated as a period). `estate_default_terms.
+  revocation_after_months` (HomeTrue minimum 3, max 120): an instalment unpaid that many whole months past its due
+  date (`LatePaymentTerms.monthsLate`). The free-text `revocation_trigger` and `on_revocation_refund` are retired —
+  kept as history, no longer written or read; existing dev rows were given 12 months. HomeTrue words the clause on
+  letters (`DisclosureClauses.revocation`) and the listing publishes the numbers (`exitCosts.revocation`).
+- **The refund is a withdrawal's** (decision 2): the same escrow arithmetic (`WithdrawalService.flagRefunds`, shared),
+  so a revoked buyer is never worse off than one who withdrew, and a developer can't profit from revoking rather
+  than letting the buyer leave. Penalties follow `penaltiesRefundable`.
+- **Notice: as declared, never under 14 days** (decision 3, `RevocationTerms.MIN_NOTICE_DAYS`, applied when the terms
+  are offered).
+- **Executive Director only** (decision 4): `portal.plans.revoke` (finance group, `requires_company_wide`), plus the
+  service's own company-wide check (`REVOCATION_REQUIRES_COMPANY_WIDE_SCOPE`, a director narrowed with
+  `X-Branch-Id` included). Taking land back is bigger than verifying a payment.
+- **Copied onto the purchase at Proceed to buy** (`transactions.revocation_after_months/notice_days`, carried as
+  `LatePaymentTerms.revocation` on the schedule), like the price and penalties: tightening the estate's terms
+  reaches new buyers only. Running dev plans were given their estate's current terms; a purchase with none can't be
+  revoked (`REVOCATION_TERMS_MISSING`).
+- **Nothing is automatic.** `RevocationService`: the director gives notice (`plan_revocations`, status `NOTICE`, with
+  a reason the buyer reads and a deadline = today + notice days, Lagos) only when the trigger is met **now** — a
+  payment waiting for finance counts as paid (phase 4's rule); confirms only **after** the deadline and only if
+  still met; or cancels. One open notice per plan (partial unique index + row lock). The buyer is emailed at each
+  step (after commit), the notice email stating what is overdue, the deadline and what a revocation would return.
+- **The buyer ends it, not just the developer** (`RevocationNotices`, its own bean to avoid a cycle with
+  withdrawal): finance verifying a payment that brings the plan back under the trigger (or pays it off) closes the
+  notice `CLEARED` — a payment merely awaiting finance never does; withdrawing closes it `WITHDRAWN`.
+- **Confirming ends the plan like a withdrawal**: `CheckoutApi.revoke` (once-only `ON_PLAN → REVOKED`, under the
+  director's RLS so another branch's plan is a 404), the plot back on sale through `landvault_release_withdrawn_plot`
+  (now accepting `REVOKED` too — one path keeps the size resync and status check in one place), `PlanRevoked` → the
+  portfolio record `REVOKED` (retired, out of `uq_owned_plots_one_owner`), the provisional letter reads `revoked`
+  (derived). Everywhere a withdrawn plan was special — finance queue (`planRevoked`, `FinanceQueueRow.planEnded()`),
+  payouts (`Escrow.ended()`; 409 `REVOKED_PLAN_PAID`), late money (refunded in full) — a revoked one is the same.
+- **Standing carries it**: `PlanStanding.revocation` (`afterMonthsUnpaid`, `noticeDays`, `revocableFrom`,
+  `revocableNow`, the open `notice`) on the buyer's purchase and the developer's plan list, worked out on read
+  except the notice record.
+
+Proven red: confirming before the deadline, giving notice for any late instalment rather than the trigger, the
+notice not clearing when finance verifies the catch-up payment, and the confirm response reading the purchase from
+before the change.
+
+**Found in the Swagger walkthrough**: confirming answered `status: "on_plan"` though the purchase was revoked. The
+once-only status change is a native `UPDATE`, and the response re-read the `Transaction` the same request had
+already loaded — Hibernate's copy, from before it. `CheckoutApiImpl.revoke` now `refresh`es it. The test had passed
+because it looked for `"status":"revoked"` anywhere in the body, and the history entry matched; it now reads the
+top-level field. **Any read after a native update in the same transaction needs the entity refreshed.**
+
+**Not built**: an automatic reminder as a notice's deadline nears, emailing other Executive Directors when one gives
+notice, and reinstating a revoked plan (a new purchase).
 
 ## A buyer's address (changeset 097)
 

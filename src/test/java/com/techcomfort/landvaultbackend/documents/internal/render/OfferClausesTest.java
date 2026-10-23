@@ -5,6 +5,7 @@ import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.DueTrigger;
 import com.techcomfort.landvaultbackend.common.FeeType;
 import com.techcomfort.landvaultbackend.common.LatePaymentTerms;
+import com.techcomfort.landvaultbackend.common.RevocationTerms;
 import com.techcomfort.landvaultbackend.inventory.EstateDocumentFacts;
 import org.junit.jupiter.api.Test;
 
@@ -77,7 +78,7 @@ class OfferClausesTest {
                         fee(FeeType.INFRASTRUCTURE, "1500000", DueTrigger.ON_CONSTRUCTION_START),
                         fee(FeeType.FACILITY_MANAGEMENT, "60000", DueTrigger.ANNUAL))),
                 null,
-                new EstateDocumentFacts.DefaultTerms(1, "Three instalments unpaid.", 30, "Refunded less 15%.", null,
+                new EstateDocumentFacts.DefaultTerms(1, new RevocationTerms(3, 30), null,
                         false, List.of(new EstateDocumentFacts.PenaltyStep(2, new BigDecimal("50")))));
 
         List<String> clauses = OfferClauses.plan(schedule, new BigDecimal("15000000"), null,

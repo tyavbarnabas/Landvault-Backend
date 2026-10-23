@@ -155,9 +155,12 @@ public class PortalEstateDisclosureController {
             description = """
                     Requires `portal.estates.manage`.
 
-                    **`onRevocationRefund` is required**, because it is the thing real allocation \
-                    letters leave out: "your allocation may be revoked" without saying what happens \
-                    to money already paid tells a buyer nothing about their exposure.
+                    **Revocation is a number** (phase 5b): `revocationAfterMonths` (at least 3) — an \
+                    instalment plan may be revoked once an instalment is that many months unpaid — and \
+                    `revocationNoticeDays` (at least 14). HomeTrue words the clause buyers see, and a \
+                    revoked buyer is refunded exactly as on withdrawal; the old free-text trigger and \
+                    refund wording are no longer accepted. Buyers who already bought keep the terms \
+                    copied onto their purchase.
 
                     Penalty tiers are declared as percentages and published to buyers as naira \
                     amounts. `developmentDeadlineMonths` is **stored only** — nothing tracks the \

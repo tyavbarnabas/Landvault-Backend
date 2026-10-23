@@ -31,6 +31,10 @@ public record PortalPlanDto(
         String status,
         @Schema(description = "While an instalment is late: what's late, the penalty reached, the total due now.",
                 nullable = true)
-        PlanStanding.Arrears arrears
+        PlanStanding.Arrears arrears,
+        @Schema(description = "Phase 5b: when the plan could be revoked (`revocableFrom`, `revocableNow`) and any "
+                + "notice running. Null when the purchase has no revocation terms. Act on it at "
+                + "`/api/portal/plans/{transactionId}/revocation` (Executive Director).", nullable = true)
+        PlanStanding.Revocation revocation
 ) {
 }

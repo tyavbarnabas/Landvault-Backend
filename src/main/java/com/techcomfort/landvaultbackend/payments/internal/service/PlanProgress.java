@@ -2,6 +2,7 @@ package com.techcomfort.landvaultbackend.payments.internal.service;
 
 import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
 import com.techcomfort.landvaultbackend.common.LatePaymentTerms;
+import com.techcomfort.landvaultbackend.common.RevocationTerms;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
 import com.techcomfort.landvaultbackend.payments.internal.domain.PaymentPenalty;
 import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentPurpose;
@@ -109,6 +110,22 @@ public record PlanProgress(PlanSchedule schedule, Set<Integer> verified, boolean
     /** The penalty an unpaid instalment has reached on {@code today}, if any. */
     public Optional<LatePaymentTerms.Penalty> penaltyDue(PlanSchedule.Instalment instalment, LocalDate today) {
         return schedule.lateTerms().penaltyOn(instalment.amount(), instalment.dueDate(), today);
+    }
+
+    /**
+     * Phase 5b: the oldest late instalment, if any — the one that decides
+     * when the plan becomes revocable. A payment waiting for finance counts
+     * as paid, so it is never this one.
+     */
+    public Optional<InstalmentStanding> oldestLate(LocalDate today) {
+        return standings(today).stream().filter(InstalmentStanding::late).findFirst();
+    }
+
+    /** Phase 5b: whether, on {@code today}, an instalment is unpaid long enough for the plan to be revoked. */
+    public Optional<InstalmentStanding> revocationTrigger(LocalDate today) {
+        RevocationTerms terms = schedule.lateTerms().revocation();
+        return terms == null ? Optional.empty() : standings(today).stream().filter(InstalmentStanding::late)
+                .filter(s -> terms.reachedBy(s.instalment().dueDate(), today)).findFirst();
     }
 
     /** Every instalment's standing on {@code today}. A paid-off plan's are all paid. */

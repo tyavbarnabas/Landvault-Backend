@@ -52,6 +52,12 @@ public class LoggingSettlementAlertSender implements SettlementAlertSender {
     }
 
     @Override
+    public void planRevocation(RevocationAlert alert) {
+        log.info("[TEST-ONLY plan revocation] to={} stage={} purchase={} deadline={} refund={}", alert.to(),
+                alert.stage(), alert.purchaseReference(), alert.deadline(), alert.refund());
+    }
+
+    @Override
     public void instalmentReminder(InstalmentReminderAlert alert) {
         log.info("[TEST-ONLY instalment reminder] to={} stage={} instalment={}/{}", alert.to(), alert.stage(),
                 alert.sequence(), alert.instalmentCount());
