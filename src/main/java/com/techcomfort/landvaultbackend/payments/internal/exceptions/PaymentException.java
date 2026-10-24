@@ -351,6 +351,10 @@ public abstract class PaymentException extends RuntimeException {
      * sale on an estate whose letter isn't approved can't be allocated yet.
      */
     public static class LetterNotApproved extends PaymentException {
+        public LetterNotApproved(String message) {
+            super(message);
+        }
+
         public LetterNotApproved() {
             super("This estate's allocation letter isn't approved, so the sale can't be allocated yet — every "
                     + "buyer receives their letter at this step. Ask your Executive Director to preview and approve "
@@ -428,6 +432,66 @@ public abstract class PaymentException extends RuntimeException {
     public static class RevocationRequiresCompanyWideScope extends PaymentException {
         public RevocationRequiresCompanyWideScope() {
             super("Revoking a plan is a company-wide decision. Switch to the company-wide view to do it.");
+        }
+    }
+
+    /** 5c: only a running plan can be restructured. */
+    public static class PlanNotRestructurable extends PaymentException {
+        public PlanNotRestructurable(String status) {
+            super("Only a running instalment plan can be restructured (this purchase is " + status + ").");
+        }
+    }
+
+    /** 5c: one open request or proposal per plan. */
+    public static class RestructureAlreadyOpen extends PaymentException {
+        public RestructureAlreadyOpen(String status) {
+            super("This plan already has a restructure " + ("PROPOSED".equals(status)
+                    ? "proposal waiting for the buyer." : "request waiting for the developer."));
+        }
+    }
+
+    /** 5c: the step needs a request or proposal in a particular state, and there isn't one. */
+    public static class RestructureNotOpen extends PaymentException {
+        public RestructureNotOpen(String needed) {
+            super("There is no restructure " + needed + " on this plan.");
+        }
+    }
+
+    /** 5c: the proposal named isn't the open one (another was made, or it closed). */
+    public static class RestructureNotFound extends PaymentException {
+        public RestructureNotFound() {
+            super("That restructure proposal isn't open on this plan. Check the current one.");
+        }
+    }
+
+    /** 5c: the buyer is past the last day to accept. */
+    public static class RestructureLapsed extends PaymentException {
+        public RestructureLapsed(LocalDate expiresOn) {
+            super("This proposal could be accepted until " + expiresOn + " and has lapsed. Ask again if you still "
+                    + "need different terms.");
+        }
+    }
+
+    /** 5c: what is owed moved since the proposal was worked out; it no longer describes the plan. */
+    public static class RestructureOutOfDate extends PaymentException {
+        public RestructureOutOfDate() {
+            super("What is owed on this plan changed since the proposal was made, so it can't be accepted as it "
+                    + "stands. The developer can propose again.");
+        }
+    }
+
+    /** 5c: the proposed terms break HomeTrue's limits. */
+    public static class InvalidRestructureTerms extends PaymentException {
+        public InvalidRestructureTerms(String detail) {
+            super(detail);
+        }
+    }
+
+    /** 5c: figures need to be firm — a payment waiting for finance is verified or rejected first. */
+    public static class PaymentAwaitingFinance extends PaymentException {
+        public PaymentAwaitingFinance() {
+            super("A payment on this plan is waiting for the developer's finance team to verify it. It has to be "
+                    + "verified or rejected first, so what is owed is certain.");
         }
     }
 }

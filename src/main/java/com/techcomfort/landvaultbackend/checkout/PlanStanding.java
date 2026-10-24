@@ -23,11 +23,19 @@ public record PlanStanding(
         Arrears arrears,
         @Schema(description = "Phase 5b: when this plan could be revoked, and any notice given. Null when the plan "
                 + "has no revocation terms or is paid off.", nullable = true)
-        Revocation revocation
+        Revocation revocation,
+        @Schema(description = "Phase 5c: `requested` (waiting for the developer) or `proposed` (waiting for the buyer "
+                + "to accept) while a restructure is open; null otherwise. Details at "
+                + "`/api/transactions/{id}/restructure`.", nullable = true)
+        String restructureStatus
 ) {
 
     public PlanStanding(String status, List<InstalmentStatus> instalments, Arrears arrears) {
-        this(status, instalments, arrears, null);
+        this(status, instalments, arrears, null, null);
+    }
+
+    public PlanStanding(String status, List<InstalmentStatus> instalments, Arrears arrears, Revocation revocation) {
+        this(status, instalments, arrears, revocation, null);
     }
 
     /**

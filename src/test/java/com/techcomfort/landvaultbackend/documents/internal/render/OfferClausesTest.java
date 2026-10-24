@@ -89,9 +89,8 @@ class OfferClausesTest {
                 "That you have chosen the 12-month plan: ₦16,500,000.00 in all (₦1,500,000.00 more than paying in "
                         + "full), made up of a deposit of ₦4,950,000.00, paid before the plot is held for you, then 12 "
                         + "monthly instalments of ₦962,500.00.",
-                "That the instalments fall due on 22 November 2026, 22 December 2026, 22 January 2027, "
-                        + "22 February 2027, 22 March 2027, 22 April 2027, 22 May 2027, 22 June 2027, 22 July 2027, "
-                        + "22 August 2027, 22 September 2027, 22 October 2027.",
+                "That the instalments fall due on the 22nd of each month, from 22 November 2026 to "
+                        + "22 October 2027.",
                 "That with the one-off charges set out below, your total commitment on this plan is ₦18,010,000.00. "
                         + "Charges that recur, such as yearly fees, are in addition to this.",
                 "That an instalment unpaid 7 days after its due date is in arrears, and a late-payment penalty "

@@ -48,22 +48,27 @@ public class RevocationNotices {
      * buyer is told. A payment merely waiting for finance never clears it.
      */
     void clearIfCaughtUp(FinanceQueueRow row, PlanProgress after) {
+        clearIfCaughtUp(row.transactionId(), row.transactionReference(), row.planName(),
+                row.plotLabel() + ", " + row.estateName(), after);
+    }
+
+    /** Phase 5c too: an accepted restructure puts every instalment on new dates, so nothing is late. */
+    void clearIfCaughtUp(UUID transactionId, String reference, String planName, String plot, PlanProgress after) {
         LocalDate today = PlanStandings.today();
         if (!after.complete() && after.revocationTrigger(today).isPresent()) {
             return;
         }
-        revocations.findOpenLocked(row.transactionId()).ifPresent(notice -> {
+        revocations.findOpenLocked(transactionId).ifPresent(notice -> {
             close(notice, RevocationStatus.CLEARED, null, "The buyer caught up.");
             auditApi.record(AuditEntryRequest.of(null, "plan.revocation_cleared", "plan_revocation", notice.getId(),
-                    notice.getSellerTenantId(), "Notice of revocation on " + row.transactionReference()
-                            + " ended: the buyer caught up and finance verified it."));
+                    notice.getSellerTenantId(), "Notice of revocation on " + reference
+                            + " ended: nothing is overdue long enough to revoke any more."));
             log.info("Revocation notice {} cleared: the buyer caught up", notice.getId());
             identityApi.emailOf(notice.getBuyerUserId()).ifPresent(to -> buyerNotifier.afterCommit(
                     "revocation cleared", () -> alerts.planRevocation(new SettlementAlertSender.RevocationAlert(to,
-                            SettlementAlertSender.RevocationStage.CLEARED, row.transactionReference(), row.planName(),
-                            row.plotLabel() + ", " + row.estateName(), notice.getRevocationAfterMonths(),
-                            RevocationService.DATE.format(notice.getDeadline()), null, null, null, null,
-                            buyerNotifier.purchaseUrl(row.transactionId())))));
+                            SettlementAlertSender.RevocationStage.CLEARED, reference, planName, plot,
+                            notice.getRevocationAfterMonths(), RevocationService.DATE.format(notice.getDeadline()),
+                            null, null, null, null, buyerNotifier.purchaseUrl(transactionId)))));
         });
     }
 

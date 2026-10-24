@@ -57,8 +57,9 @@ public class InstalmentReminderService {
             PlanProgress progress = entry.getValue();
             for (PlanProgress.InstalmentStanding standing : progress.standings(today)) {
                 Optional<ReminderStage> stage = stageFor(standing, today);
-                if (stage.isEmpty() || reminders.claim(plan.transactionId(), standing.instalment().sequence(),
-                        stage.get().name()) == 0) {
+                // Phase 5c: claimed per schedule version, so a restructure's new dates remind afresh.
+                if (stage.isEmpty() || reminders.claim(plan.transactionId(), progress.schedule().version(),
+                        standing.instalment().sequence(), stage.get().name()) == 0) {
                     continue;
                 }
                 claimed++;

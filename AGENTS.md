@@ -6519,6 +6519,59 @@ top-level field. **Any read after a native update in the same transaction needs 
 **Not built**: an automatic reminder as a notice's deadline nears, emailing other Executive Directors when one gives
 notice, and reinstating a revoked plan (a new purchase).
 
+### Phase 5c: restructuring (changeset 108)
+
+Decided with the user (2026-10-23: A, A, A, A). A buyer in difficulty asks for their remaining instalments to be
+spread differently; the developer decides; the buyer accepts a letter.
+
+- **The developer's finance decides** (decision 1): `portal.payments.verify` — finance officers and the Executive
+  Director, branch-walled like the finance queue (the plan must be visible under the caller's RLS). Rescheduling
+  hands back no land, so it isn't the director-only act revocation is. Nobody decides on their own purchase.
+- **The total owed never changes** (decision 2): HomeTrue spreads what is still owed (`PlanProgress.balance()`)
+  over the new instalments the way a plan is split (`InstalmentPlanCalculator.split`, leftover kobo on the last) —
+  only the count, the frequency and the first date move. No charge for time. At most 60 instalments in all; the
+  first new one after today and within 3 months (`INVALID_RESTRUCTURE_TERMS`).
+- **Penalties already reached are kept** (decision 3, no waivers): every unpaid instalment's penalty reached by the
+  proposal date — including one an earlier restructure carried — is summed onto the first new instalment
+  (`transaction_instalments.carried_penalty`) and charged with it as part of its penalty line (`PlanProgress.
+  penaltyDue` adds it; a carried penalty alone reads as 0 months, 0%). Lateness restarts on the new dates.
+- **A proposal lapses after 14 days** (decision 4); the buyer is emailed two days before and when it does (the
+  daily reminder job, `RestructureService.lapse`). One open request or proposal per plan (partial unique index +
+  row lock). To change a proposal the developer withdraws it — **the buyer's request carries on** as a fresh
+  `REQUESTED` row (history keeps both) — and proposes again; or rejects the request with a reason the buyer reads.
+- **What the letter says is what applies.** A proposal's figures and new instalments are fixed when proposed
+  (`plan_restructure_instalments`) and printed on the restructure letter (`HT-RST-`, `RestructureLetterIssuer` —
+  the offer letter's machinery: the developer's approved letterhead read under the seller's scope, HomeTrue's
+  wording, `RestructureClauses`; no approved letter setup → `LETTER_NOT_APPROVED`). Accepting applies them
+  unchanged — only while still true: within the 14 days, on the same schedule version, with the same balance and no
+  payment awaiting finance (`RESTRUCTURE_OUT_OF_DATE`, `PAYMENT_AWAITING_FINANCE`). Finance verifying a payment
+  lapses an open proposal at once (`RestructureNotices.lapseProposalOnPayment`).
+- **Schedules are versioned, never edited.** `transactions.schedule_version` points at the version in force;
+  `CheckoutApi.restructure` writes version n+1 — the paid instalments copied as they were, then the new ones —
+  and moves the pointer once only (`UPDATE … WHERE schedule_version = :from`). **Numbering carries on** from the
+  first unpaid instalment, because a verified payment is unique per instalment number. Every reader of a schedule
+  goes through `TransactionService.schedulesOf`, which reads only the version in force; reminders are claimed per
+  version, so the new dates remind afresh.
+- Accepting ends a running notice of revocation if nothing is overdue long enough any more (`RevocationNotices.
+  clearIfCaughtUp`). A withdrawal or revocation closes an open restructure. Escrow is untouched: shares are per
+  payment. The offer letter stays as issued; the restructure letter names it.
+- Visible as `PlanStanding.restructureStatus` (`requested`/`proposed`) on the purchase and the portfolio's
+  `restructureStatus`; the letter is a `restructure_letter` in the buyer's documents (status `issued`, `accepted`,
+  `declined`, `withdrawn`, `lapsed`, derived from payments via `PaymentsApi.restructureLetterStatuses`) and on the
+  public verify page.
+
+**Due dates on letters read as a rule when they follow one** (`DueDates.phrase`, decided with the user after
+reading the first restructure letter): the offer letter's plan clause and the restructure letter say "on the 15th of
+each month, from 15 November 2026 to 15 April 2028" when every date is the same day of the month one period apart,
+and list every date otherwise (a schedule started on the 29th–31st moves its short-month dates to month end, so it
+follows no single day). A letter never states a rule the schedule doesn't keep. Letters already issued keep their
+wording; the full list is always on the purchase.
+
+Proven red: the carried penalty not charged (₦3,850,000 instead of ₦4,235,000), a proposal not lapsing when a
+payment changed what is owed, and schedules read across every version.
+
+**Not built**: restructuring a plan the developer offers unprompted, penalty waivers, and changing the total owed.
+
 ## A buyer's address (changeset 097)
 
 Built 2026-10-21, decided with the user, so the allocation letter can name

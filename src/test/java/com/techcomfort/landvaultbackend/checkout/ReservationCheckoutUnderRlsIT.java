@@ -2773,6 +2773,156 @@ class ReservationCheckoutUnderRlsIT {
                 + "WHERE transaction_id = '" + purchase.id() + "'")).isEqualTo("CANCELLED,WITHDRAWN");
     }
 
+    // --- instalment plans, phase 5c: restructuring (changeset 108) ---
+
+    /**
+     * Instalment 1 is 100 days late (5% reached, ₦385,000) and a notice of
+     * revocation is running. The buyer asks; finance proposes 4 monthly
+     * instalments of what's owed — ₦15.4M, unchanged — with the penalty carried
+     * onto the first; the buyer accepts the letter. The new schedule is in
+     * force (version 2, version 1 kept), nothing is late, the notice clears,
+     * and paying the first charges the instalment plus the carried penalty.
+     */
+    @Test
+    void aBuyerRestructuresWhatTheyOweAndThePenaltyAlreadyReachedIsKept() {
+        declareDefaultTerms("[{\"monthsLate\":1,\"penaltyPct\":5.00}]", false);
+        TransactionDto purchase = onPlanPurchase(SHORT_PLAN);
+        execute("UPDATE transaction_instalments SET due_date = current_date - 100 WHERE transaction_id = '"
+                + purchase.id() + "' AND sequence = 1");
+        assertThat(revocation(seller.token(), purchase, "", "{\"reason\":\"Behind\"}").getStatusCode())
+                .isEqualTo(HttpStatus.OK);
+        String route = "/api/transactions/" + purchase.id() + "/restructure";
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        LocalDate today = LocalDate.now(ZoneId.of("Africa/Lagos"));
+        // The developer's Executive Directors are emailed; only active accounts receive mail.
+        execute("UPDATE users SET status = 'ACTIVE' WHERE tenant_id = '" + seller.id() + "'");
+
+        ResponseEntity<String> asked = restTemplate.exchange(route, HttpMethod.POST,
+                entity(buyer.token(), "{\"reason\":\"Lost my job\",\"preferredInstalments\":4}"), String.class);
+        assertThat(asked.getStatusCode()).as(asked.getBody()).isEqualTo(HttpStatus.OK);
+        assertThat(asked.getBody()).contains("\"status\":\"requested\"");
+        assertThat(restTemplate.exchange(route, HttpMethod.POST, entity(buyer.token(), "{\"reason\":\"Again\"}"),
+                String.class).getBody()).contains("RESTRUCTURE_ALREADY_OPEN");
+        assertThat(get("/api/portal/finance/restructures", officer, String.class).getBody())
+                .contains(purchase.id().toString(), "Lost my job");
+        verify(alerts, atLeastOnce()).planRestructure(argThat(a -> a.toDeveloper()
+                && a.stage() == SettlementAlertSender.RestructureStage.REQUESTED));
+
+        String portal = "/api/portal/plans/" + purchase.id() + "/restructure";
+        String terms = "{\"instalmentCount\":4,\"frequency\":\"monthly\",\"firstDueDate\":\"" + today.plusDays(30) + "\"}";
+        assertThat(restTemplate.exchange(portal + "/preview", HttpMethod.POST, entity(officer,
+                "{\"instalmentCount\":4,\"frequency\":\"monthly\",\"firstDueDate\":\"" + today.plusMonths(4) + "\"}"),
+                String.class).getBody()).contains("INVALID_RESTRUCTURE_TERMS");
+        String preview = restTemplate.exchange(portal + "/preview", HttpMethod.POST, entity(officer, terms),
+                String.class).getBody();
+        assertThat(preview).contains("\"balance\":15400000", "\"carriedPenalty\":385000", "\"paidInstalments\":0",
+                "\"amount\":3850000");
+
+        ResponseEntity<String> proposed = restTemplate.exchange(portal + "/propose", HttpMethod.POST,
+                entity(officer, terms), String.class);
+        assertThat(proposed.getStatusCode()).as(proposed.getBody()).isEqualTo(HttpStatus.OK);
+        JsonNode open = objectMapper.readTree(proposed.getBody()).path("open");
+        assertThat(open.path("status").asString()).isEqualTo("proposed");
+        assertThat(open.path("proposal").path("letterNumber").asString()).startsWith("HT-RST-");
+        assertThat(open.path("proposal").path("expiresOn").asString()).isEqualTo(today.plusDays(14).toString());
+        UUID restructureId = UUID.fromString(open.path("id").asString());
+        assertThat(documents(buyer).items()).filteredOn(d -> "restructure_letter".equals(d.type()))
+                .singleElement().satisfies(d -> assertThat(d.status()).isEqualTo("issued"));
+        assertThat(plotStatus(plotId)).as("nothing changes until the buyer accepts").isEqualTo("ON_PLAN");
+
+        assertThat(restTemplate.exchange(route + "/accept", HttpMethod.POST,
+                entity(buyer.token(), "{\"restructureId\":\"" + UUID.randomUUID() + "\"}"), String.class).getBody())
+                .contains("RESTRUCTURE_NOT_FOUND");
+        ResponseEntity<String> accepted = restTemplate.exchange(route + "/accept", HttpMethod.POST,
+                entity(buyer.token(), "{\"restructureId\":\"" + restructureId + "\"}"), String.class);
+        assertThat(accepted.getStatusCode()).as(accepted.getBody()).isEqualTo(HttpStatus.OK);
+
+        assertThat(queryString("SELECT schedule_version || '/' || (SELECT count(*) FROM transaction_instalments i "
+                + "WHERE i.transaction_id = t.id) FROM transactions t WHERE id = '" + purchase.id() + "'"))
+                .as("version 2 in force; version 1's two rows kept").isEqualTo("2/6");
+        TransactionDto after = get("/api/checkout/transactions/" + purchase.id(), buyer.token(), TransactionDto.class)
+                .getBody();
+        assertThat(after.schedule().version()).isEqualTo(2);
+        assertThat(after.schedule().instalments()).extracting(PlanSchedule.Instalment::sequence)
+                .containsExactly(1, 2, 3, 4);
+        assertThat(after.schedule().instalments().getFirst().carriedPenalty()).isEqualByComparingTo("385000");
+        assertThat(after.standing().status()).as("lateness restarts on the new dates").isEqualTo("on_track");
+        assertThat(queryString("SELECT status FROM plan_revocations WHERE transaction_id = '" + purchase.id() + "'"))
+                .as("nothing is late, so the notice ends").isEqualTo("CLEARED");
+        assertThat(documents(buyer).items()).filteredOn(d -> "restructure_letter".equals(d.type()))
+                .singleElement().satisfies(d -> assertThat(d.status()).isEqualTo("accepted"));
+        verify(alerts, atLeastOnce()).planRestructure(argThat(a -> !a.toDeveloper()
+                && a.stage() == SettlementAlertSender.RestructureStage.ACCEPTED));
+
+        String first = payPlan(purchase, false);
+        assertThat(queryString("SELECT amount || '/' || penalty_amount || '/' || instalment_sequence FROM payments "
+                + "WHERE reference = '" + first + "'")).as("the instalment plus the penalty carried onto it")
+                .isEqualTo("4235000.00/385000.00/1");
+    }
+
+    /**
+     * A proposal lapses: after its 14 days (the daily job), and at once when a
+     * payment changes what is owed. Withdrawing one keeps the buyer's request
+     * open for a fresh proposal; a rejection needs a reason the buyer reads.
+     */
+    @Test
+    void aProposalLapsesOrIsWithdrawnAndTheBuyersRequestIsAnswered() {
+        TransactionDto purchase = onPlanPurchase(SHORT_PLAN);
+        String route = "/api/transactions/" + purchase.id() + "/restructure";
+        String portal = "/api/portal/plans/" + purchase.id() + "/restructure";
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        LocalDate today = LocalDate.now(ZoneId.of("Africa/Lagos"));
+        String terms = "{\"instalmentCount\":3,\"frequency\":\"monthly\",\"firstDueDate\":\"" + today.plusDays(20) + "\"}";
+        String ask = "{\"reason\":\"Please\"}";
+
+        restTemplate.exchange(route, HttpMethod.POST, entity(buyer.token(), ask), String.class);
+        UUID first = proposedId(restTemplate.exchange(portal + "/propose", HttpMethod.POST, entity(officer, terms),
+                String.class));
+        execute("UPDATE plan_restructures SET expires_on = current_date - 1 WHERE id = '" + first + "'");
+        assertThat(restTemplate.exchange(route + "/accept", HttpMethod.POST,
+                entity(buyer.token(), "{\"restructureId\":\"" + first + "\"}"), String.class).getBody())
+                .contains("RESTRUCTURE_LAPSED");
+        instalmentReminders.run(today);
+        assertThat(queryString("SELECT status FROM plan_restructures WHERE id = '" + first + "'")).isEqualTo("LAPSED");
+        verify(alerts, atLeastOnce()).planRestructure(argThat(a -> a.stage() == SettlementAlertSender.RestructureStage.LAPSED));
+
+        restTemplate.exchange(route, HttpMethod.POST, entity(buyer.token(), ask), String.class);
+        UUID second = proposedId(restTemplate.exchange(portal + "/propose", HttpMethod.POST, entity(officer, terms),
+                String.class));
+        ResponseEntity<String> withdrawn = restTemplate.exchange(portal + "/withdraw", HttpMethod.POST,
+                entity(officer, "{\"note\":\"Better terms coming\"}"), String.class);
+        assertThat(withdrawn.getStatusCode()).as(withdrawn.getBody()).isEqualTo(HttpStatus.OK);
+        assertThat(objectMapper.readTree(withdrawn.getBody()).path("open").path("status").asString())
+                .as("the buyer's request carries on").isEqualTo("requested");
+        assertThat(queryString("SELECT status FROM plan_restructures WHERE id = '" + second + "'")).isEqualTo("WITHDRAWN");
+
+        UUID third = proposedId(restTemplate.exchange(portal + "/propose", HttpMethod.POST, entity(officer, terms),
+                String.class));
+        String paid = payPlan(purchase, false);
+        paystackSays(paid, "success", 770_000_000L, "NGN", "Approved");
+        confirm(buyer, paid);
+        assertThat(restTemplate.exchange(route + "/accept", HttpMethod.POST,
+                entity(buyer.token(), "{\"restructureId\":\"" + third + "\"}"), String.class).getBody())
+                .as("a payment waiting for finance must be settled first").contains("PAYMENT_AWAITING_FINANCE");
+        assertThat(financeAction(officer, purchase.id(), "verify", null).getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(queryString("SELECT status FROM plan_restructures WHERE id = '" + third + "'"))
+                .as("what is owed changed under it").isEqualTo("LAPSED");
+
+        restTemplate.exchange(route, HttpMethod.POST, entity(buyer.token(), ask), String.class);
+        assertThat(restTemplate.exchange(portal + "/reject", HttpMethod.POST, entity(officer, "{}"), String.class)
+                .getStatusCode()).as("a reason is required").isEqualTo(HttpStatus.BAD_REQUEST);
+        ResponseEntity<String> rejected = restTemplate.exchange(portal + "/reject", HttpMethod.POST,
+                entity(officer, "{\"reason\":\"12 months is the most we offer\"}"), String.class);
+        assertThat(rejected.getBody()).contains("\"status\":\"rejected\"", "12 months is the most we offer");
+        assertThat(queryString("SELECT schedule_version FROM transactions WHERE id = '" + purchase.id() + "'"))
+                .as("nothing was ever accepted").isEqualTo("1");
+    }
+
+    private UUID proposedId(ResponseEntity<String> proposed) {
+        assertThat(proposed.getStatusCode()).as(proposed.getBody()).isEqualTo(HttpStatus.OK);
+        return UUID.fromString(objectMapper.readTree(proposed.getBody()).path("open").path("id").asString());
+    }
+
     private ResponseEntity<String> revocation(String token, TransactionDto purchase, String action, String body) {
         return restTemplate.exchange("/api/portal/plans/" + purchase.id() + "/revocation" + action, HttpMethod.POST,
                 entity(token, body), String.class);
@@ -2872,7 +3022,9 @@ class ReservationCheckoutUnderRlsIT {
                         "That you have chosen the 12-month plan: ₦22,000,000.00 in all (₦2,000,000.00 more than "
                                 + "paying in full), made up of a deposit of ₦6,600,000.00",
                         "12 monthly instalments of ₦1,283,333.33 (the last ₦1,283,333.37)",
-                        "That the instalments fall due on " + DocumentFormats.date(today.plusMonths(1)),
+                        // A rule ("on the 24th of each month, from …") or, for a month-end start, every date.
+                        "That the instalments fall due on ", DocumentFormats.date(today.plusMonths(1)),
+                        DocumentFormats.date(today.plusMonths(12)),
                         "your total commitment on this plan is ₦22,000,000.00",
                         "is in arrears; no late-payment penalty is declared");
         assertThat(acceptOffer(buyer, purchase.offer().id()).getStatusCode()).isEqualTo(HttpStatus.OK);

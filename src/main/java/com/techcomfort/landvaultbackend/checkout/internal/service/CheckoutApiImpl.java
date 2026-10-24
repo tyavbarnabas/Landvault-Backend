@@ -19,12 +19,14 @@ import com.techcomfort.landvaultbackend.checkout.RunningPlan;
 import com.techcomfort.landvaultbackend.checkout.VerifiedSale;
 import com.techcomfort.landvaultbackend.checkout.internal.domain.Reservation;
 import com.techcomfort.landvaultbackend.checkout.internal.domain.Transaction;
+import com.techcomfort.landvaultbackend.checkout.internal.domain.TransactionInstalment;
 import com.techcomfort.landvaultbackend.checkout.internal.enums.PaymentPlan;
 import com.techcomfort.landvaultbackend.checkout.internal.enums.ReservationStatus;
 import com.techcomfort.landvaultbackend.checkout.internal.enums.TransactionStatus;
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
 import com.techcomfort.landvaultbackend.checkout.internal.repository.ReservationRepository;
+import com.techcomfort.landvaultbackend.checkout.internal.repository.TransactionInstalmentRepository;
 import com.techcomfort.landvaultbackend.checkout.internal.repository.TransactionRepository;
 import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
@@ -56,6 +58,7 @@ public class CheckoutApiImpl implements CheckoutApi {
     private final OfferLetters offerLetters;
     private final TransactionService transactionService;
     private final EntityManager entityManager;
+    private final TransactionInstalmentRepository instalmentRepository;
 
     @Override
     @Transactional(readOnly = true)
@@ -145,6 +148,36 @@ public class CheckoutApiImpl implements CheckoutApi {
                         + reason));
         events.publishEvent(new PlanRevoked(transactionId, transaction.getBuyerUserId(), transaction.getPlotId(),
                 tenantId));
+        return true;
+    }
+
+    @Override
+    @Transactional
+    public boolean restructure(UUID transactionId, UUID buyerUserId, int fromVersion,
+                               List<PlanSchedule.Instalment> schedule) {
+        Transaction transaction = transactions.findByIdAndBuyerUserId(transactionId, buyerUserId).orElse(null);
+        if (transaction == null) {
+            return false;
+        }
+        // The reservation's row lock first, like every other change to this purchase.
+        reservations.findLockedById(transaction.getReservationId()).orElseThrow();
+        if (transactions.advanceSchedule(transactionId, fromVersion) != 1) {
+            return false;
+        }
+        int version = fromVersion + 1;
+        instalmentRepository.saveAll(schedule.stream().map(i -> TransactionInstalment.builder()
+                .transactionId(transactionId)
+                .scheduleVersion(version)
+                .sequence(i.sequence())
+                .dueDate(i.dueDate())
+                .amount(i.amount())
+                .carriedPenalty(i.carriedPenalty())
+                .build()).toList());
+        entityManager.refresh(transaction);
+        auditApi.record(AuditEntryRequest.of(buyerUserId, "transaction.restructured", "transaction", transactionId,
+                transaction.getSellerTenantId(), "Plan " + transaction.getPlanName() + " on "
+                        + transaction.getReference() + " restructured: schedule version " + version + " ("
+                        + schedule.size() + " instalments) in force; version " + fromVersion + " kept as history."));
         return true;
     }
 

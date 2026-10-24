@@ -383,7 +383,22 @@ gets it without a new call.
   Once confirmed: purchase `revoked` (`TransactionDto.revokedAt`), portfolio `status: "revoked"`, provisional letter
   `revoked`, refunds exactly as a withdrawal (`GET /api/transactions/{id}/withdrawal` shows `status: "revoked"`).
   Developer routes: see Portal finance ("Revoking a plan").
-  **Not built yet (phase 5)**: restructure and penalty waivers.
+  **Phase 5c built** (changeset 108): **restructuring**. Buyer, `client.checkout.reserve`, own purchase, under
+  `/api/transactions/{id}/restructure`: `GET` → `PlanRestructures { transactionId, transactionReference, planStatus,
+  open, history[] }` where a restructure is `{ id, status (requested | proposed | accepted | rejected | declined |
+  cancelled | withdrawn | lapsed), reason, preferredInstalments, requestedAt, proposal, acceptedAt, closedAt,
+  closeNote }` and a proposal `{ proposedAt, expiresOn, paidInstalments, instalmentCount, frequency, firstDueDate,
+  balance, carriedPenalty, currency, instalments: [{ sequence, dueDate, amount, carriedPenalty }], letterId,
+  letterNumber }`. `POST { reason, preferredInstalments? }` asks (409 `RESTRUCTURE_ALREADY_OPEN`,
+  `PLAN_NOT_RESTRUCTURABLE`); `POST /cancel` withdraws a request; `POST /accept { restructureId }` and
+  `POST /decline { restructureId }` answer a proposal (409 `RESTRUCTURE_NOT_FOUND`, `RESTRUCTURE_LAPSED`,
+  `RESTRUCTURE_OUT_OF_DATE`, `PAYMENT_AWAITING_FINANCE`). Show the restructure letter (`restructure_letter` in
+  `/api/documents`, PDF at `/api/documents/restructure-letters/{id}/pdf`) before Accept. Once accepted the purchase's
+  `schedule` is the new one (`version` 2+, paid instalments first, numbering carried on, `carriedPenalty` on the
+  first new instalment) and paying charges it with that penalty. `standing.restructureStatus` and the portfolio's
+  `restructureStatus` read `requested`/`proposed` while one is open. Developer routes: see Portal finance
+  ("Restructuring a plan").
+  **Not built yet (phase 5)**: penalty waivers.
 
 ### Publication now has SEVEN conditions, not five
 
@@ -1017,6 +1032,18 @@ status, arrears }]`, most urgent first. `status` is `on_track` | `due_today` | `
 buyer sees, worked out today; `arrears` as on the purchase's `standing`. Filter `status=` one of those or `late`
 (overdue and in arrears); anything else is 400 `INVALID_STATUS`. Read-only. Phase 5b: each row also carries
 `revocation` (as on the purchase's `standing`), null when the purchase has no revocation terms.
+
+**Restructuring a plan (phase 5c)**: `portal.payments.verify`, own company, branch-walled.
+`GET /api/portal/finance/restructures?status=requested|proposed` → `[{ restructureId, transactionId,
+transactionReference, estateName, plotLabel, buyerEmail, planName, status, reason, preferredInstalments, requestedAt,
+expiresOn }]`, oldest first. Under `/api/portal/plans/{transactionId}/restructure`: `GET` (the same
+`PlanRestructures` as the buyer's); `POST /preview { instalmentCount, frequency, firstDueDate }` → the proposal's
+figures, nothing written (400 `INVALID_RESTRUCTURE_TERMS`: more than 60 instalments in all, a first date not after
+today or more than 3 months away; 409 `PAYMENT_AWAITING_FINANCE`); `POST /propose` (same body) answers an open
+request — issues the restructure letter and emails the buyer, who has 14 days (409 `RESTRUCTURE_NOT_OPEN`,
+`LETTER_NOT_APPROVED`); `POST /reject { reason }` declines; `POST /withdraw { note? }` takes a proposal back — the
+buyer's request stays open for a new proposal. The total owed never changes; penalties already reached are kept
+on the first new instalment.
 
 **Revoking a plan (phase 5b)**: new permission `portal.plans.revoke` (Executive Director; company-wide view only —
 otherwise 403 `REVOCATION_REQUIRES_COMPANY_WIDE_SCOPE`); add it to the frontend's list. All under

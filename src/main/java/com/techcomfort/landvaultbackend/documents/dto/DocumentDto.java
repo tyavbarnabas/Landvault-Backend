@@ -10,7 +10,7 @@ import java.util.UUID;
 @Schema(name = "Document")
 public record DocumentDto(
         UUID id,
-        @Schema(description = "`receipt`, `allocation_letter` or `offer_letter`") String type,
+        @Schema(description = "`receipt`, `allocation_letter`, `provisional_allocation_letter`, `offer_letter` or `restructure_letter`") String type,
         @Schema(description = "e.g. `Receipt HT-RCT-2026-000123 — Block A, Plot 7, Double King Deluxe Estate`")
         String title,
         @Schema(description = "The printed number, e.g. `HT-RCT-2026-000123`.") String number,
@@ -22,7 +22,8 @@ public record DocumentDto(
                 `superseded` are for reissued letters.) A fully \
                 refunded payment's receipt stays valid — the money did arrive — and carries `refundedAt`. Offer \
                 letters: `issued` (waiting for the buyer), `accepted`, or `lapsed` (the purchase was rejected or \
-                abandoned).""") String status,
+                abandoned). Restructure letters: `issued`, `accepted`, `declined`, `withdrawn` or `lapsed`.""")
+        String status,
         @Schema(description = "The verification code as printed, e.g. `3F9A-1C77-B02E-55D1`.") String qrCode,
         @Schema(description = "What the QR code opens: the public verify page for this document.") String verifyUrl,
         @Schema(description = """

@@ -13,4 +13,11 @@ public interface PaymentsApi {
      * the refund processed. Payments with no processed refund are absent.
      */
     Map<UUID, Instant> refundedAt(Collection<UUID> paymentIds);
+
+    /**
+     * Phase 5c: where the restructure each letter was issued with stands —
+     * {@code proposed}, {@code accepted}, {@code declined}, {@code withdrawn}
+     * or {@code lapsed} — keyed by letter id.
+     */
+    Map<UUID, String> restructureLetterStatuses(Collection<UUID> letterIds);
 }

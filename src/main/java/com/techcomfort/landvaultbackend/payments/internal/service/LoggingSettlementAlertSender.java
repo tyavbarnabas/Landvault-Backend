@@ -52,6 +52,12 @@ public class LoggingSettlementAlertSender implements SettlementAlertSender {
     }
 
     @Override
+    public void planRestructure(RestructureAlert alert) {
+        log.info("[TEST-ONLY plan restructure] to={} developer={} stage={} purchase={} letter={}", alert.to(),
+                alert.toDeveloper(), alert.stage(), alert.purchaseReference(), alert.letterNumber());
+    }
+
+    @Override
     public void planRevocation(RevocationAlert alert) {
         log.info("[TEST-ONLY plan revocation] to={} stage={} purchase={} deadline={} refund={}", alert.to(),
                 alert.stage(), alert.purchaseReference(), alert.deadline(), alert.refund());

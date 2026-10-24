@@ -130,6 +130,12 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
             + "updated_at = now() WHERE id = :id AND status = 'ON_PLAN'", nativeQuery = true)
     int withdraw(@Param("id") UUID id, @Param("reason") String reason);
 
+    /** Once only: phase 5c, a restructure puts the next schedule version in force. */
+    @Modifying
+    @Query(value = "UPDATE transactions SET schedule_version = :from + 1, updated_at = now() "
+            + "WHERE id = :id AND status = 'ON_PLAN' AND schedule_version = :from", nativeQuery = true)
+    int advanceSchedule(@Param("id") UUID id, @Param("from") int from);
+
     /** Once only: phase 5b, the developer revokes a running plan. */
     @Modifying
     @Query(value = "UPDATE transactions SET status = 'REVOKED', revoked_at = now(), revocation_reason = :reason, "

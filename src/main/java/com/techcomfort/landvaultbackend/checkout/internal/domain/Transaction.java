@@ -178,6 +178,18 @@ public class Transaction extends AbstractEntity {
     @Column(name = "revocation_reason")
     private String revocationReason;
 
+    /**
+     * Phase 5c: the schedule version in force. Moved only by the once-only
+     * update a restructure makes; earlier versions stay as history.
+     */
+    @Column(name = "schedule_version", nullable = false, insertable = false, updatable = false)
+    private Integer scheduleVersion;
+
+    /** The schedule version in force: 1 until a restructure (also before the row is re-read after insert). */
+    public int currentScheduleVersion() {
+        return scheduleVersion == null ? 1 : scheduleVersion;
+    }
+
     /** Phase 5b: the revocation terms copied onto this purchase, or null. */
     public RevocationTerms revocationTerms() {
         return revocationAfterMonths == null ? null : new RevocationTerms(revocationAfterMonths, revocationNoticeDays);

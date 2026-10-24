@@ -9,7 +9,9 @@ import com.techcomfort.landvaultbackend.payments.internal.controllers.PaystackWe
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalFinanceController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalLatePaymentController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalPlanController;
+import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalRestructureController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalRevocationController;
+import com.techcomfort.landvaultbackend.payments.internal.controllers.RestructureController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.WithdrawalController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalPayoutController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalSettlementController;
@@ -30,7 +32,7 @@ import java.util.stream.Collectors;
         PortalFinanceController.class, PortalSettlementController.class, AdminSettlementAccountController.class,
         AdminPayoutController.class, PortalPayoutController.class, AdminRefundController.class,
         PortalLatePaymentController.class, PortalPlanController.class, WithdrawalController.class,
-        PortalRevocationController.class})
+        PortalRevocationController.class, RestructureController.class, PortalRestructureController.class})
 public class PaymentExceptionHandler {
 
     @ExceptionHandler(PaymentException.class)
@@ -83,6 +85,14 @@ public class PaymentExceptionHandler {
             case PaymentException.RevocationAlreadyNotified e -> body(HttpStatus.CONFLICT, e, "REVOCATION_ALREADY_NOTIFIED");
             case PaymentException.NoOpenRevocation e -> body(HttpStatus.CONFLICT, e, "NO_OPEN_REVOCATION");
             case PaymentException.RevocationNoticeRunning e -> body(HttpStatus.CONFLICT, e, "REVOCATION_NOTICE_RUNNING");
+            case PaymentException.PlanNotRestructurable e -> body(HttpStatus.CONFLICT, e, "PLAN_NOT_RESTRUCTURABLE");
+            case PaymentException.RestructureAlreadyOpen e -> body(HttpStatus.CONFLICT, e, "RESTRUCTURE_ALREADY_OPEN");
+            case PaymentException.RestructureNotOpen e -> body(HttpStatus.CONFLICT, e, "RESTRUCTURE_NOT_OPEN");
+            case PaymentException.RestructureNotFound e -> body(HttpStatus.CONFLICT, e, "RESTRUCTURE_NOT_FOUND");
+            case PaymentException.RestructureLapsed e -> body(HttpStatus.CONFLICT, e, "RESTRUCTURE_LAPSED");
+            case PaymentException.RestructureOutOfDate e -> body(HttpStatus.CONFLICT, e, "RESTRUCTURE_OUT_OF_DATE");
+            case PaymentException.InvalidRestructureTerms e -> body(HttpStatus.BAD_REQUEST, e, "INVALID_RESTRUCTURE_TERMS");
+            case PaymentException.PaymentAwaitingFinance e -> body(HttpStatus.CONFLICT, e, "PAYMENT_AWAITING_FINANCE");
             case PaymentException.RevocationRequiresCompanyWideScope e ->
                     body(HttpStatus.FORBIDDEN, e, "REVOCATION_REQUIRES_COMPANY_WIDE_SCOPE");
             case PaymentException.PayoutInProgress e -> body(HttpStatus.CONFLICT, e, "PAYOUT_IN_PROGRESS");

@@ -5,6 +5,7 @@ import com.techcomfort.landvaultbackend.common.CommitmentCalculator;
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.InstalmentPlanCalculator;
 import com.techcomfort.landvaultbackend.common.LatePaymentTerms;
+import com.techcomfort.landvaultbackend.common.PaymentFrequency;
 import com.techcomfort.landvaultbackend.inventory.EstateDocumentFacts;
 
 import java.math.BigDecimal;
@@ -103,8 +104,8 @@ public final class OfferClauses {
                 + ", paid before the plot is held for you, then " + instalments.size() + " " + schedule.frequency()
                 + " instalment" + (instalments.size() == 1 ? "" : "s") + " of " + DocumentFormats.money(regular, currency)
                 + (last.compareTo(regular) == 0 ? "" : " (the last " + DocumentFormats.money(last, currency) + ")") + ".");
-        clauses.add("That the instalments fall due on " + String.join(", ", instalments.stream()
-                .map(i -> DocumentFormats.date(i.dueDate())).toList()) + ".");
+        clauses.add("That the instalments fall due " + DueDates.phrase(instalments.stream()
+                .map(PlanSchedule.Instalment::dueDate).toList(), PaymentFrequency.fromValue(schedule.frequency())) + ".");
 
         if (facts.fees() != null) {
             CommitmentCalculator.TierCommitment commitment = CommitmentCalculator.forTier(schedule.planTotal(),

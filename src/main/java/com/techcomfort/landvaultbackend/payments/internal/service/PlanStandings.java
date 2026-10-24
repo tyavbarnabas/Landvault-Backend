@@ -6,10 +6,13 @@ import com.techcomfort.landvaultbackend.common.LatePaymentTerms;
 import com.techcomfort.landvaultbackend.common.RevocationTerms;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
 import com.techcomfort.landvaultbackend.payments.internal.domain.PaymentPenalty;
+import com.techcomfort.landvaultbackend.payments.internal.domain.PlanRestructure;
 import com.techcomfort.landvaultbackend.payments.internal.domain.PlanRevocation;
+import com.techcomfort.landvaultbackend.payments.internal.enums.RestructureStatus;
 import com.techcomfort.landvaultbackend.payments.internal.enums.RevocationStatus;
 import com.techcomfort.landvaultbackend.payments.internal.repository.PaymentPenaltyRepository;
 import com.techcomfort.landvaultbackend.payments.internal.repository.PaymentRepository;
+import com.techcomfort.landvaultbackend.payments.internal.repository.PlanRestructureRepository;
 import com.techcomfort.landvaultbackend.payments.internal.repository.PlanRevocationRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -41,6 +44,7 @@ public class PlanStandings {
     private final PaymentRepository payments;
     private final PaymentPenaltyRepository penalties;
     private final PlanRevocationRepository revocations;
+    private final PlanRestructureRepository restructures;
 
     public static LocalDate today() {
         return LocalDate.now(LAGOS);
@@ -68,8 +72,14 @@ public class PlanStandings {
         Map<UUID, PlanRevocation> notices = schedules.isEmpty() ? Map.of()
                 : revocations.findByTransactionIdInAndStatus(schedules.keySet(), RevocationStatus.NOTICE).stream()
                 .collect(Collectors.toMap(PlanRevocation::getTransactionId, r -> r));
-        progressOf(schedules).forEach((id, progress) -> out.put(id,
-                standing(progress, today, Optional.ofNullable(notices.get(id)))));
+        Map<UUID, String> restructuring = schedules.isEmpty() ? Map.of()
+                : restructures.findByTransactionIdInAndStatusIn(schedules.keySet(), RestructureStatus.OPEN).stream()
+                .collect(Collectors.toMap(PlanRestructure::getTransactionId, r -> r.getStatus().wire()));
+        progressOf(schedules).forEach((id, progress) -> {
+            PlanStanding s = standing(progress, today, Optional.ofNullable(notices.get(id)));
+            out.put(id, new PlanStanding(s.status(), s.instalments(), s.arrears(), s.revocation(),
+                    restructuring.get(id)));
+        });
         return out;
     }
 

@@ -12,6 +12,7 @@ import com.techcomfort.landvaultbackend.documents.internal.config.DocumentsPrope
 import com.techcomfort.landvaultbackend.documents.internal.domain.AllocationLetter;
 import com.techcomfort.landvaultbackend.documents.internal.domain.OfferLetter;
 import com.techcomfort.landvaultbackend.documents.internal.domain.OfferLetterAcceptance;
+import com.techcomfort.landvaultbackend.documents.internal.domain.RestructureLetter;
 import com.techcomfort.landvaultbackend.documents.internal.domain.Receipt;
 import com.techcomfort.landvaultbackend.documents.internal.enums.LetterKind;
 import com.techcomfort.landvaultbackend.documents.internal.exceptions.DocumentException;
@@ -24,6 +25,7 @@ import com.techcomfort.landvaultbackend.documents.internal.render.ReceiptRendere
 import com.techcomfort.landvaultbackend.documents.internal.repository.AllocationLetterRepository;
 import com.techcomfort.landvaultbackend.documents.internal.repository.OfferLetterAcceptanceRepository;
 import com.techcomfort.landvaultbackend.documents.internal.repository.OfferLetterRepository;
+import com.techcomfort.landvaultbackend.documents.internal.repository.RestructureLetterRepository;
 import com.techcomfort.landvaultbackend.documents.internal.repository.ReceiptRepository;
 import com.techcomfort.landvaultbackend.payments.PaymentsApi;
 import com.techcomfort.landvaultbackend.portfolio.PortfolioApi;
@@ -62,6 +64,7 @@ public class DocumentService {
     public static final String ALLOCATION_LETTER = "allocation_letter";
     public static final String OFFER_LETTER = "offer_letter";
     public static final String PROVISIONAL_ALLOCATION_LETTER = "provisional_allocation_letter";
+    public static final String RESTRUCTURE_LETTER = "restructure_letter";
     private static final String ISSUED = "issued";
     private static final String ACCEPTED = "accepted";
     private static final String LAPSED = "lapsed";
@@ -81,6 +84,7 @@ public class DocumentService {
     private final PortfolioApi portfolioApi;
     private final OfferLetterRepository offers;
     private final OfferLetterAcceptanceRepository acceptances;
+    private final RestructureLetterRepository restructureLetters;
     private final CheckoutApi checkoutApi;
     private final AuditApi auditApi;
 
@@ -95,6 +99,7 @@ public class DocumentService {
         List<DocumentDto> all = new ArrayList<>(found.stream().map(r -> toDto(r, refunded.get(r.getPaymentId()))).toList());
         letters.findByBuyerUserIdOrderByIssuedAtDesc(buyer).forEach(l -> all.add(toDto(l)));
         all.addAll(offerDtos(offers.findByBuyerUserIdOrderByIssuedAtDesc(buyer)));
+        all.addAll(restructureDtos(restructureLetters.findByBuyerUserIdOrderByIssuedAtDesc(buyer)));
         all.sort(Comparator.comparing(DocumentDto::issuedAt).reversed());
         int from = (int) Math.min(pageable.getOffset(), all.size());
         int to = Math.min(from + pageable.getPageSize(), all.size());
@@ -112,6 +117,8 @@ public class DocumentService {
         letters.findByBuyerUserIdAndTransactionIdOrderByIssuedAtDesc(buyer, transactionId).forEach(l -> all.add(toDto(l)));
         found.forEach(r -> all.add(toDto(r, refunded.get(r.getPaymentId()))));
         offers.findByBuyerUserIdAndTransactionId(buyer, transactionId).ifPresent(o -> all.addAll(offerDtos(List.of(o))));
+        all.addAll(restructureDtos(restructureLetters.findByBuyerUserIdAndTransactionIdOrderByIssuedAtDesc(buyer,
+                transactionId)));
         return all;
     }
 
@@ -171,6 +178,24 @@ public class DocumentService {
                 PdfImages.allPagesAsJpeg(letterRenderer.pdf(content(offer))));
     }
 
+    @Transactional(readOnly = true)
+    public DocumentDto restructureLetter(UUID buyer, UUID letterId) {
+        return restructureDtos(List.of(ownRestructureLetter(buyer, letterId))).getFirst();
+    }
+
+    @Transactional(readOnly = true)
+    public RenderedDocument restructureLetterPdf(UUID buyer, UUID letterId) {
+        RestructureLetter letter = ownRestructureLetter(buyer, letterId);
+        return new RenderedDocument("HomeTrue-" + letter.getNumber() + ".pdf", letterRenderer.pdf(content(letter)));
+    }
+
+    @Transactional(readOnly = true)
+    public RenderedDocument restructureLetterJpeg(UUID buyer, UUID letterId) {
+        RestructureLetter letter = ownRestructureLetter(buyer, letterId);
+        return new RenderedDocument("HomeTrue-" + letter.getNumber() + ".jpg",
+                PdfImages.allPagesAsJpeg(letterRenderer.pdf(content(letter))));
+    }
+
     /**
      * OL: the buyer accepts the offer letter they name — their own, while its
      * purchase is still waiting for payment. Who and when come from the
@@ -221,6 +246,13 @@ public class DocumentService {
                     OFFER_LETTER, o.getNumber(), o.getIssuedAt(), "HomeTrue", o.getCompanyName(), o.getEstateName(),
                     o.getEstateLocation(), o.getPlotLabel(), initials(o.getBuyerName()), null);
         }
+        Optional<RestructureLetter> restructure = restructureLetters.findByVerificationCode(normalised);
+        if (restructure.isPresent()) {
+            RestructureLetter r = restructure.get();
+            return new DocumentVerificationDto(restructureStatuses(List.of(r)).get(r.getId()), RESTRUCTURE_LETTER,
+                    r.getNumber(), r.getIssuedAt(), "HomeTrue", r.getCompanyName(), r.getEstateName(),
+                    r.getEstateLocation(), r.getPlotLabel(), initials(r.getBuyerName()), null);
+        }
         Optional<AllocationLetter> letter = letters.findByVerificationCode(normalised);
         if (letter.isPresent()) {
             AllocationLetter l = letter.get();
@@ -248,6 +280,66 @@ public class DocumentService {
 
     private OfferLetter ownOffer(UUID buyer, UUID offerId) {
         return offers.findByIdAndBuyerUserId(offerId, buyer).orElseThrow(DocumentException.DocumentNotFound::new);
+    }
+
+    private RestructureLetter ownRestructureLetter(UUID buyer, UUID letterId) {
+        return restructureLetters.findByIdAndBuyerUserId(letterId, buyer)
+                .orElseThrow(DocumentException.DocumentNotFound::new);
+    }
+
+    /**
+     * Phase 5c, never stored here: the restructure's status from payments —
+     * {@code issued} while proposed, then {@code accepted}, {@code declined},
+     * {@code withdrawn} or {@code lapsed}. One call for all of them.
+     */
+    private Map<UUID, String> restructureStatuses(List<RestructureLetter> found) {
+        Map<UUID, String> byLetter = paymentsApi.restructureLetterStatuses(
+                found.stream().map(RestructureLetter::getId).toList());
+        return found.stream().collect(Collectors.toMap(RestructureLetter::getId, l -> {
+            String status = byLetter.getOrDefault(l.getId(), "proposed");
+            return "proposed".equals(status) ? ISSUED : status;
+        }));
+    }
+
+    private List<DocumentDto> restructureDtos(List<RestructureLetter> found) {
+        if (found.isEmpty()) {
+            return List.of();
+        }
+        Map<UUID, String> statuses = restructureStatuses(found);
+        return found.stream().map(l -> {
+            String base = "/api/documents/restructure-letters/" + l.getId();
+            return new DocumentDto(l.getId(), RESTRUCTURE_LETTER,
+                    "Restructure letter " + l.getNumber() + " — " + l.getPlotLabel() + ", " + l.getEstateName(),
+                    l.getNumber(), LocalDate.ofInstant(l.getIssuedAt(), DocumentFormats.NIGERIA), l.getIssuedAt(),
+                    statuses.get(l.getId()), VerificationCodes.display(l.getVerificationCode()),
+                    properties.verifyUrlFor(l.getVerificationCode()), null, l.getPlotId(), l.getTransactionId(), null,
+                    null, base + "/pdf", base + "/jpeg", null);
+        }).toList();
+    }
+
+    /** The restructure letter exactly as issued. Accepting it is done in the plan's restructure route. */
+    private AllocationLetterContent content(RestructureLetter l) {
+        return new AllocationLetterContent(
+                new AllocationLetterContent.Company(l.getCompanyName(), l.getCompanyRcNumber(), l.getCompanyAddress(),
+                        l.getCompanyPhone(), l.getCompanyEmail(), l.getCompanyWebsite()),
+                image(l.getLogoFileId()), image(l.getSignatureFileId()), image(l.getSealFileId()),
+                l.getIssuedAt(),
+                List.of(l.getBuyerLines()),
+                l.getSalutation(),
+                l.getEstateName(),
+                l.getEstateLocation(),
+                l.getOpening(),
+                List.of(l.getClauses()),
+                l.getClosing(),
+                l.getSignOff(),
+                l.getSignatoryName(),
+                l.getSignatoryTitle(),
+                List.of(),
+                l.getNumber(),
+                properties.verifyUrlFor(l.getVerificationCode()),
+                l.getVerificationCode(),
+                AllocationLetterContent.RESTRUCTURE_TITLE,
+                ACCEPTED.equals(restructureStatuses(List.of(l)).get(l.getId())) ? "Accepted" : null);
     }
 
     /** Offers with their acceptances, one query for all of them. */
