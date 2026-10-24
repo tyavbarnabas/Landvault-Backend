@@ -18,11 +18,11 @@ public interface InstalmentReminderRepository extends JpaRepository<InstalmentRe
      */
     @Modifying
     @Query(value = "INSERT INTO instalment_reminders (id, created_at, transaction_id, schedule_version, "
-            + "instalment_sequence, stage) VALUES (gen_random_uuid(), now(), :transactionId, 1, :sequence, :stage) "
+            + "instalment_sequence, stage) VALUES (gen_random_uuid(), now(), :transactionId, :version, :sequence, :stage) "
             + "ON CONFLICT (transaction_id, schedule_version, instalment_sequence, stage) DO NOTHING",
             nativeQuery = true)
-    int claim(@Param("transactionId") UUID transactionId, @Param("sequence") int sequence,
-              @Param("stage") String stage);
+    int claim(@Param("transactionId") UUID transactionId, @Param("version") int scheduleVersion,
+              @Param("sequence") int sequence, @Param("stage") String stage);
 
     List<InstalmentReminder> findByTransactionIdOrderByCreatedAtAsc(UUID transactionId);
 }

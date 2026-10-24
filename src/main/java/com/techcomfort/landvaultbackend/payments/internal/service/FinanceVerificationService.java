@@ -58,6 +58,7 @@ public class FinanceVerificationService {
     private final BuyerNotifier buyerNotifier;
     private final PaymentPenaltyRepository penalties;
     private final RevocationNotices revocationNotices;
+    private final RestructureNotices restructureNotices;
 
     private static final List<PaymentPurpose> PLAN_PAYMENTS = List.of(PaymentPurpose.INSTALMENT, PaymentPurpose.BALANCE);
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.UK);
@@ -229,6 +230,8 @@ public class FinanceVerificationService {
                 payments.findAllByTransactionIdOrderByCreatedAtAsc(payment.getTransactionId()));
         // 5b: a notice of revocation ends once the buyer has caught up.
         revocationNotices.clearIfCaughtUp(pp.row(), after);
+        // 5c: a proposal was worked out on what was owed before this payment.
+        restructureNotices.lapseProposalOnPayment(payment.getTransactionId());
         auditApi.record(AuditEntryRequest.of(actor, "payment.instalment_verified", "payment", payment.getId(), tenantId,
                 describe(payment, pp.schedule()) + " for " + pp.row().transactionReference() + " verified by finance ("
                         + after.instalmentsPaid() + " of " + pp.schedule().instalments().size() + " paid)."));

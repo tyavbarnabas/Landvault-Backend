@@ -5,6 +5,7 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -38,4 +39,9 @@ public class TransactionInstalment extends AbstractAppendOnlyEntity {
 
     @Column(name = "amount", nullable = false, updatable = false, precision = 19, scale = 4)
     private BigDecimal amount;
+
+    /** Phase 5c: penalties reached before a restructure, charged with this (the first new) instalment. */
+    @Builder.Default
+    @Column(name = "carried_penalty", nullable = false, updatable = false, precision = 19, scale = 2)
+    private BigDecimal carriedPenalty = BigDecimal.ZERO;
 }

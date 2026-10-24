@@ -306,7 +306,9 @@ public class TransactionService {
         Map<UUID, List<TransactionInstalment>> instalments = instalmentsFor(ids);
         Map<UUID, List<LatePaymentTerms.Step>> steps = stepsFor(ids);
         Map<UUID, PlanSchedule> out = new HashMap<>();
-        transactions.forEach(t -> schedule(t, instalments.getOrDefault(t.getId(), List.of()),
+        // Phase 5c: only the version in force; earlier ones are history.
+        transactions.forEach(t -> schedule(t, instalments.getOrDefault(t.getId(), List.of()).stream()
+                        .filter(i -> i.getScheduleVersion() == t.currentScheduleVersion()).toList(),
                 steps.getOrDefault(t.getId(), List.of())).ifPresent(s -> out.put(t.getId(), s)));
         return out;
     }
@@ -332,9 +334,10 @@ public class TransactionService {
         return Optional.of(new PlanSchedule(t.getPlanId(), t.getPlanName(), t.getPlanFrequency().getValue(),
                 t.getPlanTotal(), t.getPlanPremium(), t.getDepositAmount(), instalments.stream()
                 .sorted(Comparator.comparing(TransactionInstalment::getSequence))
-                .map(i -> new PlanSchedule.Instalment(i.getSequence(), i.getDueDate(), i.getAmount()))
+                .map(i -> new PlanSchedule.Instalment(i.getSequence(), i.getDueDate(), i.getAmount(),
+                        i.getCarriedPenalty()))
                 .toList(), new LatePaymentTerms(steps, !Boolean.FALSE.equals(t.getPenaltiesRefundable()),
-                t.revocationTerms())));
+                t.revocationTerms()), t.currentScheduleVersion()));
     }
 
     private static String generateReference() {

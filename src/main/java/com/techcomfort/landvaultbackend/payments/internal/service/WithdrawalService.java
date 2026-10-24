@@ -55,6 +55,7 @@ public class WithdrawalService {
     private final SettlementAlertSender alerts;
     private final BuyerNotifier buyerNotifier;
     private final RevocationNotices notices;
+    private final RestructureNotices restructureNotices;
 
     /** The quote while the plan runs; what was settled once withdrawn. The buyer's own purchase only. */
     @Transactional(readOnly = true)
@@ -84,8 +85,9 @@ public class WithdrawalService {
         }
         Instant now = Instant.now();
         flagRefunds(purchase, quote, purchase.buyerUserId(), now, "You withdrew from your plan", "the buyer withdrew");
-        // 5b: a notice of revocation running at the time is overtaken.
+        // 5b: a notice of revocation running at the time is overtaken; 5c: so is a restructure.
         notices.closeOnWithdrawal(transactionId);
+        restructureNotices.closeOnPlanEnded(transactionId, "the buyer withdrew");
         log.info("Buyer {} withdrew from plan {}: refund {}, developer keeps {}", purchase.buyerUserId(),
                 transactionId, quote.refund(), quote.developerKeeps());
         tell(purchase, quote, why);

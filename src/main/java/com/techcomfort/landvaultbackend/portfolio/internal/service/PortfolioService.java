@@ -220,7 +220,8 @@ public class PortfolioService implements PortfolioApi {
                 next.map(PlanSchedule.Instalment::dueDate).orElse(null),
                 next.map(PlanSchedule.Instalment::amount).orElse(null), p.payments(), schedule.instalments().size(),
                 paidOff ? schedule.instalments().size() : paidInstalments.size(),
-                standing == null ? null : arrears(standing), p.restructureStatus(),
+                standing == null ? null : arrears(standing),
+                standing == null ? p.restructureStatus() : standing.restructureStatus(),
                 p.supersedes()), entry.sortTime());
     }
 

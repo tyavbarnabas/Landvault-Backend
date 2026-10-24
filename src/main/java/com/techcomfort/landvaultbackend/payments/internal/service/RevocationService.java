@@ -58,6 +58,7 @@ public class RevocationService {
     private final PaymentRepository payments;
     private final WithdrawalService withdrawals;
     private final RevocationNotices notices;
+    private final RestructureNotices restructureNotices;
     private final AuditApi auditApi;
     private final IdentityApi identityApi;
     private final SettlementAlertSender alerts;
@@ -160,6 +161,7 @@ public class RevocationService {
         withdrawals.flagRefunds(purchase, quote, scope.userId(), now, "Your plan was revoked",
                 "the developer revoked the plan");
         notices.close(notice, RevocationStatus.REVOKED, scope.userId(), null);
+        restructureNotices.closeOnPlanEnded(transactionId, "the developer revoked it");
         log.info("Plan {} revoked by {}: refund {}, developer keeps {}", transactionId, scope.userId(),
                 quote.refund(), quote.developerKeeps());
         tell(plan, SettlementAlertSender.RevocationStage.REVOKED, notice, null, null, quote.refund(),

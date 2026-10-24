@@ -201,6 +201,45 @@ public class DocumentController {
         return file(service.offerLetterJpeg(currentUserId(), id), MediaType.IMAGE_JPEG);
     }
 
+    @Operation(summary = "A restructure letter",
+            description = """
+                    Requires `client.documents.view`. Phase 5c: issued with the developer's proposal to restructure \
+                    an instalment plan. `status` is `issued` (waiting for you), `accepted`, `declined`, `withdrawn` \
+                    or `lapsed`. Accept or decline it at `/api/transactions/{transactionId}/restructure`.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200"),
+            @ApiResponse(responseCode = "404", description = "`DOCUMENT_NOT_FOUND`", content = @Content)})
+    @GetMapping("/api/documents/restructure-letters/{id}")
+    @PreAuthorize("hasAuthority('client.documents.view')")
+    public ResponseEntity<DocumentDto> restructureLetter(@PathVariable UUID id) {
+        return ResponseEntity.ok(service.restructureLetter(currentUserId(), id));
+    }
+
+    @Operation(summary = "Download a restructure letter as PDF",
+            description = """
+                    Requires `client.documents.view`. The developer's letterhead and signature, HomeTrue's wording: \
+                    the new instalments and dates, the penalties carried, the unchanged total, and a QR code anyone \
+                    can scan to check it is genuine. Sent as an attachment named `HomeTrue-<number>.pdf`.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", content = @Content(mediaType = MediaType.APPLICATION_PDF_VALUE)),
+            @ApiResponse(responseCode = "404", description = "`DOCUMENT_NOT_FOUND`", content = @Content)})
+    @GetMapping(value = "/api/documents/restructure-letters/{id}/pdf", produces = MediaType.APPLICATION_PDF_VALUE)
+    @PreAuthorize("hasAuthority('client.documents.view')")
+    public ResponseEntity<byte[]> restructureLetterPdf(@PathVariable UUID id) {
+        return file(service.restructureLetterPdf(currentUserId(), id), MediaType.APPLICATION_PDF);
+    }
+
+    @Operation(summary = "Download a restructure letter as JPEG",
+            description = "Requires `client.documents.view`. Every page stacked into one image, for sharing.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", content = @Content(mediaType = MediaType.IMAGE_JPEG_VALUE)),
+            @ApiResponse(responseCode = "404", description = "`DOCUMENT_NOT_FOUND`", content = @Content)})
+    @GetMapping(value = "/api/documents/restructure-letters/{id}/jpeg", produces = MediaType.IMAGE_JPEG_VALUE)
+    @PreAuthorize("hasAuthority('client.documents.view')")
+    public ResponseEntity<byte[]> restructureLetterJpeg(@PathVariable UUID id) {
+        return file(service.restructureLetterJpeg(currentUserId(), id), MediaType.IMAGE_JPEG);
+    }
+
     private static ResponseEntity<byte[]> file(DocumentService.RenderedDocument document, MediaType type) {
         return ResponseEntity.ok()
                 .contentType(type)

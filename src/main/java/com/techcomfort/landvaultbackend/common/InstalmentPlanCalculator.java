@@ -85,6 +85,29 @@ public final class InstalmentPlanCalculator {
                 .toList();
     }
 
+    /**
+     * Phase 5c: {@code balance} spread over {@code count} instalments the way a
+     * plan is — equal parts rounded down to the kobo, the leftover on the last.
+     * Empty when the parts would come to nothing.
+     */
+    public static Optional<List<BigDecimal>> split(BigDecimal balance, int count) {
+        BigDecimal part = balance.divide(BigDecimal.valueOf(count), KOBO, RoundingMode.DOWN);
+        if (count < 1 || part.signum() <= 0) {
+            return Optional.empty();
+        }
+        BigDecimal last = balance.subtract(part.multiply(BigDecimal.valueOf(count - 1L))).setScale(KOBO, RoundingMode.UNNECESSARY);
+        return Optional.of(IntStream.rangeClosed(1, count).mapToObj(n -> n == count ? last : part).toList());
+    }
+
+    /**
+     * Phase 5c: due dates starting on {@code first} and every period after,
+     * always counted from {@code first} (the same month-end rule as
+     * {@link #dueDates}).
+     */
+    public static List<LocalDate> dueDatesFrom(LocalDate first, PaymentFrequency frequency, int count) {
+        return IntStream.range(0, count).mapToObj(n -> first.plusMonths((long) n * frequency.months())).toList();
+    }
+
     /** A declared late-payment step on one instalment (decided with the user: a share of the overdue instalment). */
     public static BigDecimal penaltyOn(BigDecimal instalment, BigDecimal penaltyPct) {
         return instalment.multiply(penaltyPct).divide(HUNDRED, KOBO, RoundingMode.HALF_UP);

@@ -107,9 +107,20 @@ public record PlanProgress(PlanSchedule schedule, Set<Integer> verified, boolean
         return balanceVerified ? schedule.instalments().size() : verified.size();
     }
 
-    /** The penalty an unpaid instalment has reached on {@code today}, if any. */
+    /**
+     * The penalty an unpaid instalment has reached on {@code today}, if any.
+     * Phase 5c: plus any penalty carried onto it by a restructure — one line;
+     * a carried penalty alone reads as 0 months, 0%.
+     */
     public Optional<LatePaymentTerms.Penalty> penaltyDue(PlanSchedule.Instalment instalment, LocalDate today) {
-        return schedule.lateTerms().penaltyOn(instalment.amount(), instalment.dueDate(), today);
+        Optional<LatePaymentTerms.Penalty> reached = schedule.lateTerms()
+                .penaltyOn(instalment.amount(), instalment.dueDate(), today);
+        BigDecimal carried = instalment.carriedPenalty() == null ? BigDecimal.ZERO : instalment.carriedPenalty();
+        if (carried.signum() == 0) {
+            return reached;
+        }
+        return Optional.of(reached.map(p -> new LatePaymentTerms.Penalty(p.monthsLate(), p.penaltyPct(),
+                p.amount().add(carried))).orElseGet(() -> new LatePaymentTerms.Penalty(0, BigDecimal.ZERO, carried)));
     }
 
     /**

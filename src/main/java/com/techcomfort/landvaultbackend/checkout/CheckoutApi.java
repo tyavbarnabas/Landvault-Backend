@@ -65,6 +65,15 @@ public interface CheckoutApi {
      */
     boolean revoke(UUID transactionId, UUID tenantId, UUID actorUserId, String reason);
 
+    /**
+     * Phase 5c: the buyer accepted a restructure — {@code schedule} (the paid
+     * instalments as they were, then the new ones) becomes version
+     * {@code fromVersion + 1} and is put in force, once only. False, changing
+     * nothing, if the purchase isn't the buyer's, isn't on its plan, or its
+     * schedule moved on from {@code fromVersion}.
+     */
+    boolean restructure(UUID transactionId, UUID buyerUserId, int fromVersion, List<PlanSchedule.Instalment> schedule);
+
     /** Phase 5b: when this plan was revoked, if it was. */
     Optional<Instant> revokedAt(UUID transactionId);
 

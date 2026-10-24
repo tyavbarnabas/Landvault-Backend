@@ -1,0 +1,190 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Phase 5c: restructuring an instalment plan (decided with the user,
+        2026-10-23: A, A, A, A). See AGENTS.md, "Instalment plans", phase 5c.
+
+        - transactions.schedule_version: which version of the schedule is in
+          force. A restructure writes version n+1 (the paid instalments copied,
+          then the new ones, numbering carried on — payments are unique per
+          instalment number) and moves this pointer; earlier versions stay.
+        - transaction_instalments.carried_penalty: penalties reached before a
+          restructure, kept (no waivers) and charged with the first new
+          instalment as part of its penalty line.
+        - plan_restructures: the buyer's request, the developer's proposal
+          (figures and the letter), and how it ended. One open per plan. A
+          proposal lapses after 14 days. Buyer-owned like transactions: not
+          RLS-policied; the service walls the developer side by seller and
+          plot visibility.
+        - plan_restructure_instalments: a proposal's new instalments, fixed
+          when proposed — what the letter prints is what is applied.
+        - restructure_letters: HomeTrue's restructure letter (HT-RST-), like
+          the offer letter: a copy of everything printed, never changed.
+    -->
+    <changeSet id="108-schedule-versions" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE transactions ADD COLUMN schedule_version integer NOT NULL DEFAULT 1;
+            COMMENT ON COLUMN transactions.schedule_version IS
+                'Phase 5c: the version of transaction_instalments in force. A restructure adds version n+1 and moves this; earlier versions stay as history.';
+            ALTER TABLE transaction_instalments
+                ADD COLUMN carried_penalty numeric(19, 2) NOT NULL DEFAULT 0,
+                ADD CONSTRAINT chk_transaction_instalments_carried CHECK (carried_penalty >= 0);
+            COMMENT ON COLUMN transaction_instalments.carried_penalty IS
+                'Phase 5c: penalties reached before a restructure, charged with this instalment (the first new one). Zero otherwise.';
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE transaction_instalments DROP CONSTRAINT chk_transaction_instalments_carried,
+                DROP COLUMN carried_penalty;
+            ALTER TABLE transactions DROP COLUMN schedule_version;
+        ]]></rollback>
+    </changeSet>
+
+    <changeSet id="108-plan-restructures" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE plan_restructures (
+                id                      uuid NOT NULL PRIMARY KEY,
+                tenant_id               uuid,
+                branch_id               uuid,
+                created_at              timestamp(6) with time zone NOT NULL,
+                updated_at              timestamp(6) with time zone,
+                created_by              varchar(255),
+                updated_by              varchar(255),
+                deleted                 boolean NOT NULL DEFAULT false,
+
+                transaction_id          uuid NOT NULL REFERENCES transactions (id),
+                seller_tenant_id        uuid NOT NULL REFERENCES organizations (id),
+                buyer_user_id           uuid NOT NULL REFERENCES users (id),
+                status                  varchar(16) NOT NULL,
+                request_reason          varchar(500) NOT NULL,
+                preferred_instalments   integer,
+                requested_at            timestamp(6) with time zone NOT NULL,
+
+                proposed_by             uuid REFERENCES users (id),
+                proposed_at             timestamp(6) with time zone,
+                from_schedule_version   integer,
+                instalment_count        integer,
+                frequency               varchar(16),
+                first_due_date          date,
+                balance                 numeric(19, 2),
+                carried_penalty         numeric(19, 2),
+                expires_on              date,
+                letter_id               uuid,
+                letter_number           varchar(32),
+                transaction_reference   varchar(32),
+                plan_name               varchar(120),
+                plot_label              varchar(255),
+                estate_name             varchar(255),
+                lapse_reminder_sent_at  timestamp(6) with time zone,
+
+                accepted_at             timestamp(6) with time zone,
+                accepted_user_agent     varchar(255),
+                to_schedule_version     integer,
+
+                closed_at               timestamp(6) with time zone,
+                closed_by               uuid REFERENCES users (id),
+                close_note              varchar(500),
+
+                CONSTRAINT chk_plan_restructures_status CHECK (status IN
+                    ('REQUESTED', 'PROPOSED', 'ACCEPTED', 'REJECTED', 'DECLINED', 'CANCELLED', 'WITHDRAWN', 'LAPSED')),
+                CONSTRAINT chk_plan_restructures_preferred CHECK (preferred_instalments IS NULL
+                    OR preferred_instalments BETWEEN 1 AND 60),
+                CONSTRAINT chk_plan_restructures_proposal CHECK (status IN ('REQUESTED', 'REJECTED', 'CANCELLED')
+                    OR (proposed_at IS NOT NULL AND instalment_count BETWEEN 1 AND 60 AND frequency IN ('MONTHLY', 'QUARTERLY')
+                        AND first_due_date IS NOT NULL AND balance > 0 AND carried_penalty >= 0 AND expires_on IS NOT NULL)),
+                CONSTRAINT chk_plan_restructures_accepted CHECK ((status = 'ACCEPTED') = (accepted_at IS NOT NULL)),
+                CONSTRAINT chk_plan_restructures_open CHECK ((status IN ('REQUESTED', 'PROPOSED')) = (closed_at IS NULL)),
+                CONSTRAINT chk_plan_restructures_rejection CHECK (status <> 'REJECTED' OR close_note IS NOT NULL)
+            );
+            CREATE UNIQUE INDEX uq_plan_restructures_one_open ON plan_restructures (transaction_id)
+                WHERE status IN ('REQUESTED', 'PROPOSED') AND deleted = false;
+            CREATE INDEX idx_plan_restructures_transaction ON plan_restructures (transaction_id, created_at);
+            CREATE INDEX idx_plan_restructures_seller ON plan_restructures (seller_tenant_id, status);
+            REVOKE DELETE, TRUNCATE ON plan_restructures FROM ${appDbUsername};
+            COMMENT ON TABLE plan_restructures IS
+                'Phase 5c: a buyer asking for their remaining instalments to be spread differently. REQUESTED, then REJECTED or CANCELLED, or PROPOSED (the developer''s new terms and the letter), then ACCEPTED, DECLINED, WITHDRAWN or LAPSED (14 days). The total owed never changes. One open per plan. Never deleted.';
+
+            CREATE TABLE plan_restructure_instalments (
+                id              uuid NOT NULL PRIMARY KEY,
+                created_at      timestamp(6) with time zone NOT NULL,
+                created_by      varchar(255),
+
+                restructure_id  uuid NOT NULL REFERENCES plan_restructures (id),
+                sequence        integer NOT NULL,
+                due_date        date NOT NULL,
+                amount          numeric(19, 4) NOT NULL,
+                carried_penalty numeric(19, 2) NOT NULL DEFAULT 0,
+
+                CONSTRAINT uq_plan_restructure_instalments UNIQUE (restructure_id, sequence),
+                CONSTRAINT chk_plan_restructure_instalments_amount CHECK (amount > 0 AND carried_penalty >= 0)
+            );
+            REVOKE UPDATE, DELETE, TRUNCATE ON plan_restructure_instalments FROM ${appDbUsername};
+            COMMENT ON TABLE plan_restructure_instalments IS
+                'Phase 5c: a proposal''s new instalments, fixed when proposed and applied unchanged if accepted. Never changed.';
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE plan_restructure_instalments;
+            DROP TABLE plan_restructures;
+        ]]></rollback>
+    </changeSet>
+
+    <changeSet id="108-restructure-letters" author="landvault">
+        <sql><![CDATA[
+            CREATE SEQUENCE restructure_letter_number_seq;
+            GRANT USAGE ON SEQUENCE restructure_letter_number_seq TO ${appDbUsername};
+            CREATE TABLE restructure_letters (
+                id                          uuid NOT NULL PRIMARY KEY,
+                created_at                  timestamp(6) with time zone NOT NULL,
+                created_by                  varchar(255),
+                number                      varchar(32) NOT NULL,
+                verification_code           varchar(16) NOT NULL,
+                restructure_id              uuid NOT NULL REFERENCES plan_restructures (id),
+                transaction_id              uuid NOT NULL REFERENCES transactions (id),
+                offer_letter_id             uuid REFERENCES offer_letters (id),
+                buyer_user_id               uuid NOT NULL REFERENCES users (id),
+                seller_tenant_id            uuid NOT NULL REFERENCES organizations (id),
+                branch_id                   uuid REFERENCES branches (id),
+                estate_id                   uuid NOT NULL REFERENCES estates (id),
+                plot_id                     uuid NOT NULL REFERENCES plots (id),
+                issued_at                   timestamp(6) with time zone NOT NULL,
+                company_name                varchar(255) NOT NULL,
+                company_rc_number           varchar(64),
+                company_address             varchar(512),
+                company_phone               varchar(64),
+                company_email               varchar(255),
+                company_website             varchar(255),
+                logo_file_id                uuid REFERENCES stored_files (id),
+                signature_file_id           uuid NOT NULL REFERENCES stored_files (id),
+                seal_file_id                uuid REFERENCES stored_files (id),
+                signatory_name              varchar(120) NOT NULL,
+                signatory_title             varchar(120) NOT NULL,
+                buyer_name                  varchar(255) NOT NULL,
+                buyer_lines                 text[] NOT NULL,
+                salutation                  varchar(300) NOT NULL,
+                estate_name                 varchar(255) NOT NULL,
+                estate_location             varchar(512),
+                plot_label                  varchar(255) NOT NULL,
+                opening                     text NOT NULL,
+                clauses                     text[] NOT NULL,
+                closing                     text NOT NULL,
+                sign_off                    varchar(80) NOT NULL,
+                CONSTRAINT uq_restructure_letters_number UNIQUE (number),
+                CONSTRAINT uq_restructure_letters_verification_code UNIQUE (verification_code),
+                CONSTRAINT uq_restructure_letters_restructure UNIQUE (restructure_id),
+                CONSTRAINT chk_restructure_letters_verification_code CHECK (verification_code ~ '^[0-9A-F]{16}$')
+            );
+            CREATE INDEX idx_restructure_letters_buyer ON restructure_letters (buyer_user_id, issued_at DESC);
+            REVOKE UPDATE, DELETE, TRUNCATE ON restructure_letters FROM ${appDbUsername};
+            COMMENT ON TABLE restructure_letters IS
+                'Phase 5c: restructure letters HomeTrue issued with a developer''s proposal: a copy of everything printed, never changed. Accepted, lapsed and the rest are derived from plan_restructures. See AGENTS.md, "Instalment plans", phase 5c.';
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE restructure_letters;
+            DROP SEQUENCE restructure_letter_number_seq;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

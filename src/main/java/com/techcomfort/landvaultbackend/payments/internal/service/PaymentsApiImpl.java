@@ -2,9 +2,11 @@ package com.techcomfort.landvaultbackend.payments.internal.service;
 
 import com.techcomfort.landvaultbackend.payments.PaymentsApi;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
+import com.techcomfort.landvaultbackend.payments.internal.domain.PlanRestructure;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Refund;
 import com.techcomfort.landvaultbackend.payments.internal.enums.RefundStatus;
 import com.techcomfort.landvaultbackend.payments.internal.repository.PaymentRepository;
+import com.techcomfort.landvaultbackend.payments.internal.repository.PlanRestructureRepository;
 import com.techcomfort.landvaultbackend.payments.internal.repository.RefundRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -24,6 +26,14 @@ public class PaymentsApiImpl implements PaymentsApi {
 
     private final RefundRepository refunds;
     private final PaymentRepository payments;
+    private final PlanRestructureRepository restructures;
+
+    @Override
+    @Transactional(readOnly = true)
+    public Map<UUID, String> restructureLetterStatuses(Collection<UUID> letterIds) {
+        return letterIds.isEmpty() ? Map.of() : restructures.findByLetterIdIn(letterIds).stream()
+                .collect(Collectors.toMap(PlanRestructure::getLetterId, r -> r.getStatus().wire()));
+    }
 
     /**
      * When each payment was returned IN FULL — the newest processed refund once

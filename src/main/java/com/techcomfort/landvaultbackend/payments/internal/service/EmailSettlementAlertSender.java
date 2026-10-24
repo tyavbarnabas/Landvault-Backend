@@ -365,6 +365,112 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
         log.info("Plan revocation {} delivered to the buyer", alert.stage());
     }
 
+    @Override
+    public void planRestructure(RestructureAlert alert) {
+        SimpleMailMessage message = new SimpleMailMessage();
+        message.setFrom(fromAddress);
+        message.setTo(alert.to());
+        String plot = alert.plotLabel() == null
+                ? "purchase " + alert.purchaseReference() + " (" + alert.planName() + ")"
+                : alert.plotLabel() + " (purchase " + alert.purchaseReference() + ", " + alert.planName() + ")";
+        String link = alert.purchaseUrl() == null ? "" : "\n\n    " + alert.purchaseUrl();
+        String note = alert.note() == null ? "" : alert.note();
+        switch (alert.stage()) {
+            case REQUESTED -> {
+                message.setSubject("A buyer asked to restructure their plan: " + alert.purchaseReference());
+                message.setText("""
+                        Hello,
+
+                        The buyer on %s has asked for their remaining instalments to be spread differently.
+
+                        Their reason: %s
+
+                        Your finance team can propose new terms or decline, under Finance > Restructures in your \
+                        HomeTrue portal. The total owed can't change; only how it is spread.
+                        """.formatted(plot, note));
+            }
+            case PROPOSED -> {
+                message.setSubject("New terms proposed for your plan: " + alert.purchaseReference());
+                message.setText("""
+                        Hello,
+
+                        The developer has proposed new terms for the rest of your instalment plan for %s:
+
+                        %s
+
+                        Nothing changes until you accept. Read restructure letter %s in your documents and accept \
+                        it by the end of %s, or it lapses and your current schedule carries on.%s
+                        """.formatted(plot, alert.terms(), alert.letterNumber(), alert.expiresOn(), link));
+            }
+            case REJECTED -> {
+                message.setSubject("Your restructure request was declined: " + alert.purchaseReference());
+                message.setText("""
+                        Hello,
+
+                        The developer has declined your request to restructure your instalment plan for %s.
+
+                        Their reason: %s
+
+                        Your current schedule carries on. You may ask again.%s
+                        """.formatted(plot, note, link));
+            }
+            case WITHDRAWN -> {
+                message.setSubject("A restructure proposal was withdrawn: " + alert.purchaseReference());
+                message.setText("""
+                        Hello,
+
+                        The developer has withdrawn the new terms they proposed for your instalment plan for %s \
+                        (letter %s). It can no longer be accepted; your current schedule carries on. Your \
+                        request is still open, and they may propose different terms.%s%s
+                        """.formatted(plot, alert.letterNumber(), note.isEmpty() ? "" : "\n\nTheir note: " + note,
+                        link));
+            }
+            case LAPSING -> {
+                message.setSubject("Your restructure proposal ends soon: " + alert.purchaseReference());
+                message.setText("""
+                        Hello,
+
+                        The new terms proposed for your instalment plan for %s (letter %s) can be accepted until \
+                        the end of %s. After that they lapse and your current schedule carries on.%s
+                        """.formatted(plot, alert.letterNumber(), alert.expiresOn(), link));
+            }
+            case LAPSED -> {
+                message.setSubject("Your restructure proposal has lapsed: " + alert.purchaseReference());
+                message.setText("""
+                        Hello,
+
+                        The new terms proposed for your instalment plan for %s (letter %s) were not accepted in \
+                        time%s, so they have lapsed. Your current schedule carries on, and you may ask again.%s
+                        """.formatted(plot, alert.letterNumber(), note.isEmpty() ? "" : " — " + note, link));
+            }
+            case ACCEPTED -> {
+                message.setSubject((alert.toDeveloper() ? "A buyer accepted your restructure: "
+                        : "Your plan has been restructured: ") + alert.purchaseReference());
+                message.setText("""
+                        Hello,
+
+                        The restructure of the instalment plan for %s (letter %s) has been accepted and is now in \
+                        force:
+
+                        %s
+
+                        Instalments already paid stay paid. The earlier schedule is kept as history.%s
+                        """.formatted(plot, alert.letterNumber(), alert.terms(), link));
+            }
+            case DECLINED -> {
+                message.setSubject("A buyer declined your restructure proposal: " + alert.purchaseReference());
+                message.setText("""
+                        Hello,
+
+                        The buyer on %s has declined the new terms you proposed (letter %s). Their current \
+                        schedule carries on.
+                        """.formatted(plot, alert.letterNumber()));
+            }
+        }
+        mailSender.send(message);
+        log.info("Plan restructure {} delivered to the {}", alert.stage(), alert.toDeveloper() ? "developer" : "buyer");
+    }
+
     /**
      * AR-3. Factual and calm, like the conflict guidance: what is due, by when,
      * and what happens next — never a threat.

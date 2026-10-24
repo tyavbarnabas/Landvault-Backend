@@ -70,7 +70,8 @@ public record OwnedPlotDto(
                 + "grace and into arrears: what's late, the penalty reached and the total due now. Null otherwise.",
                 nullable = true)
         ArrearsDto arrears,
-        @Schema(description = "Null: restructuring isn't built yet.")
+        @Schema(description = "Phase 5c: `requested` or `proposed` while a restructure of this plan is open; null "
+                + "otherwise.", nullable = true)
         String restructureStatus,
         @Schema(description = "The owned plot this one replaced (an upgrade). Null today.")
         UUID supersedes

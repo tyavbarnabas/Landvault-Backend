@@ -103,6 +103,23 @@ public interface SettlementAlertSender {
 
     void planRevocation(RevocationAlert alert);
 
+    /** Phase 5c: which step of a restructure someone is being told about. */
+    enum RestructureStage { REQUESTED, PROPOSED, REJECTED, WITHDRAWN, LAPSING, LAPSED, ACCEPTED, DECLINED }
+
+    /**
+     * Phase 5c: to the buyer at each step, and to the developer's Executive
+     * Directors ({@code toDeveloper}) when a request arrives or the buyer
+     * answers. {@code terms}: the proposal in plain words, for a proposal or
+     * acceptance; {@code note}: the buyer's reason, or the developer's reason
+     * or note; {@code expiresOn}: a proposal's last day. Any may be null.
+     */
+    record RestructureAlert(String to, boolean toDeveloper, RestructureStage stage, String purchaseReference,
+                            String planName, String plotLabel, String terms, String note, String expiresOn,
+                            String letterNumber, String purchaseUrl) {
+    }
+
+    void planRestructure(RestructureAlert alert);
+
     void refundNeedsAccount(RefundNeedsAccountAlert alert);
 
     void refundProblem(RefundProblemAlert alert);

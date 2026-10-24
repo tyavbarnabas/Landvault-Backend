@@ -16,7 +16,7 @@ public record DocumentVerificationDto(
                 + "for an offer letter `issued`, "
                 + "`accepted` or `lapsed`. Unknown codes are a 404.")
         String status,
-        @Schema(description = "`receipt`, `allocation_letter` or `offer_letter`") String documentType,
+        @Schema(description = "`receipt`, `allocation_letter`, `provisional_allocation_letter`, `offer_letter` or `restructure_letter`") String documentType,
         String number,
         Instant issuedAt,
         @Schema(description = "Always `HomeTrue` for a generated document.") String issuedBy,
