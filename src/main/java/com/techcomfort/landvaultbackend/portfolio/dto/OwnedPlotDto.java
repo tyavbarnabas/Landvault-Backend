@@ -73,6 +73,18 @@ public record OwnedPlotDto(
         @Schema(description = "Phase 5c: `requested` or `proposed` while a restructure of this plan is open; null "
                 + "otherwise.", nullable = true)
         String restructureStatus,
+        @Schema(description = "The declared plan's name, as on the purchase's `schedule.planName`. Null when outright.",
+                nullable = true)
+        String planName,
+        @Schema(description = "When finance verified the deposit — the plan's start (Lagos date). Kept once the plan "
+                + "is paid off or ends. Null when outright.", nullable = true)
+        LocalDate planStartedAt,
+        @Schema(description = "When the buyer withdrew, or the developer revoked the plan (Lagos date). Null "
+                + "otherwise.", nullable = true)
+        LocalDate endedAt,
+        @Schema(description = "On a `withdrawn` or `revoked` entry: what is coming back. Null otherwise.",
+                nullable = true)
+        PlanRefundDto refund,
         @Schema(description = "The owned plot this one replaced (an upgrade). Null today.")
         UUID supersedes
 ) {

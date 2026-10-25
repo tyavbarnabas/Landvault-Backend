@@ -2,6 +2,7 @@ package com.techcomfort.landvaultbackend.payments.internal.service;
 
 import com.techcomfort.landvaultbackend.checkout.PaymentSummary;
 import com.techcomfort.landvaultbackend.checkout.PlanPayment;
+import com.techcomfort.landvaultbackend.checkout.PlanRefund;
 import com.techcomfort.landvaultbackend.checkout.PaymentSummaryProvider;
 import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
 import com.techcomfort.landvaultbackend.checkout.PlanStanding;
@@ -9,12 +10,14 @@ import com.techcomfort.landvaultbackend.payments.ReceiptLookup;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Refund;
 import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentStatus;
+import com.techcomfort.landvaultbackend.payments.internal.enums.RefundStatus;
 import com.techcomfort.landvaultbackend.payments.internal.repository.PaymentRepository;
 import com.techcomfort.landvaultbackend.payments.internal.repository.RefundRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -93,6 +96,35 @@ public class CheckoutPaymentSummaries implements PaymentSummaryProvider {
                     receipt == null ? null : receipt.id(), receipt == null ? null : receipt.number()));
         });
         return summaries;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Map<UUID, PlanRefund> refundsFor(Collection<UUID> transactionIds) {
+        if (transactionIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, List<Payment>> owedBack = payments.findAllByTransactionIdIn(transactionIds).stream()
+                .filter(p -> p.getStatus() == PaymentStatus.SUCCEEDED && p.getRefundRequestedAt() != null)
+                .collect(Collectors.groupingBy(Payment::getTransactionId));
+        Map<UUID, List<Refund>> refundsByPayment = refunds.findAllByPaymentIdInOrderByCreatedAtDesc(
+                        owedBack.values().stream().flatMap(List::stream).map(Payment::getId).toList()).stream()
+                .collect(Collectors.groupingBy(Refund::getPaymentId));
+        Map<UUID, PlanRefund> out = new HashMap<>();
+        owedBack.forEach((transactionId, paid) -> {
+            BigDecimal amount = paid.stream().map(Payment::owedBack).reduce(BigDecimal.ZERO, BigDecimal::add);
+            List<Refund> sent = paid.stream().flatMap(p -> refundsByPayment.getOrDefault(p.getId(), List.of()).stream())
+                    .toList();
+            BigDecimal refunded = sent.stream().filter(r -> r.getStatus() == RefundStatus.PROCESSED)
+                    .map(Refund::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
+            boolean needsAccount = sent.stream().anyMatch(r -> r.getStatus() == RefundStatus.NEEDS_ATTENTION
+                    && r.getAccountSubmittedAt() == null);
+            String status = amount.signum() == 0 ? "none"
+                    : refunded.compareTo(amount) >= 0 ? "refunded"
+                    : refunded.signum() > 0 ? "partly_refunded" : "pending";
+            out.put(transactionId, new PlanRefund(amount, refunded, status, needsAccount));
+        });
+        return out;
     }
 
     /** The successful attempt if any, otherwise the newest. */

@@ -45,6 +45,9 @@ public record FinanceQueueItemDto(
         Integer instalmentCount,
         @Schema(description = "For an `instalment`: when it falls due.", nullable = true)
         LocalDate dueDate,
+        @Schema(description = "For an `instalment`: its scheduled amount, before penalties — `expectedAmount` is "
+                + "this plus `penaltyAmount`. Null for a deposit, balance or full price.", nullable = true)
+        BigDecimal instalmentAmount,
         @Schema(description = "Late-payment penalties included in `expectedAmount`, fixed when the buyer started "
                 + "paying (each line in `penalties`). Zero when nothing was late.")
         BigDecimal penaltyAmount,

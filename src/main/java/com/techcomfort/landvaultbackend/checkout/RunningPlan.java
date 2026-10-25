@@ -10,7 +10,9 @@ import java.util.UUID;
  * paid off): what the reminder job and the developer's plan list need to name
  * it (phase 4).
  *
- * @param onPlanSince when the deposit was verified
+ * @param onPlanSince when the purchase last changed ({@code updated_at}) — not when the plan started: a
+ *                    restructure, a notice or any other update moves it. The deposit's own verification is
+ *                    the payments module's.
  */
 public record RunningPlan(
         UUID transactionId,

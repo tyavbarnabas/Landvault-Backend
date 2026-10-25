@@ -10,11 +10,13 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.UUID;
 
 /** Phase 4: a developer's running instalment plans and which are late. See {@link PortalPlanService}. */
 @RestController
@@ -39,5 +41,16 @@ public class PortalPlanController {
             @Parameter(description = "`on_track`, `due_today`, `overdue`, `in_arrears` or `late`.")
             @RequestParam(required = false) String status) {
         return ResponseEntity.ok(plans.plans(status));
+    }
+
+    @Operation(summary = "One running instalment plan",
+            description = """
+                    Requires `portal.payments.verify`. The same row as the list, for one plan: its deposit and \
+                    every instalment with where it stands today. 404 `TRANSACTION_NOT_FOUND` for a plan that isn't \
+                    running (not yet started, paid off, withdrawn or revoked), or isn't your company's or branch's.""")
+    @GetMapping("/{transactionId}")
+    @PreAuthorize("hasAuthority('portal.payments.verify')")
+    public ResponseEntity<PortalPlanDto> plan(@PathVariable UUID transactionId) {
+        return ResponseEntity.ok(plans.plan(transactionId));
     }
 }

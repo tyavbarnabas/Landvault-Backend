@@ -8,11 +8,15 @@ import com.techcomfort.landvaultbackend.common.TenantContext;
 import com.techcomfort.landvaultbackend.common.TenantScope;
 import com.techcomfort.landvaultbackend.identity.IdentityApi;
 import com.techcomfort.landvaultbackend.payments.dto.PortalPlanDto;
+import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
+import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentPurpose;
 import com.techcomfort.landvaultbackend.payments.internal.exceptions.PaymentException;
+import com.techcomfort.landvaultbackend.payments.internal.repository.PaymentRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Comparator;
 import java.util.List;
@@ -40,23 +44,14 @@ public class PortalPlanService {
     private final CheckoutApi checkoutApi;
     private final PlanStandings planStandings;
     private final IdentityApi identityApi;
+    private final PaymentRepository payments;
 
     @Transactional(readOnly = true)
     public List<PortalPlanDto> plans(String status) {
         if (status != null && !FILTERS.contains(status)) {
             throw new PaymentException.UnknownStatusFilter(status);
         }
-        TenantScope scope = TenantContext.get().orElseThrow();
-        if (scope.tenantId() == null) {
-            throw new PaymentException.CompanyScopeRequired();
-        }
-        Map<UUID, RunningPlan> plans = checkoutApi.runningPlans(scope.tenantId()).stream()
-                .collect(Collectors.toMap(RunningPlan::transactionId, Function.identity()));
-        Map<UUID, PlanSchedule> schedules = checkoutApi.schedulesOf(plans.keySet());
-        LocalDate today = PlanStandings.today();
-        Map<UUID, PlanStanding> standings = planStandings.standingsOf(schedules, today);
-        return planStandings.progressOf(schedules).entrySet().stream()
-                .map(e -> toDto(plans.get(e.getKey()), e.getValue(), standings.get(e.getKey())))
+        return dtos(runningPlans()).stream()
                 .filter(p -> status == null || status.equals(p.status())
                         || ("late".equals(status) && p.arrears() != null))
                 .sorted(Comparator.comparingInt((PortalPlanDto p) -> URGENCY.indexOf(p.status()))
@@ -64,13 +59,48 @@ public class PortalPlanService {
                 .toList();
     }
 
-    private PortalPlanDto toDto(RunningPlan plan, PlanProgress progress, PlanStanding standing) {
+    /** One running plan, as in the list; 404 for one that isn't running, another company's or another branch's. */
+    @Transactional(readOnly = true)
+    public PortalPlanDto plan(UUID transactionId) {
+        return dtos(runningPlans().stream().filter(p -> p.transactionId().equals(transactionId)).toList()).stream()
+                .findFirst()
+                .orElseThrow(PaymentException.TransactionNotFound::new);
+    }
+
+    private List<RunningPlan> runningPlans() {
+        TenantScope scope = TenantContext.get().orElseThrow();
+        if (scope.tenantId() == null) {
+            throw new PaymentException.CompanyScopeRequired();
+        }
+        return checkoutApi.runningPlans(scope.tenantId());
+    }
+
+    private List<PortalPlanDto> dtos(List<RunningPlan> running) {
+        Map<UUID, RunningPlan> plans = running.stream()
+                .collect(Collectors.toMap(RunningPlan::transactionId, Function.identity()));
+        Map<UUID, PlanSchedule> schedules = checkoutApi.schedulesOf(plans.keySet());
+        LocalDate today = PlanStandings.today();
+        Map<UUID, PlanStanding> standings = planStandings.standingsOf(schedules, today);
+        // The plan started when finance verified its deposit — the payment's own record.
+        Map<UUID, Instant> depositVerified = plans.isEmpty() ? Map.of()
+                : payments.findAllByTransactionIdIn(plans.keySet()).stream()
+                .filter(p -> p.getPurpose() == PaymentPurpose.DEPOSIT && p.getFinanceVerifiedAt() != null)
+                .collect(Collectors.toMap(Payment::getTransactionId, Payment::getFinanceVerifiedAt, (a, b) -> a));
+        return planStandings.progressOf(schedules).entrySet().stream()
+                .map(e -> toDto(plans.get(e.getKey()), e.getValue(), standings.get(e.getKey()),
+                        depositVerified.get(e.getKey())))
+                .toList();
+    }
+
+    private PortalPlanDto toDto(RunningPlan plan, PlanProgress progress, PlanStanding standing,
+                                Instant depositVerifiedAt) {
         PlanSchedule schedule = progress.schedule();
         return new PortalPlanDto(plan.transactionId(), plan.transactionReference(), plan.estateId(), plan.estateName(),
                 plan.plotId(), plan.plotLabel(), identityApi.emailOf(plan.buyerUserId()).orElse(null),
                 plan.planName(), plan.currency().name(), schedule.instalments().size(), progress.instalmentsPaid(),
                 progress.next().map(PlanSchedule.Instalment::dueDate).orElse(null),
                 progress.next().map(PlanSchedule.Instalment::amount).orElse(null), standing.status(),
-                standing.arrears(), standing.revocation());
+                standing.arrears(), standing.revocation(),
+                new PortalPlanDto.Deposit(schedule.deposit(), depositVerifiedAt), standing.instalments());
     }
 }

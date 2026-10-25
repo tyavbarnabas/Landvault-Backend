@@ -183,7 +183,7 @@ public class FinanceVerificationService {
                 row.estateName(), row.plotId(), row.plotLabel(), identityApi.emailOf(row.buyerUserId()).orElse(null),
                 row.amountDue(), row.currency().name(), row.awaitingSince(), record,
                 payment.isPresent() && matches(payment.get(), row), row.letterApproved(),
-                row.isDeposit() ? "deposit" : "full_price", row.planName(), null, null, null, BigDecimal.ZERO, List.of(),
+                row.isDeposit() ? "deposit" : "full_price", row.planName(), null, null, null, null, BigDecimal.ZERO, List.of(),
                 false, false);
     }
 
@@ -307,7 +307,8 @@ public class FinanceVerificationService {
                 expected != null && p.getAmount().compareTo(expected) == 0 && p.getCurrency() == row.currency(),
                 row.letterApproved(), p.getPurpose() == PaymentPurpose.BALANCE ? "balance" : "instalment",
                 row.planName(), p.getInstalmentSequence(), schedule.instalments().size(),
-                instalment.map(PlanSchedule.Instalment::dueDate).orElse(null), p.getPenaltyAmount(),
+                instalment.map(PlanSchedule.Instalment::dueDate).orElse(null),
+                instalment.map(PlanSchedule.Instalment::amount).orElse(null), p.getPenaltyAmount(),
                 penalties.findByPaymentIdIn(List.of(p.getId())).stream()
                         .sorted(Comparator.comparing(PaymentPenalty::getInstalmentSequence))
                         .map(l -> new FinanceQueueItemDto.PenaltyLine(l.getInstalmentSequence(), l.getMonthsLate(),

@@ -378,7 +378,7 @@ gets it without a new call.
   (no `trigger`, no `onRevocationRefund`); letters print HomeTrue's own sentence from the number. The terms are
   **copied onto the purchase** at Proceed to buy: `schedule.lateTerms.revocation: { afterMonths, noticeDays }`.
   The buyer's `standing.revocation: { afterMonthsUnpaid, noticeDays, revocableFrom, revocableNow, notice }` says
-  when the plan could be revoked and carries an open notice `{ reason, givenAt, deadline, instalmentSequence }` —
+  when the plan could be revoked and carries an open notice `{ reason, givenAt, deadline, instalmentSequence, confirmableFrom }` —
   show it prominently: paying what is overdue before the end of `deadline` (Lagos) stops it, once finance verifies.
   Once confirmed: purchase `revoked` (`TransactionDto.revokedAt`), portfolio `status: "revoked"`, provisional letter
   `revoked`, refunds exactly as a withdrawal (`GET /api/transactions/{id}/withdrawal` shows `status: "revoked"`).
@@ -590,7 +590,7 @@ All need `client.portfolio.view` (every buyer has it). Read-only: **ownership on
 - **Title**: `titleType`, plus **`titleStatus`** (`pending` | `verified` | `rejected`, live from HomeTrue's review) and `titleVerified` (true only while verified). The frontend's mock always set `titleVerified: true`; that is no longer true.
 - `basePrice` is always the agreed pre-premium price; `cornerPremiumPct` only when a premium was applied. `sqm` is what it was sold as; `actualSqm` the survey, null when unsurveyed — never reconcile them.
 - `payments`: the purchase's payment, `pending_verification` then `confirmed`. **`receiptId` is HomeTrue's receipt id** (`/api/documents/receipts/{id}`), null until Paystack confirms the payment. *(Changed: it used to be the payment reference.)*
-- **Plans**: `plan` is `installment`, `totalPrice` the plan total, `paidAmount` what finance verified, `installmentMonths`, `installmentsPaid`, and `nextDueDate`/`nextDueAmount` the first unpaid instalment (null once paid off). `payments[]` lists every payment with `type` `deposit` | `instalment` | `balance`. `arrears` (phase 4) is filled from the first day an instalment is late — `status` (`overdue`/`in_arrears`), `amountOwed`, `overdueSinceDate`, `gracePeriodDays`, `graceEndsDate`, `penaltyAmount`, `penaltyReason`, `instalmentsLate`, `totalDue`, `daysLate` — and the entry's `status` reads `in_arrears` past the 7-day grace. `paidAmount` excludes penalties; each payment carries `penaltyAmount`. `restructureStatus` and `supersedes` are still null (phase 5, upgrades).
+- **Plans**: `plan` is `installment`, `totalPrice` the plan total, `paidAmount` what finance verified, `installmentMonths`, `installmentsPaid`, and `nextDueDate`/`nextDueAmount` the first unpaid instalment (null once paid off). `payments[]` lists every payment with `type` `deposit` | `instalment` | `balance`. `arrears` (phase 4) is filled from the first day an instalment is late — `status` (`overdue`/`in_arrears`), `amountOwed`, `overdueSinceDate`, `gracePeriodDays`, `graceEndsDate`, `penaltyAmount`, `penaltyReason`, `instalmentsLate`, `totalDue`, `daysLate` — and the entry's `status` reads `in_arrears` past the 7-day grace. `paidAmount` excludes penalties; each payment carries `penaltyAmount`. `restructureStatus` reads `requested`/`proposed` while a restructure is open; `supersedes` is still null (upgrades). `planName` is the declared plan's name (null when outright); `planStartedAt` is the date finance verified the deposit (kept once the plan is paid off or ends; on a plan it equals `acquiredDate`); `endedAt` is the date of a withdrawal or revocation. On a `withdrawn` or `revoked` entry, `refund: { amount, refunded, currency, status, needsYourAccount }` — `amount` everything owed back so far (it grows if finance later rejects a payment that was waiting for them), `refunded` what Paystack reports processed, `status` `none` (the developer's share covered everything) | `pending` | `partly_refunded` | `refunded`, and `needsYourAccount` true while a bank-transfer payment waits for the buyer's bank account; null on other statuses.
 
 **Not built, and the frontend's live calls to them will 404/405**: `POST /api/portfolio/plots` and `PUT /api/portfolio/plots/{id}` (**never will be** — a client must not be able to create or change ownership), and `restructure-requests` (phase 5). The schedule is on the transaction (`schedule`); instalments are paid with `POST /api/transactions/{id}/payments` and verified in the finance queue — there are no portfolio routes for either.
 
@@ -1023,7 +1023,9 @@ Director approves the estate's letter — show it on the row and disable Verify;
 `TRANSACTION_NOT_FOUND`, 409 `TRANSACTION_NOT_AWAITING_FINANCE` /
 `PAYMENT_NOT_CONFIRMED` / `PLOT_NOT_RESERVED` / `LETTER_NOT_APPROVED`, 403 `COMPANY_SCOPE_REQUIRED`.
 Phase 4: a plan payment's `expectedAmount` includes any late-payment penalty it carries; `penaltyAmount` and
-`penalties[]` (`{ instalmentSequence, monthsLate, penaltyPct, amount }`) show it as its own line.
+`penalties[]` (`{ instalmentSequence, monthsLate, penaltyPct, amount }`) show it as its own line, and on an
+`instalment` item `instalmentAmount` is the scheduled amount before penalties (`expectedAmount` = `instalmentAmount`
++ `penaltyAmount`; null for a deposit, balance or full price).
 Phase 5a: a payment on a plan the buyer **withdrew** from can still be in the queue (`planWithdrawn: true`).
 Verifying it makes the developer's declared share of it payable (the buyer's part is already being returned);
 rejecting it returns that share to the buyer too. Both answer `{ status: "withdrawn" }`.
@@ -1034,7 +1036,12 @@ plotId, plotLabel, buyerEmail, planName, currency, instalmentCount, instalmentsP
 status, arrears }]`, most urgent first. `status` is `on_track` | `due_today` | `overdue` | `in_arrears` — the same the
 buyer sees, worked out today; `arrears` as on the purchase's `standing`. Filter `status=` one of those or `late`
 (overdue and in arrears); anything else is 400 `INVALID_STATUS`. Read-only. Phase 5b: each row also carries
-`revocation` (as on the purchase's `standing`), null when the purchase has no revocation terms.
+`revocation` (as on the purchase's `standing`; an open `notice` includes `confirmableFrom`, the day after its
+`deadline`), null when the purchase has no revocation terms. Each row also has `deposit: { amount, verifiedAt }`
+(`verifiedAt` is the plan's start) and `instalments` — every instalment with where it stands today, exactly the
+buyer's `standing.instalments[]` (`{ sequence, dueDate, amount, status, daysLate, penalty, penaltyWaived }`).
+`GET /api/portal/finance/plans/{transactionId}` returns one row; 404 `TRANSACTION_NOT_FOUND` for a plan that isn't
+running (not started, paid off, withdrawn or revoked) or isn't the caller's company's or branch's.
 
 **Waiving a penalty**: `portal.payments.verify`, own company, branch-walled.
 `GET /api/portal/plans/{transactionId}/penalty-waivers` → `{ transactionId, transactionReference, planStatus,
