@@ -1,5 +1,6 @@
 package com.techcomfort.landvaultbackend.payments.internal.exceptions;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 
 /** Payment refusals. Never carries a secret key or card detail. */
@@ -492,6 +493,21 @@ public abstract class PaymentException extends RuntimeException {
         public PaymentAwaitingFinance() {
             super("A payment on this plan is waiting for the developer's finance team to verify it. It has to be "
                     + "verified or rejected first, so what is owed is certain.");
+        }
+    }
+
+    /** Waivers: there is no unpaid penalty to waive here. */
+    public static class PenaltyNotWaivable extends PaymentException {
+        public PenaltyNotWaivable(String detail) {
+            super(detail);
+        }
+    }
+
+    /** Waivers: more than the penalty still owed on that instalment. */
+    public static class WaiverTooLarge extends PaymentException {
+        public WaiverTooLarge(BigDecimal outstanding) {
+            super("That is more than the penalty still owed on this instalment (NGN " + outstanding.toPlainString()
+                    + "). Waive at most that.");
         }
     }
 }

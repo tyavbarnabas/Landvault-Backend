@@ -52,6 +52,12 @@ public class LoggingSettlementAlertSender implements SettlementAlertSender {
     }
 
     @Override
+    public void penaltyWaived(PenaltyWaivedAlert alert) {
+        log.info("[TEST-ONLY penalty waived] to={} purchase={} instalment={} waived={} stillOwed={}", alert.to(),
+                alert.purchaseReference(), alert.instalmentSequence(), alert.waived(), alert.stillOwed());
+    }
+
+    @Override
     public void planRestructure(RestructureAlert alert) {
         log.info("[TEST-ONLY plan restructure] to={} developer={} stage={} purchase={} letter={}", alert.to(),
                 alert.toDeveloper(), alert.stage(), alert.purchaseReference(), alert.letterNumber());

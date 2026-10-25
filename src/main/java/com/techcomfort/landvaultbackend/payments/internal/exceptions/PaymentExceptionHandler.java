@@ -14,6 +14,7 @@ import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalRevo
 import com.techcomfort.landvaultbackend.payments.internal.controllers.RestructureController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.WithdrawalController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalPayoutController;
+import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalPenaltyWaiverController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalSettlementController;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -32,7 +33,8 @@ import java.util.stream.Collectors;
         PortalFinanceController.class, PortalSettlementController.class, AdminSettlementAccountController.class,
         AdminPayoutController.class, PortalPayoutController.class, AdminRefundController.class,
         PortalLatePaymentController.class, PortalPlanController.class, WithdrawalController.class,
-        PortalRevocationController.class, RestructureController.class, PortalRestructureController.class})
+        PortalRevocationController.class, RestructureController.class, PortalRestructureController.class,
+        PortalPenaltyWaiverController.class})
 public class PaymentExceptionHandler {
 
     @ExceptionHandler(PaymentException.class)
@@ -85,6 +87,8 @@ public class PaymentExceptionHandler {
             case PaymentException.RevocationAlreadyNotified e -> body(HttpStatus.CONFLICT, e, "REVOCATION_ALREADY_NOTIFIED");
             case PaymentException.NoOpenRevocation e -> body(HttpStatus.CONFLICT, e, "NO_OPEN_REVOCATION");
             case PaymentException.RevocationNoticeRunning e -> body(HttpStatus.CONFLICT, e, "REVOCATION_NOTICE_RUNNING");
+            case PaymentException.PenaltyNotWaivable e -> body(HttpStatus.CONFLICT, e, "PENALTY_NOT_WAIVABLE");
+            case PaymentException.WaiverTooLarge e -> body(HttpStatus.BAD_REQUEST, e, "WAIVER_TOO_LARGE");
             case PaymentException.PlanNotRestructurable e -> body(HttpStatus.CONFLICT, e, "PLAN_NOT_RESTRUCTURABLE");
             case PaymentException.RestructureAlreadyOpen e -> body(HttpStatus.CONFLICT, e, "RESTRUCTURE_ALREADY_OPEN");
             case PaymentException.RestructureNotOpen e -> body(HttpStatus.CONFLICT, e, "RESTRUCTURE_NOT_OPEN");

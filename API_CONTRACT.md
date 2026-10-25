@@ -398,7 +398,10 @@ gets it without a new call.
   first new instalment) and paying charges it with that penalty. `standing.restructureStatus` and the portfolio's
   `restructureStatus` read `requested`/`proposed` while one is open. Developer routes: see Portal finance
   ("Restructuring a plan").
-  **Not built yet (phase 5)**: penalty waivers.
+  **Penalty waivers built** (changeset 109): the developer may waive some or all of an unpaid penalty (see Portal
+  finance, "Waiving a penalty"). The buyer's `standing.instalments[].penalty` is already net of it, with
+  `penaltyWaived` saying how much was waived; the portfolio's `arrears.penaltyAmount` and the next payment are net
+  too. If the instalment reaches a higher step later, only the difference is owed. The buyer is emailed.
 
 ### Publication now has SEVEN conditions, not five
 
@@ -1032,6 +1035,14 @@ status, arrears }]`, most urgent first. `status` is `on_track` | `due_today` | `
 buyer sees, worked out today; `arrears` as on the purchase's `standing`. Filter `status=` one of those or `late`
 (overdue and in arrears); anything else is 400 `INVALID_STATUS`. Read-only. Phase 5b: each row also carries
 `revocation` (as on the purchase's `standing`), null when the purchase has no revocation terms.
+
+**Waiving a penalty**: `portal.payments.verify`, own company, branch-walled.
+`GET /api/portal/plans/{transactionId}/penalty-waivers` → `{ transactionId, transactionReference, planStatus,
+currency, penalties: [{ instalmentSequence, dueDate, instalmentStatus, reached, waived, outstanding }], waivers:
+[{ id, instalmentSequence, scheduleVersion, amount, reason, waivedAt, waivedBy }] }`. `POST` the same route
+`{ instalmentSequence, amount, reason }` (reason required, emailed to the buyer; amount ≤ `outstanding`, 2 decimals)
+→ the same shape. 400 `WAIVER_TOO_LARGE`; 409 `PENALTY_NOT_WAIVABLE` (not a running plan, the instalment is paid or
+awaiting finance, or no penalty today); 403 `OWN_PURCHASE`. No buyer request flow.
 
 **Restructuring a plan (phase 5c)**: `portal.payments.verify`, own company, branch-walled.
 `GET /api/portal/finance/restructures?status=requested|proposed` → `[{ restructureId, transactionId,

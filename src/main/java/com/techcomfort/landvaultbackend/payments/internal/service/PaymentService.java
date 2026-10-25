@@ -57,6 +57,7 @@ public class PaymentService {
     private final PaymentRepository payments;
     private final AuditApi auditApi;
     private final PaymentPenaltyRepository penalties;
+    private final PlanStandings planStandings;
 
     /** How long an unpaid link is handed back again instead of opening a second payment. */
     @Value("${landvault.payments.link-reuse-window:30m}")
@@ -133,8 +134,8 @@ public class PaymentService {
         if (schedule == null) {
             throw new PaymentException.PlanNotSupported(transaction.plan());
         }
-        PlanProgress progress = PlanProgress.of(schedule, payments.findAllByTransactionIdOrderByCreatedAtAsc(
-                transaction.id()));
+        // Through PlanStandings, so the penalty charged is net of any waiver — the same figure the buyer sees.
+        PlanProgress progress = planStandings.progressOf(Map.of(transaction.id(), schedule)).get(transaction.id());
         if (progress.awaitingFinance().isPresent()) {
             throw new PaymentException.InstalmentAwaitingVerification();
         }

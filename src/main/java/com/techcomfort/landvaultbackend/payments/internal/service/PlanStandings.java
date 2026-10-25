@@ -6,12 +6,14 @@ import com.techcomfort.landvaultbackend.common.LatePaymentTerms;
 import com.techcomfort.landvaultbackend.common.RevocationTerms;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
 import com.techcomfort.landvaultbackend.payments.internal.domain.PaymentPenalty;
+import com.techcomfort.landvaultbackend.payments.internal.domain.PenaltyWaiver;
 import com.techcomfort.landvaultbackend.payments.internal.domain.PlanRestructure;
 import com.techcomfort.landvaultbackend.payments.internal.domain.PlanRevocation;
 import com.techcomfort.landvaultbackend.payments.internal.enums.RestructureStatus;
 import com.techcomfort.landvaultbackend.payments.internal.enums.RevocationStatus;
 import com.techcomfort.landvaultbackend.payments.internal.repository.PaymentPenaltyRepository;
 import com.techcomfort.landvaultbackend.payments.internal.repository.PaymentRepository;
+import com.techcomfort.landvaultbackend.payments.internal.repository.PenaltyWaiverRepository;
 import com.techcomfort.landvaultbackend.payments.internal.repository.PlanRestructureRepository;
 import com.techcomfort.landvaultbackend.payments.internal.repository.PlanRevocationRepository;
 import lombok.RequiredArgsConstructor;
@@ -45,6 +47,7 @@ public class PlanStandings {
     private final PaymentPenaltyRepository penalties;
     private final PlanRevocationRepository revocations;
     private final PlanRestructureRepository restructures;
+    private final PenaltyWaiverRepository waivers;
 
     public static LocalDate today() {
         return LocalDate.now(LAGOS);
@@ -60,9 +63,11 @@ public class PlanStandings {
                 .collect(Collectors.groupingBy(Payment::getTransactionId));
         List<PaymentPenalty> lines = penalties.findByPaymentIdIn(byTransaction.values().stream()
                 .flatMap(List::stream).map(Payment::getId).toList());
+        Map<UUID, List<PenaltyWaiver>> waived = waivers.findByTransactionIdIn(schedules.keySet()).stream()
+                .collect(Collectors.groupingBy(PenaltyWaiver::getTransactionId));
         Map<UUID, PlanProgress> out = new HashMap<>();
-        schedules.forEach((id, schedule) -> out.put(id,
-                PlanProgress.of(schedule, byTransaction.getOrDefault(id, List.of()), lines)));
+        schedules.forEach((id, schedule) -> out.put(id, PlanProgress.of(schedule,
+                byTransaction.getOrDefault(id, List.of()), lines, waived.getOrDefault(id, List.of()))));
         return out;
     }
 
@@ -111,7 +116,8 @@ public class PlanStandings {
         List<PlanProgress.InstalmentStanding> standings = progress.standings(today);
         List<PlanStanding.InstalmentStatus> instalments = standings.stream().map(s -> new PlanStanding.InstalmentStatus(
                 s.instalment().sequence(), s.instalment().dueDate(), s.instalment().amount(), s.standing().wire(),
-                s.daysLate(), s.penalty().map(PlanStandings::penalty).orElse(null))).toList();
+                s.daysLate(), s.penalty().map(PlanStandings::penalty).orElse(null),
+                nullIfZero(progress.waivedOn(s.instalment().sequence())))).toList();
         if (progress.complete()) {
             return new PlanStanding("paid_off", instalments, null);
         }
@@ -130,6 +136,10 @@ public class PlanStandings {
         return new PlanStanding(status, instalments, new PlanStanding.Arrears(status, late.size(), overdue, penalty,
                 overdue.add(penalty), oldest.instalment().dueDate(), LatePaymentTerms.GRACE_DAYS,
                 oldest.instalment().dueDate().plusDays(LatePaymentTerms.GRACE_DAYS), oldest.daysLate()));
+    }
+
+    private static BigDecimal nullIfZero(BigDecimal amount) {
+        return amount.signum() == 0 ? null : amount;
     }
 
     private static PlanStanding.Penalty penalty(LatePaymentTerms.Penalty p) {

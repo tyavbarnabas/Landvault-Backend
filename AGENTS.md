@@ -6570,7 +6570,32 @@ wording; the full list is always on the purchase.
 Proven red: the carried penalty not charged (₦3,850,000 instead of ₦4,235,000), a proposal not lapsing when a
 payment changed what is owed, and schedules read across every version.
 
-**Not built**: restructuring a plan the developer offers unprompted, penalty waivers, and changing the total owed.
+**Not built**: restructuring a plan the developer offers unprompted, and changing the total owed.
+
+### Penalty waivers (changeset 109)
+
+Decided with the user (2026-10-24: A, A, A, A). The developer's finance forgives some or all of a late-payment
+penalty; `GET|POST /api/portal/plans/{transactionId}/penalty-waivers`, `PenaltyWaiverService`.
+
+- **Who** (decision 1): `portal.payments.verify` — finance officers and the Executive Director, branch-walled. It
+  only reduces what the developer is owed. Never on your own purchase.
+- **Only unpaid penalties** (decision 2): reached on a late instalment, or carried onto one by a restructure. An
+  instalment paid — or paid and waiting for finance — is refused (`PENALTY_NOT_WAIVABLE`); no refunds. A payment
+  already started keeps the penalty it was started with (the open link is reused only at the same amount).
+- **A fixed amount** (decision 3), at most what is outstanding today (`WAIVER_TOO_LARGE`). Penalties are worked out
+  on read, so a waiver is just subtracted in `PlanProgress.penaltyDue` (`penaltyReached` is the gross): the
+  standing, the portfolio's arrears, the next payment (`PaymentService` now reads progress through
+  `PlanStandings`, which loads waivers), reminders and a restructure's carried penalty all see the net figure. If
+  the instalment later reaches a higher step, only the difference is owed. Keyed by schedule version and
+  instalment, so a waiver on a replaced schedule doesn't touch the new one (a restructure carries the net penalty).
+- **No buyer request flow** (decision 4). A middle option — a buyer's note against a penalty — was rejected by the
+  user: buyers would send untrue reasons; if the developer chooses to waive, they waive.
+- `penalty_waivers` is append-only (UPDATE/DELETE/TRUNCATE revoked), buyer-owned like `transactions` (not
+  RLS-policied; the service walls it by seller and plot visibility). Audited (`plan.penalty_waived`); the buyer is
+  emailed after commit. `PlanStanding.InstalmentStatus.penaltyWaived` shows what was waived (the `penalty` is net).
+  Escrow is unaffected: a waived penalty is never collected.
+
+Proven red: the payment charged without the waiver (₦8,470,000 instead of ₦8,185,000), and a paid penalty waived.
 
 ## A buyer's address (changeset 097)
 

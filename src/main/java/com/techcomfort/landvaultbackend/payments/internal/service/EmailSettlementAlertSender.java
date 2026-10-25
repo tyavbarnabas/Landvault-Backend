@@ -366,6 +366,30 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
     }
 
     @Override
+    public void penaltyWaived(PenaltyWaivedAlert alert) {
+        SimpleMailMessage message = new SimpleMailMessage();
+        message.setFrom(fromAddress);
+        message.setTo(alert.to());
+        message.setSubject("A late-payment penalty was waived: " + alert.purchaseReference());
+        message.setText("""
+                Hello,
+
+                The developer has waived NGN %s of the late-payment penalty on instalment %d of your instalment \
+                plan for %s (purchase %s, %s).
+
+                Their reason: %s
+
+                Penalty still owed on that instalment today: NGN %s. The instalment itself is still due; if it \
+                stays unpaid long enough to reach a higher penalty step, the difference applies.
+
+                    %s
+                """.formatted(alert.waived(), alert.instalmentSequence(), alert.plotLabel(), alert.purchaseReference(),
+                alert.planName(), alert.reason(), alert.stillOwed(), alert.purchaseUrl()));
+        mailSender.send(message);
+        log.info("Penalty waiver delivered to the buyer");
+    }
+
+    @Override
     public void planRestructure(RestructureAlert alert) {
         SimpleMailMessage message = new SimpleMailMessage();
         message.setFrom(fromAddress);
