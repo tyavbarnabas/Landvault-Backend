@@ -24,4 +24,7 @@ public interface PaymentSummaryProvider {
      * back from here without a cycle).
      */
     Map<UUID, PlanStanding> standingsFor(Map<UUID, PlanSchedule> schedules);
+
+    /** What is coming back on each purchase that has money owed back; others are absent. */
+    Map<UUID, PlanRefund> refundsFor(Collection<UUID> transactionIds);
 }

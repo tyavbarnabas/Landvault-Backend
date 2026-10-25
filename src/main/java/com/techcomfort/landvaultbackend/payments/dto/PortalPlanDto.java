@@ -4,7 +4,9 @@ import com.techcomfort.landvaultbackend.checkout.PlanStanding;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -35,6 +37,16 @@ public record PortalPlanDto(
         @Schema(description = "Phase 5b: when the plan could be revoked (`revocableFrom`, `revocableNow`) and any "
                 + "notice running. Null when the purchase has no revocation terms. Act on it at "
                 + "`/api/portal/plans/{transactionId}/revocation` (Executive Director).", nullable = true)
-        PlanStanding.Revocation revocation
+        PlanStanding.Revocation revocation,
+        @Schema(description = "The deposit, verified by finance when the plan started.")
+        Deposit deposit,
+        @Schema(description = "Every instalment and where it stands today — the same as the buyer's "
+                + "`standing.instalments`.")
+        List<PlanStanding.InstalmentStatus> instalments
 ) {
+
+    /** @param verifiedAt when finance verified it: the plan's start */
+    @Schema(name = "PortalPlanDeposit")
+    public record Deposit(BigDecimal amount, Instant verifiedAt) {
+    }
 }

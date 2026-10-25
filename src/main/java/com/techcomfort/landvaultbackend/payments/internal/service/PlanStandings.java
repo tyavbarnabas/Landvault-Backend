@@ -109,7 +109,7 @@ public class PlanStandings {
                 progress.oldestLate(today).map(s -> terms.revocableFrom(s.instalment().dueDate())).orElse(null),
                 progress.revocationTrigger(today).isPresent(),
                 notice.map(n -> new PlanStanding.Notice(n.getReason(), n.getNoticeGivenAt(), n.getDeadline(),
-                        n.getInstalmentSequence())).orElse(null));
+                        n.getInstalmentSequence(), n.getDeadline().plusDays(1))).orElse(null));
     }
 
     private static PlanStanding arrearsStanding(PlanProgress progress, LocalDate today) {

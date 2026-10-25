@@ -10,6 +10,7 @@ import org.springframework.core.ParameterizedTypeReference;
 import com.techcomfort.landvaultbackend.common.PageResponse;
 import com.techcomfort.landvaultbackend.testsupport.EstateTitleFixture;
 import com.techcomfort.landvaultbackend.portfolio.dto.PortfolioSummaryDto;
+import com.techcomfort.landvaultbackend.payments.dto.PortalPlanDto;
 import com.techcomfort.landvaultbackend.portfolio.dto.OwnedPlotDto;
 import com.techcomfort.landvaultbackend.checkout.PlanStanding;
 import com.techcomfort.landvaultbackend.checkout.dto.CreateReservationRequest;
@@ -2384,6 +2385,24 @@ class ReservationCheckoutUnderRlsIT {
                 .contains(purchase.id().toString(), "\"status\":\"in_arrears\"", "\"penaltyAmount\":385000");
         assertThat(get("/api/portal/finance/plans?status=on_track", officer, String.class).getBody())
                 .doesNotContain(purchase.id().toString());
+        PortalPlanDto detail = get("/api/portal/finance/plans/" + purchase.id(), officer, PortalPlanDto.class).getBody();
+        assertThat(detail.deposit().amount()).isEqualByComparingTo("6600000");
+        assertThat(detail.deposit().verifiedAt()).as("when finance verified the deposit, not when the purchase last changed")
+                .isEqualTo(Instant.parse(queryString("SELECT to_char(finance_verified_at AT TIME ZONE 'UTC', "
+                        + "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') FROM payments WHERE transaction_id = '" + purchase.id()
+                        + "' AND purpose = 'DEPOSIT'")));
+        assertThat(detail.instalments()).as("the buyer's standing, instalment by instalment")
+                .isEqualTo(late.standing().instalments());
+        assertThat(detail.instalments().getFirst().penalty().amount()).isEqualByComparingTo("385000");
+        assertThat(get("/api/portal/finance/plans", officer, PortalPlanDto[].class).getBody())
+                .filteredOn(p -> p.transactionId().equals(purchase.id())).singleElement()
+                .satisfies(p -> assertThat(p.instalments()).isEqualTo(detail.instalments()));
+        assertThat(get("/api/portal/finance/plans/" + UUID.randomUUID(), officer, String.class).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(owned.planName()).isEqualTo("Short plan");
+        assertThat(owned.planStartedAt()).as("the deposit's verification").isEqualTo(owned.acquiredDate()).isNotNull();
+        assertThat(owned.endedAt()).isNull();
+        assertThat(owned.refund()).isNull();
 
         String reference = payPlan(purchase, false);
         assertThat(queryString("SELECT amount || '/' || penalty_amount FROM payments WHERE reference = '" + reference
@@ -2397,8 +2416,8 @@ class ReservationCheckoutUnderRlsIT {
                 .standing().instalments().getFirst().status()).as("paid, finance not yet: never late")
                 .isEqualTo("awaiting_verification");
         assertThat(get("/api/portal/finance/transactions", officer, String.class).getBody())
-                .contains("\"expectedAmount\":8085000", "\"penaltyAmount\":385000", "\"amountsMatch\":true",
-                        "\"monthsLate\":1");
+                .contains("\"expectedAmount\":8085000", "\"instalmentAmount\":7700000", "\"penaltyAmount\":385000",
+                        "\"amountsMatch\":true", "\"monthsLate\":1");
         assertThat(financeAction(officer, purchase.id(), "verify", null).getBody()).contains("\"status\":\"on_plan\"");
 
         OwnedPlotDto after = portfolio(buyer).items().getFirst();
@@ -2510,7 +2529,17 @@ class ReservationCheckoutUnderRlsIT {
                 .isEqualTo("DEPOSIT/5280000.00,INSTALMENT/6160000.00");
         assertThat(documents(buyer).items()).filteredOn(d -> "provisional_allocation_letter".equals(d.type()))
                 .singleElement().satisfies(d -> assertThat(d.status()).isEqualTo("withdrawn"));
-        assertThat(portfolio(buyer).items().getFirst().status()).isEqualTo("withdrawn");
+        OwnedPlotDto withdrawn = portfolio(buyer).items().getFirst();
+        assertThat(withdrawn.status()).isEqualTo("withdrawn");
+        assertThat(withdrawn.endedAt()).isEqualTo(LocalDate.now(ZoneId.of("Africa/Lagos")));
+        assertThat(withdrawn.planStartedAt()).isNotNull();
+        assertThat(withdrawn.refund()).satisfies(r -> {
+            assertThat(r.amount()).as("the withdrawal's refund").isEqualByComparingTo("11440000");
+            assertThat(r.refunded()).isEqualByComparingTo("0");
+            assertThat(r.currency()).isEqualTo("NGN");
+            assertThat(r.status()).isEqualTo("pending");
+            assertThat(r.needsYourAccount()).isFalse();
+        });
         verify(alerts, atLeastOnce()).planWithdrawn(argThat(a -> !a.toDeveloper()));
         verify(alerts, atLeastOnce()).planWithdrawn(argThat(a -> a.toDeveloper() && "1540000.00".equals(a.awaitingFinance())));
 
@@ -2547,6 +2576,8 @@ class ReservationCheckoutUnderRlsIT {
     void financeRejectingAPaymentAfterAWithdrawalReturnsTheDevelopersShareToo() {
         declareRefundTerms("{\"deductionPct\":20.00,\"processingDays\":90,\"appliesTo\":\"amount_paid\"}");
         TransactionDto purchase = onPlanPurchase(SHORT_PLAN);
+        String deposit = queryString("SELECT reference FROM payments WHERE transaction_id = '" + purchase.id()
+                + "' AND purpose = 'DEPOSIT'");
         String first = payPlan(purchase, false);
         paystackSays(first, "success", 770_000_000L, "NGN", "Approved");
         confirm(buyer, first);
@@ -2562,12 +2593,19 @@ class ReservationCheckoutUnderRlsIT {
         assertThat(startRefund(admin, first).getBody()).contains("\"status\":\"processed\"", "\"amount\":6160000");
         verify(paystack, times(1)).createRefund(eq(first), eq(616_000_000L), any(), any());
         assertThat(get("/api/admin/refunds/due", admin, String.class).getBody()).doesNotContain(first);
+        assertThat(portfolio(buyer).items().getFirst().refund()).satisfies(r -> {
+            assertThat(r.amount()).isEqualByComparingTo("11440000");
+            assertThat(r.refunded()).isEqualByComparingTo("6160000");
+            assertThat(r.status()).isEqualTo("partly_refunded");
+        });
 
         String officer = staffWithRole(seller.id(), "finance_officer", null);
         assertThat(financeAction(officer, purchase.id(), "reject", "{\"reason\":\"Not our account\"}").getBody())
                 .contains("\"status\":\"withdrawn\"");
         assertThat(get("/api/admin/refunds/due", admin, String.class).getBody())
                 .as("only the developer's share is left to return").contains(first, "\"amount\":1540000");
+        assertThat(portfolio(buyer).items().getFirst().refund().amount()).as("the rejected share comes back too")
+                .isEqualByComparingTo("12980000");
         when(paystack.createRefund(eq(first), eq(154_000_000L), any(), any()))
                 .thenReturn(new PaystackClient.Refund("R10", "pending", null, null, null));
         assertThat(startRefund(admin, first).getBody()).contains("\"amount\":1540000");
@@ -2575,6 +2613,21 @@ class ReservationCheckoutUnderRlsIT {
                 .contains("\"refund\":12980000", "\"developerKeeps\":1320000");
         assertThat(readyFor(admin, purchase)).as("the rejected share is no longer held for the developer")
                 .contains("\"heldInEscrow\":0");
+        assertThat(portfolio(buyer).items().getFirst().refund().status()).as("the second part is still pending")
+                .isEqualTo("partly_refunded");
+        execute("UPDATE refunds SET status = 'PROCESSED' WHERE paystack_refund_id = 'R10'");
+        assertThat(portfolio(buyer).items().getFirst().refund()).satisfies(r -> {
+            assertThat(r.refunded()).as("the instalment is back in full; the deposit's part isn't sent yet")
+                    .isEqualByComparingTo("7700000");
+            assertThat(r.status()).isEqualTo("partly_refunded");
+        });
+        when(paystack.createRefund(eq(deposit), anyLong(), any(), any()))
+                .thenReturn(new PaystackClient.Refund("R12", "processed", null, null, null));
+        assertThat(startRefund(admin, deposit).getBody()).contains("\"amount\":5280000");
+        assertThat(portfolio(buyer).items().getFirst().refund()).satisfies(r -> {
+            assertThat(r.refunded()).isEqualByComparingTo("12980000");
+            assertThat(r.status()).isEqualTo("refunded");
+        });
     }
 
     /**
@@ -2667,6 +2720,10 @@ class ReservationCheckoutUnderRlsIT {
         TransactionDto told = get("/api/checkout/transactions/" + purchase.id(), buyer.token(), TransactionDto.class)
                 .getBody();
         assertThat(told.standing().revocation().notice().deadline()).isEqualTo(today.plusDays(30));
+        assertThat(told.standing().revocation().notice().confirmableFrom()).isEqualTo(today.plusDays(31));
+        assertThat(get("/api/portal/finance/plans", director, PortalPlanDto[].class).getBody())
+                .filteredOn(p -> p.transactionId().equals(purchase.id())).singleElement()
+                .satisfies(p -> assertThat(p.revocation().notice().confirmableFrom()).isEqualTo(today.plusDays(31)));
         assertThat(told.schedule().lateTerms().revocation().afterMonths()).isEqualTo(3);
         verify(alerts, atLeastOnce()).planRevocation(argThat(a -> a.stage() == SettlementAlertSender.RevocationStage.NOTICE
                 && "5280000.00".equals(a.refund()) && "7700000.00".equals(a.totalDue())));
@@ -2697,7 +2754,11 @@ class ReservationCheckoutUnderRlsIT {
                 .as("exactly a withdrawal's figures").isEqualTo("DEPOSIT/5280000.00");
         assertThat(documents(buyer).items()).filteredOn(d -> "provisional_allocation_letter".equals(d.type()))
                 .singleElement().satisfies(d -> assertThat(d.status()).isEqualTo("revoked"));
-        assertThat(portfolio(buyer).items().getFirst().status()).isEqualTo("revoked");
+        OwnedPlotDto revokedPlot = portfolio(buyer).items().getFirst();
+        assertThat(revokedPlot.status()).isEqualTo("revoked");
+        assertThat(revokedPlot.endedAt()).isEqualTo(today);
+        assertThat(revokedPlot.refund().amount()).isEqualByComparingTo("5280000");
+        assertThat(revokedPlot.refund().status()).isEqualTo("pending");
         verify(alerts, atLeastOnce()).planRevocation(argThat(a -> a.stage() == SettlementAlertSender.RevocationStage.REVOKED));
         assertThat(get("/api/transactions/" + purchase.id() + "/withdrawal", buyer.token(), String.class).getBody())
                 .contains("\"status\":\"revoked\"", "\"refund\":5280000");

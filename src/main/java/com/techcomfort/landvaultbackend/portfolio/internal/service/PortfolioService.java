@@ -5,6 +5,7 @@ import com.techcomfort.landvaultbackend.checkout.PaymentSummary;
 import com.techcomfort.landvaultbackend.checkout.PaymentSummaryProvider;
 import com.techcomfort.landvaultbackend.checkout.PendingPurchase;
 import com.techcomfort.landvaultbackend.checkout.PlanPayment;
+import com.techcomfort.landvaultbackend.checkout.PlanRefund;
 import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
 import com.techcomfort.landvaultbackend.checkout.PlanStanding;
 import com.techcomfort.landvaultbackend.common.Currency;
@@ -15,6 +16,7 @@ import com.techcomfort.landvaultbackend.common.TitleType;
 import com.techcomfort.landvaultbackend.portfolio.PortfolioApi;
 import com.techcomfort.landvaultbackend.portfolio.dto.ArrearsDto;
 import com.techcomfort.landvaultbackend.portfolio.dto.OwnedPlotDto;
+import com.techcomfort.landvaultbackend.portfolio.dto.PlanRefundDto;
 import com.techcomfort.landvaultbackend.portfolio.dto.PortfolioPaymentDto;
 import com.techcomfort.landvaultbackend.portfolio.dto.PortfolioSummaryDto;
 import com.techcomfort.landvaultbackend.portfolio.internal.domain.OwnedPlot;
@@ -150,13 +152,30 @@ public class PortfolioService implements PortfolioApi {
                 .filter(o -> schedules.containsKey(o.getTransactionId()))
                 .forEach(o -> running.put(o.getTransactionId(), schedules.get(o.getTransactionId())));
         Map<UUID, PlanStanding> standings = running.isEmpty() ? Map.of() : payments.standingsFor(running);
+        // 5a/5b: what is coming back on a plan that ended.
+        List<UUID> endedPlans = owned.stream().filter(PortfolioService::endedPlan).map(OwnedPlot::getTransactionId)
+                .filter(Objects::nonNull).toList();
+        Map<UUID, PlanRefund> refunds = endedPlans.isEmpty() ? Map.of() : payments.refundsFor(endedPlans);
         // A record with no sale behind it (an upgrade's) has no transaction id, and no plan.
         owned.forEach(o -> out.add(ownedDto(o, o.getTransactionId() == null ? null : schedules.get(o.getTransactionId()),
                 o.getTransactionId() == null ? List.of() : planPayments.getOrDefault(o.getTransactionId(), List.of()),
                 details.get(o.getPlotId()),
                 o.getTransactionId() == null ? null : paid.get(o.getTransactionId()),
-                o.getTransactionId() == null ? null : standings.get(o.getTransactionId()))));
+                o.getTransactionId() == null ? null : standings.get(o.getTransactionId()),
+                endedPlan(o) ? refunds.get(o.getTransactionId()) : null)));
         return out;
+    }
+
+    private static boolean endedPlan(OwnedPlot o) {
+        return o.getStatus() == OwnedPlotStatus.WITHDRAWN || o.getStatus() == OwnedPlotStatus.REVOKED;
+    }
+
+    /** When a withdrawn or revoked plan ended; null otherwise. A buyer has few, so one read each. */
+    private LocalDate endedAt(OwnedPlot o) {
+        Optional<Instant> at = o.getStatus() == OwnedPlotStatus.WITHDRAWN ? checkoutApi.withdrawnAt(o.getTransactionId())
+                : o.getStatus() == OwnedPlotStatus.REVOKED ? checkoutApi.revokedAt(o.getTransactionId())
+                : Optional.empty();
+        return at.map(i -> LocalDate.ofInstant(i, NIGERIA)).orElse(null);
     }
 
     /**
@@ -165,9 +184,9 @@ public class PortfolioService implements PortfolioApi {
      * from the fixed schedule; instalments themselves arrive with phase 3b.
      */
     private Entry ownedDto(OwnedPlot o, PlanSchedule schedule, List<PlanPayment> planPayments, PlotDetails d,
-                           PaymentSummary payment, PlanStanding standing) {
+                           PaymentSummary payment, PlanStanding standing, PlanRefund refund) {
         if (schedule != null) {
-            return planDto(o, schedule, planPayments, d, standing);
+            return planDto(o, schedule, planPayments, d, standing, refund);
         }
         boolean confirmed = payment != null && "succeeded".equals(payment.status()) && payment.amountPaid() != null;
         List<PortfolioPaymentDto> history = confirmed
@@ -190,7 +209,7 @@ public class PortfolioService implements PortfolioApi {
      * late — worked out today, never stored.
      */
     private Entry planDto(OwnedPlot o, PlanSchedule schedule, List<PlanPayment> planPayments, PlotDetails d,
-                          PlanStanding standing) {
+                          PlanStanding standing, PlanRefund refund) {
         List<PlanPayment> verified = planPayments.stream().filter(PlanPayment::verified).toList();
         boolean paidOff = verified.stream().anyMatch(p -> "balance".equals(p.purpose()));
         Set<Integer> paidInstalments = verified.stream().filter(p -> "instalment".equals(p.purpose()))
@@ -222,6 +241,9 @@ public class PortfolioService implements PortfolioApi {
                 paidOff ? schedule.instalments().size() : paidInstalments.size(),
                 standing == null ? null : arrears(standing),
                 standing == null ? p.restructureStatus() : standing.restructureStatus(),
+                schedule.planName(), p.acquiredDate(), endedAt(o),
+                refund == null ? null : new PlanRefundDto(refund.amount(), refund.refunded(), o.getCurrency().name(),
+                        refund.status(), refund.needsYourAccount()),
                 p.supersedes()), entry.sortTime());
     }
 
@@ -267,7 +289,7 @@ public class PortfolioService implements PortfolioApi {
                 d == null || d.titleType() == null ? null : d.titleType().getValue(),
                 title == null ? null : title.getValue(), title == TitleStatus.VERIFIED,
                 intent, plan, totalPrice, paidAmount, currency.name(), acquired, status.getValue(),
-                null, null, payments, null, null, null, null, supersedes), sortTime);
+                null, null, payments, null, null, null, null, null, null, null, null, supersedes), sortTime);
     }
 
     private static PortfolioPaymentDto paymentDto(PaymentSummary p, Currency currency, String status, Instant verifiedAt,

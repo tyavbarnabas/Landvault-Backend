@@ -59,9 +59,14 @@ public record PlanStanding(
     ) {
     }
 
-    /** An open notice: the buyer has until {@code deadline} (inclusive, Lagos) to pay what is overdue. */
+    /**
+     * An open notice: the buyer has until {@code deadline} (inclusive, Lagos) to pay what is overdue; the
+     * revocation can be confirmed from {@code confirmableFrom}, the day after, if they haven't.
+     */
     @Schema(name = "RevocationNotice")
-    public record Notice(String reason, Instant givenAt, LocalDate deadline, int instalmentSequence) {
+    public record Notice(String reason, Instant givenAt, LocalDate deadline, int instalmentSequence,
+                         @Schema(description = "The day after `deadline`: from then the developer may confirm the "
+                                 + "revocation if what is overdue is still unpaid.") LocalDate confirmableFrom) {
     }
 
     /**

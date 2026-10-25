@@ -6597,6 +6597,28 @@ penalty; `GET|POST /api/portal/plans/{transactionId}/penalty-waivers`, `PenaltyW
 
 Proven red: the payment charged without the waiver (₦8,470,000 instead of ₦8,185,000), and a paid penalty waived.
 
+### Read-side fields for the Figma frames (2026-10-25)
+
+Raised by the frontend, decided with the user; read-only, no migration.
+
+- **The developer's plan view** carries `deposit { amount, verifiedAt }` and `instalments` — the buyer's
+  `standing.instalments[]` itself, from the same `PlanStandings` call, so the two can't differ (the IT compares them).
+  `GET /api/portal/finance/plans/{transactionId}` returns one row of the running-plans list; a plan that isn't running
+  is a 404. `deposit.verifiedAt` is the deposit payment's `finance_verified_at` — **not** `RunningPlan.onPlanSince`,
+  which is the purchase's `updated_at` and moves on a restructure (found in the Swagger walkthrough: a day out on a
+  restructured plan; proven red).
+- **`confirmableFrom`** (the deadline + 1) is on the shared `PlanStanding.Notice`, so the buyer sees it too —
+  decided with the user: it's when their land can be taken back, nothing to hide.
+- **`instalmentAmount`** on an instalment finance item, before penalties.
+- **Portfolio**: `planName`; `planStartedAt` = `acquiredAt` (the owned record is written when the deposit is
+  verified and never moved, so on a plan `acquiredDate` was already the start); `endedAt` from the purchase's
+  `withdrawn_at`/`revoked_at`.
+- **The refund on a withdrawn or revoked entry** (`PaymentSummaryProvider.refundsFor`, batched): `amount` is
+  every succeeded payment's `owedBack()` once a refund is requested — it grows when finance rejects a payment that
+  was waiting at withdrawal; `refunded` counts `PROCESSED` refunds only; `needsYourAccount` while a
+  `NEEDS_ATTENTION` refund has no account submitted. `none` when nothing is owed back. Proven red by making
+  `refunded` need more than the amount.
+
 ## A buyer's address (changeset 097)
 
 Built 2026-10-21, decided with the user, so the allocation letter can name
