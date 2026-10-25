@@ -114,6 +114,7 @@
     <include file="changes/106-instalment-withdrawal.xml" relativeToChangelogFile="true"/>
     <include file="changes/107-instalment-revocation.xml" relativeToChangelogFile="true"/>
     <include file="changes/108-instalment-restructure.xml" relativeToChangelogFile="true"/>
+    <include file="changes/109-penalty-waivers.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

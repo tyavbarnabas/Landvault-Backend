@@ -5,6 +5,7 @@ import com.techcomfort.landvaultbackend.common.LatePaymentTerms;
 import com.techcomfort.landvaultbackend.common.RevocationTerms;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
 import com.techcomfort.landvaultbackend.payments.internal.domain.PaymentPenalty;
+import com.techcomfort.landvaultbackend.payments.internal.domain.PenaltyWaiver;
 import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentPurpose;
 import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentStatus;
 
@@ -35,9 +36,11 @@ import java.util.stream.Collectors;
  * @param awaitingFinance   a succeeded instalment or pay-off not yet verified, if any
  * @param charged           the penalty each instalment was charged, by sequence, on a
  *                          verified or awaiting payment
+ * @param waived            penalty waivers on the schedule version in force, summed by sequence
  */
 public record PlanProgress(PlanSchedule schedule, Set<Integer> verified, boolean balanceVerified,
-                           Optional<Payment> awaitingFinance, Map<Integer, LatePaymentTerms.Penalty> charged) {
+                           Optional<Payment> awaitingFinance, Map<Integer, LatePaymentTerms.Penalty> charged,
+                           Map<Integer, BigDecimal> waived) {
 
     /** An instalment's standing on a given day. Wire values are lower case. */
     public enum Standing {
@@ -67,6 +70,12 @@ public record PlanProgress(PlanSchedule schedule, Set<Integer> verified, boolean
 
     /** {@code penalties}: the penalty lines of any of {@code payments}; others are ignored. */
     public static PlanProgress of(PlanSchedule schedule, List<Payment> payments, Collection<PaymentPenalty> penalties) {
+        return of(schedule, payments, penalties, List.of());
+    }
+
+    /** {@code waivers}: this purchase's penalty waivers; only those on the schedule version in force count. */
+    public static PlanProgress of(PlanSchedule schedule, List<Payment> payments, Collection<PaymentPenalty> penalties,
+                                  Collection<PenaltyWaiver> waivers) {
         List<Payment> paid = payments.stream()
                 .filter(p -> p.getStatus() == PaymentStatus.SUCCEEDED && p.getReviewReason() == null)
                 .filter(p -> p.getPurpose() == PaymentPurpose.INSTALMENT || p.getPurpose() == PaymentPurpose.BALANCE)
@@ -80,7 +89,10 @@ public record PlanProgress(PlanSchedule schedule, Set<Integer> verified, boolean
                 paid.stream().filter(p -> p.getPurpose() == PaymentPurpose.INSTALMENT && p.getFinanceVerifiedAt() != null)
                         .map(Payment::getInstalmentSequence).collect(Collectors.toSet()),
                 paid.stream().anyMatch(p -> p.getPurpose() == PaymentPurpose.BALANCE && p.getFinanceVerifiedAt() != null),
-                paid.stream().filter(p -> p.getFinanceVerifiedAt() == null).findFirst(), Map.copyOf(charged));
+                paid.stream().filter(p -> p.getFinanceVerifiedAt() == null).findFirst(), Map.copyOf(charged),
+                waivers.stream().filter(w -> w.getScheduleVersion() == schedule.version())
+                        .collect(Collectors.toMap(PenaltyWaiver::getInstalmentSequence, PenaltyWaiver::getAmount,
+                                BigDecimal::add)));
     }
 
     /** The instalments not yet verified, in order; none once the balance is paid off. */
@@ -113,6 +125,20 @@ public record PlanProgress(PlanSchedule schedule, Set<Integer> verified, boolean
      * a carried penalty alone reads as 0 months, 0%.
      */
     public Optional<LatePaymentTerms.Penalty> penaltyDue(PlanSchedule.Instalment instalment, LocalDate today) {
+        Optional<LatePaymentTerms.Penalty> gross = penaltyReached(instalment, today);
+        BigDecimal waivedHere = waivedOn(instalment.sequence());
+        if (waivedHere.signum() == 0) {
+            return gross;
+        }
+        // A waiver is a fixed amount (decision 3): it comes off whatever has been reached; a
+        // higher step reached later is owed beyond it.
+        return gross.map(p -> new LatePaymentTerms.Penalty(p.monthsLate(), p.penaltyPct(),
+                        p.amount().subtract(waivedHere).max(BigDecimal.ZERO)))
+                .filter(p -> p.amount().signum() > 0);
+    }
+
+    /** The penalty reached on {@code today}, carried penalty included — before any waiver. */
+    public Optional<LatePaymentTerms.Penalty> penaltyReached(PlanSchedule.Instalment instalment, LocalDate today) {
         Optional<LatePaymentTerms.Penalty> reached = schedule.lateTerms()
                 .penaltyOn(instalment.amount(), instalment.dueDate(), today);
         BigDecimal carried = instalment.carriedPenalty() == null ? BigDecimal.ZERO : instalment.carriedPenalty();
@@ -121,6 +147,11 @@ public record PlanProgress(PlanSchedule schedule, Set<Integer> verified, boolean
         }
         return Optional.of(reached.map(p -> new LatePaymentTerms.Penalty(p.monthsLate(), p.penaltyPct(),
                 p.amount().add(carried))).orElseGet(() -> new LatePaymentTerms.Penalty(0, BigDecimal.ZERO, carried)));
+    }
+
+    /** What has been waived on this instalment of the schedule in force; zero when nothing. */
+    public BigDecimal waivedOn(int sequence) {
+        return waived.getOrDefault(sequence, BigDecimal.ZERO);
     }
 
     /**

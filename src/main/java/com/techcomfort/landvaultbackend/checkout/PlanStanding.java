@@ -79,7 +79,10 @@ public record PlanStanding(
                     + "(paid; finance hasn't verified it — never late) or `paid` (verified).")
             String status,
             int daysLate,
-            @Schema(nullable = true) Penalty penalty
+            @Schema(nullable = true) Penalty penalty,
+            @Schema(description = "How much of this instalment's penalty the developer waived; `penalty` is already "
+                    + "net of it. Null when nothing was waived.", nullable = true)
+            BigDecimal penaltyWaived
     ) {
     }
 

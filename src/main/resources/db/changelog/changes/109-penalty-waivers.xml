@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Penalty waivers (decided with the user, 2026-10-24: A, A, A, A). See
+        AGENTS.md, "Instalment plans", "Penalty waivers".
+
+        A developer's finance forgives an amount of a late-payment penalty not
+        yet paid — reached on a late instalment, or carried onto one by a
+        restructure. A waiver is a fixed amount against one instalment of one
+        schedule version: if the instalment later reaches a higher step, only
+        the difference is owed. Penalties are worked out on read, so a waiver
+        is simply subtracted there; nothing else changes. Append-only: a
+        waiver is never edited or withdrawn. Buyer-owned like transactions,
+        so not RLS-policied; the service walls it by seller and plot
+        visibility.
+    -->
+    <changeSet id="109-penalty-waivers" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE penalty_waivers (
+                id                  uuid NOT NULL PRIMARY KEY,
+                created_at          timestamp(6) with time zone NOT NULL,
+                created_by          varchar(255),
+
+                transaction_id      uuid NOT NULL REFERENCES transactions (id),
+                seller_tenant_id    uuid NOT NULL REFERENCES organizations (id),
+                buyer_user_id       uuid NOT NULL REFERENCES users (id),
+                schedule_version    integer NOT NULL,
+                instalment_sequence integer NOT NULL,
+                amount              numeric(19, 2) NOT NULL,
+                reason              varchar(500) NOT NULL,
+                waived_by           uuid NOT NULL REFERENCES users (id),
+
+                CONSTRAINT chk_penalty_waivers_amount CHECK (amount > 0)
+            );
+            CREATE INDEX idx_penalty_waivers_transaction ON penalty_waivers (transaction_id, schedule_version,
+                instalment_sequence);
+            REVOKE UPDATE, DELETE, TRUNCATE ON penalty_waivers FROM ${appDbUsername};
+            COMMENT ON TABLE penalty_waivers IS
+                'An amount of a late-payment penalty a developer forgave, on one instalment of one schedule version, with a reason. Subtracted from the penalty when it is worked out; a higher step reached later is still owed beyond it. Never changed.';
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP TABLE penalty_waivers;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

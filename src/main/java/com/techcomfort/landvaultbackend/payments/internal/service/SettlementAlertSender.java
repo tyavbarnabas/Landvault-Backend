@@ -120,6 +120,18 @@ public interface SettlementAlertSender {
 
     void planRestructure(RestructureAlert alert);
 
+    /**
+     * To the buyer: the developer waived (part of) a late-payment penalty.
+     * Amounts are plain naira strings; {@code stillOwed} is what is left of
+     * that instalment's penalty today ("0.00" when all of it was waived).
+     */
+    record PenaltyWaivedAlert(String to, String purchaseReference, String planName, String plotLabel,
+                              int instalmentSequence, String waived, String stillOwed, String reason,
+                              String purchaseUrl) {
+    }
+
+    void penaltyWaived(PenaltyWaivedAlert alert);
+
     void refundNeedsAccount(RefundNeedsAccountAlert alert);
 
     void refundProblem(RefundProblemAlert alert);

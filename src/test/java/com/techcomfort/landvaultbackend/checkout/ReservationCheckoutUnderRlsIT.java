@@ -2918,6 +2918,62 @@ class ReservationCheckoutUnderRlsIT {
                 .as("nothing was ever accepted").isEqualTo("1");
     }
 
+    // --- penalty waivers (changeset 109) ---
+
+    /**
+     * Instalment 1 is 40 days late: 5% (₦385,000). Finance waives ₦285,000 —
+     * the buyer now sees ₦100,000 owed. At 100 days the 10% step (₦770,000)
+     * is owed less the ₦285,000 waived: paying charges ₦485,000. Once paid,
+     * the penalty can't be waived; nor can more than is owed, nor one that
+     * doesn't exist.
+     */
+    @Test
+    void aDeveloperWaivesPartOfAPenaltyAndAHigherStepIsOwedBeyondIt() {
+        declareDefaultTerms("[{\"monthsLate\":1,\"penaltyPct\":5.00},{\"monthsLate\":3,\"penaltyPct\":10.00}]", false);
+        TransactionDto purchase = onPlanPurchase(SHORT_PLAN);
+        execute("UPDATE transaction_instalments SET due_date = current_date - 40 WHERE transaction_id = '"
+                + purchase.id() + "' AND sequence = 1");
+        String route = "/api/portal/plans/" + purchase.id() + "/penalty-waivers";
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+
+        assertThat(get(route, officer, String.class).getBody())
+                .contains("\"instalmentSequence\":1", "\"reached\":385000", "\"outstanding\":385000");
+        ResponseEntity<String> tooMuch = restTemplate.exchange(route, HttpMethod.POST, entity(officer,
+                "{\"instalmentSequence\":1,\"amount\":400000,\"reason\":\"Hospital\"}"), String.class);
+        assertThat(tooMuch.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(tooMuch.getBody()).contains("WAIVER_TOO_LARGE");
+        assertThat(restTemplate.exchange(route, HttpMethod.POST, entity(officer,
+                "{\"instalmentSequence\":2,\"amount\":1000,\"reason\":\"Hospital\"}"), String.class).getBody())
+                .as("instalment 2 isn't late").contains("PENALTY_NOT_WAIVABLE");
+
+        ResponseEntity<String> waived = restTemplate.exchange(route, HttpMethod.POST, entity(officer,
+                "{\"instalmentSequence\":1,\"amount\":285000,\"reason\":\"The buyer was in hospital.\"}"),
+                String.class);
+        assertThat(waived.getStatusCode()).as(waived.getBody()).isEqualTo(HttpStatus.OK);
+        assertThat(waived.getBody()).contains("\"waived\":285000", "\"outstanding\":100000",
+                "The buyer was in hospital.");
+        verify(alerts, atLeastOnce()).penaltyWaived(argThat(a -> "285000.00".equals(a.waived())
+                && "100000.00".equals(a.stillOwed())));
+        PlanStanding.InstalmentStatus first = get("/api/checkout/transactions/" + purchase.id(), buyer.token(),
+                TransactionDto.class).getBody().standing().instalments().getFirst();
+        assertThat(first.penalty().amount()).as("what the buyer sees is net of the waiver").isEqualByComparingTo("100000");
+        assertThat(first.penaltyWaived()).isEqualByComparingTo("285000");
+        assertThat(portfolio(buyer).items().getFirst().arrears().penaltyAmount()).isEqualByComparingTo("100000");
+
+        execute("UPDATE transaction_instalments SET due_date = current_date - 100 WHERE transaction_id = '"
+                + purchase.id() + "' AND sequence = 1");
+        assertThat(get(route, officer, String.class).getBody()).as("10% now, less what was waived")
+                .contains("\"reached\":770000", "\"outstanding\":485000");
+        String reference = payPlan(purchase, false);
+        assertThat(queryString("SELECT amount || '/' || penalty_amount FROM payments WHERE reference = '" + reference
+                + "'")).isEqualTo("8185000.00/485000.00");
+        paystackSays(reference, "success", 818_500_000L, "NGN", "Approved");
+        confirm(buyer, reference);
+        assertThat(restTemplate.exchange(route, HttpMethod.POST, entity(officer,
+                "{\"instalmentSequence\":1,\"amount\":1000,\"reason\":\"Late\"}"), String.class).getBody())
+                .as("paid with the payment now waiting for finance").contains("PENALTY_NOT_WAIVABLE", "already paid");
+    }
+
     private UUID proposedId(ResponseEntity<String> proposed) {
         assertThat(proposed.getStatusCode()).as(proposed.getBody()).isEqualTo(HttpStatus.OK);
         return UUID.fromString(objectMapper.readTree(proposed.getBody()).path("open").path("id").asString());
