@@ -6638,6 +6638,32 @@ ends the notice. The maximum time exists so the plan can't be used as a cheap be
 alive with the minimum, finish only if prices rise). Phases: 1 declare and publish, 2 choose at checkout and the offer
 letter, 3 pay and complete, 4 leave and dormancy, 5 the gain share.
 
+### A second way out: "sell my plot" (decided 2026-10-26, not built)
+
+From how developers already settle this by hand (sold at ₦4M, ₦1M paid, now worth ₦7M: the developer takes the ₦3M
+still owed plus their share of the gain, the buyer gets ₦2M — their ₦1M back and ₦1M of gain). Decided with the
+user, beside "leave now":
+
+- **The buyer asks HomeTrue to sell the plot** at an asking price **they choose**, with the developer's valuation
+  shown as a guide. The plan stays open while it is listed.
+- **Never below the agreed land price.** A loss-making sale is a separate feature (a distress sale), deliberately
+  not part of this one.
+- **Payments pause while it is listed**: nothing is due and the inactivity clock doesn't run. The buyer may still
+  pay; every verified payment counts in the settlement.
+- **When a new buyer's payment completes the sale**, HomeTrue splits the proceeds: first the balance still owed to
+  the developer, then the gain above the agreed land price by the **same declared percentage** as "leave now"
+  (`developerGainSharePct`) — never a figure decided at sale time — and the buyer gets what they paid plus their
+  share. The settlement uses the price actually paid, never the valuation.
+- **The balance owed is on the land price only**, never the premium: the premium pays for time the buyer is no
+  longer using.
+- **No exit deduction on a sale**: the developer is paid in full from the proceeds. The deduction belongs to "leave
+  now" only.
+- **The buyer may change the asking price or take the plot off sale** while no new buyer holds it.
+- **The sale is complete when finance verifies the new buyer's payment**: outright, the full payment; on a plan,
+  the deposit — the split is then paid from that deposit and the payments that follow.
+- After it: the first buyer's plan ends as sold, their portfolio record closes and their letter reads as
+  transferred; the new buyer gets their own documents.
+
 ### Phase 1: declaring and publishing (changeset 110)
 
 - **A flexible plan is a row in `estate_payment_plans`** with `kind = 'FLEXIBLE'`, so versioning, the published view
