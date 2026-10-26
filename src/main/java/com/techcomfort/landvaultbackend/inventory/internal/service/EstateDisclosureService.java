@@ -5,8 +5,10 @@ import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.DueTrigger;
 import com.techcomfort.landvaultbackend.common.FeeType;
+import com.techcomfort.landvaultbackend.common.FlexiblePlanCalculator;
 import com.techcomfort.landvaultbackend.common.InstalmentPlanCalculator;
 import com.techcomfort.landvaultbackend.common.PaymentFrequency;
+import com.techcomfort.landvaultbackend.common.PlanKind;
 import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
 import com.techcomfort.landvaultbackend.common.RevocationTerms;
 import com.techcomfort.landvaultbackend.common.TenantContext;
@@ -349,18 +351,7 @@ public class EstateDisclosureService {
             if (!names.add(name.toLowerCase(Locale.ROOT))) {
                 throw new InventoryException.InvalidRequest("Two plans are called '" + name + "'.");
             }
-            if ((plan.depositPct() == null) == (plan.depositAmount() == null)) {
-                throw new InventoryException.InvalidRequest(
-                        "Plan '" + name + "' needs a deposit as either a percentage or a fixed amount, not both.");
-            }
-            PaymentFrequency frequency;
-            try {
-                frequency = PaymentFrequency.fromValue(plan.frequency());
-            } catch (IllegalArgumentException e) {
-                throw new InventoryException.InvalidRequest(
-                        "Plan '" + name + "': frequency must be 'monthly' or 'quarterly'.");
-            }
-            rows.add(EstatePaymentPlan.builder()
+            EstatePaymentPlan.EstatePaymentPlanBuilder<?, ?> row = EstatePaymentPlan.builder()
                     .tenantId(estate.getTenantId())
                     .branchId(estate.getBranchId())
                     .estateId(estateId)
@@ -368,11 +359,9 @@ public class EstateDisclosureService {
                     .sortOrder(order++)
                     .name(name)
                     .depositPct(plan.depositPct())
-                    .depositAmount(plan.depositAmount())
-                    .instalmentCount(plan.instalmentCount())
-                    .frequency(frequency)
-                    .premiumPct(plan.premiumPct() == null ? BigDecimal.ZERO : plan.premiumPct())
-                    .build());
+                    .premiumPct(plan.premiumPct() == null ? BigDecimal.ZERO : plan.premiumPct());
+            rows.add(kindOf(plan, name) == PlanKind.FLEXIBLE ? flexible(row, plan, name).build()
+                    : instalment(row, plan, name).build());
         }
         paymentPlanRepository.saveAll(rows);
         estate.setPaymentPlansVersion(version);
@@ -387,21 +376,114 @@ public class EstateDisclosureService {
         return toDto(estate, rows);
     }
 
+    private static PlanKind kindOf(DeclarePaymentPlansRequest.Plan plan, String name) {
+        if (plan.kind() == null || plan.kind().isBlank()) {
+            return PlanKind.INSTALMENT;
+        }
+        try {
+            return PlanKind.fromValue(plan.kind().trim());
+        } catch (IllegalArgumentException e) {
+            throw new InventoryException.InvalidRequest(
+                    "Plan '" + name + "': kind must be 'installment' or 'flexible'.");
+        }
+    }
+
+    private static EstatePaymentPlan.EstatePaymentPlanBuilder<?, ?> instalment(
+            EstatePaymentPlan.EstatePaymentPlanBuilder<?, ?> row, DeclarePaymentPlansRequest.Plan plan, String name) {
+        if ((plan.depositPct() == null) == (plan.depositAmount() == null)) {
+            throw new InventoryException.InvalidRequest(
+                    "Plan '" + name + "' needs a deposit as either a percentage or a fixed amount, not both.");
+        }
+        if (plan.instalmentCount() == null) {
+            throw new InventoryException.InvalidRequest("Plan '" + name + "' needs an instalmentCount (1–60).");
+        }
+        if (plan.flexible() != null) {
+            throw new InventoryException.InvalidRequest(
+                    "Plan '" + name + "' is an instalment plan; flexible terms only go with kind 'flexible'.");
+        }
+        PaymentFrequency frequency;
+        try {
+            frequency = PaymentFrequency.fromValue(plan.frequency());
+        } catch (IllegalArgumentException e) {
+            throw new InventoryException.InvalidRequest(
+                    "Plan '" + name + "': frequency must be 'monthly' or 'quarterly'.");
+        }
+        return row.kind(PlanKind.INSTALMENT).depositAmount(plan.depositAmount())
+                .instalmentCount(plan.instalmentCount()).frequency(frequency);
+    }
+
+    /**
+     * Flexible contribution (changeset 110): no schedule, so no deposit amount,
+     * instalment count or frequency; the minimum to start is a share of the
+     * total, at least HomeTrue's 10% floor. Every term is required except the
+     * minimum contribution and the maximum time to finish — the gain share in
+     * particular has no default (FC-8).
+     */
+    private static EstatePaymentPlan.EstatePaymentPlanBuilder<?, ?> flexible(
+            EstatePaymentPlan.EstatePaymentPlanBuilder<?, ?> row, DeclarePaymentPlansRequest.Plan plan, String name) {
+        DeclarePaymentPlansRequest.Flexible terms = plan.flexible();
+        if (terms == null) {
+            throw new InventoryException.InvalidRequest("Plan '" + name + "' is flexible: declare its terms in "
+                    + "'flexible' (exit, developerGainSharePct, inactivityMonths, noticeDays).");
+        }
+        if (plan.depositAmount() != null || plan.instalmentCount() != null || plan.frequency() != null) {
+            throw new InventoryException.InvalidRequest("Plan '" + name + "' is flexible: it has no fixed deposit, "
+                    + "instalments or frequency. Set the minimum to start with depositPct.");
+        }
+        if (plan.depositPct() == null || plan.depositPct().compareTo(FlexiblePlanCalculator.MIN_START_PCT) < 0) {
+            throw new InventoryException.InvalidRequest("Plan '" + name + "': the minimum to start (depositPct) must "
+                    + "be at least " + FlexiblePlanCalculator.MIN_START_PCT + "% of the price.");
+        }
+        RefundAppliesTo appliesTo;
+        try {
+            appliesTo = RefundAppliesTo.fromValue(terms.exit().appliesTo());
+        } catch (IllegalArgumentException e) {
+            throw new InventoryException.InvalidRequest(
+                    "Plan '" + name + "': exit.appliesTo must be 'amount_paid' or 'total_price'.");
+        }
+        return row.kind(PlanKind.FLEXIBLE).minimumContribution(terms.minimumContribution())
+                .exitDeductionPct(terms.exit().deductionPct()).exitAppliesTo(appliesTo)
+                .developerGainSharePct(terms.developerGainSharePct()).inactivityMonths(terms.inactivityMonths())
+                .noticeDays(terms.noticeDays()).maxMonths(terms.maxMonths());
+    }
+
     private PaymentPlansDto toDto(Estate estate, List<EstatePaymentPlan> plans) {
         List<PriceTier> tiers = priceTierRepository.findByEstateIdOrderBySizeSqmAsc(estate.getId()).stream()
                 .filter(t -> t.getRetiredAt() == null)
                 .toList();
         return new PaymentPlansDto(estate.getPaymentPlansVersion(), plans.stream()
-                .map(plan -> new PaymentPlansDto.Plan(plan.getId(), plan.getName(), plan.getDepositPct(),
-                        plan.getDepositAmount(), plan.getInstalmentCount(), plan.getFrequency().getValue(),
-                        plan.getPremiumPct(), tiers.stream()
-                        .flatMap(tier -> InstalmentPlanCalculator.quote(tier.getPrice(), terms(plan))
-                                .map(q -> new PaymentPlansDto.Quote(tier.getId(), tier.getLabel(),
-                                        tier.getCurrency().name(), q.price(), q.planTotal(), q.premium(),
-                                        q.deposit(), q.instalmentCount(), q.instalment(), q.lastInstalment()))
-                                .stream())
-                        .toList()))
+                .map(plan -> plan.getKind() == PlanKind.FLEXIBLE ? flexibleDto(plan, tiers) : instalmentDto(plan, tiers))
                 .toList());
+    }
+
+    private static PaymentPlansDto.Plan instalmentDto(EstatePaymentPlan plan, List<PriceTier> tiers) {
+        return new PaymentPlansDto.Plan(plan.getId(), plan.getName(), plan.getKind().getValue(), plan.getDepositPct(),
+                plan.getDepositAmount(), plan.getInstalmentCount(), plan.getFrequency().getValue(),
+                plan.getPremiumPct(), null, tiers.stream()
+                .flatMap(tier -> InstalmentPlanCalculator.quote(tier.getPrice(), terms(plan))
+                        .map(q -> new PaymentPlansDto.Quote(tier.getId(), tier.getLabel(),
+                                tier.getCurrency().name(), q.price(), q.planTotal(), q.premium(),
+                                q.deposit(), q.instalmentCount(), q.instalment(), q.lastInstalment(), null))
+                        .stream())
+                .toList());
+    }
+
+    private static PaymentPlansDto.Plan flexibleDto(EstatePaymentPlan plan, List<PriceTier> tiers) {
+        return new PaymentPlansDto.Plan(plan.getId(), plan.getName(), plan.getKind().getValue(), plan.getDepositPct(),
+                null, null, null, plan.getPremiumPct(), new PaymentPlansDto.FlexibleTerms(
+                plan.getMinimumContribution(), plan.getExitDeductionPct(), plan.getExitAppliesTo().getValue(),
+                plan.getDeveloperGainSharePct(), plan.getInactivityMonths(), plan.getNoticeDays(),
+                plan.getMaxMonths()), tiers.stream()
+                .map(tier -> {
+                    FlexiblePlanCalculator.Quote q = FlexiblePlanCalculator.quote(tier.getPrice(), plan.flexibleTerms());
+                    return new PaymentPlansDto.Quote(tier.getId(), tier.getLabel(), tier.getCurrency().name(),
+                            q.price(), q.planTotal(), q.premium(), q.minimumToStart(), null, null, null, q);
+                })
+                .toList());
+    }
+
+    private static String pct(BigDecimal pct) {
+        return pct.stripTrailingZeros().toPlainString();
     }
 
     static InstalmentPlanCalculator.Terms terms(EstatePaymentPlan plan) {
@@ -410,6 +492,16 @@ public class EstateDisclosureService {
     }
 
     private static String describe(EstatePaymentPlan plan) {
+        if (plan.getKind() == PlanKind.FLEXIBLE) {
+            return plan.getName() + " (flexible, " + pct(plan.getDepositPct()) + "% to start"
+                    + (plan.getMinimumContribution() == null ? ""
+                    : ", minimum " + plan.getMinimumContribution().stripTrailingZeros().toPlainString())
+                    + ", exit keeps " + pct(plan.getExitDeductionPct()) + "% of " + plan.getExitAppliesTo().getValue()
+                    + ", developer keeps " + pct(plan.getDeveloperGainSharePct()) + "% of any gain, dormant after "
+                    + plan.getInactivityMonths() + " months, " + plan.getNoticeDays() + " days' notice"
+                    + (plan.getMaxMonths() == null ? "" : ", finish within " + plan.getMaxMonths() + " months")
+                    + ", premium " + pct(plan.getPremiumPct()) + "%)";
+        }
         return plan.getName() + " (" + (plan.getDepositPct() != null
                 ? plan.getDepositPct().stripTrailingZeros().toPlainString() + "% deposit"
                 : plan.getDepositAmount().stripTrailingZeros().toPlainString() + " deposit")

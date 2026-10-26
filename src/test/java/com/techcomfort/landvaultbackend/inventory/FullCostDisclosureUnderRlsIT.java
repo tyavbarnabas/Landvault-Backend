@@ -96,6 +96,13 @@ class FullCostDisclosureUnderRlsIT {
             [{"name":"12-month plan","depositPct":30,"instalmentCount":12,"frequency":"monthly","premiumPct":10}]
             """;
 
+    /** 20% to start, ₦100,000 minimum, 15% of what was paid kept on leaving, 40% of any gain kept, 10% premium. */
+    private static final String FLEXIBLE_PLAN = """
+            {"name":"Pay as you can","kind":"flexible","depositPct":20,"premiumPct":10,
+             "flexible":{"minimumContribution":100000,"exit":{"deductionPct":15,"appliesTo":"amount_paid"},
+                         "developerGainSharePct":40,"inactivityMonths":6,"noticeDays":30,"maxMonths":36}}
+            """;
+
     @Container
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>(
             DockerImageName.parse("postgis/postgis:16-3.4-alpine").asCompatibleSubstituteFor("postgres"));
@@ -407,6 +414,92 @@ class FullCostDisclosureUnderRlsIT {
         assertThat(declarePlans(developer, listing.estateId(), """
                 [{"name":"A","depositPct":30,"instalmentCount":61,"frequency":"monthly"}]
                 """).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(query("SELECT count(*) FROM estate_payment_plans WHERE estate_id = '" + listing.estateId() + "'"))
+                .isEqualTo("0");
+    }
+
+    /**
+     * Flexible contribution, phase 1: a flexible plan sits beside an instalment
+     * plan, every figure worked out by HomeTrue in naira — what leaving returns
+     * and the buyer's share of any gain. Penalties are still priced on the
+     * instalment plan, even when the flexible one is listed first.
+     */
+    @Test
+    void aFlexiblePlanIsDeclaredAndPublishedInNairaBesideAnInstalmentPlan() {
+        Developer developer = verifiedDeveloper();
+        Listing listing = estateWithATier(developer, TOP_RANK_LAND);
+        declareFees(developer, listing.estateId(), topRankFees());
+        declareTerms(developer, listing.estateId());
+        assertThat(publish(developer, listing.estateId()).getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        String both = "[" + FLEXIBLE_PLAN + "," + TWELVE_MONTH_PLAN.strip().substring(1);
+        ResponseEntity<String> declared = declarePlans(developer, listing.estateId(), both);
+        assertThat(declared.getStatusCode()).as(declared.getBody()).isEqualTo(HttpStatus.OK);
+        assertThat(declared.getBody()).contains("\"kind\":\"flexible\"", "\"kind\":\"installment\"",
+                "\"developerGainSharePct\":40", "\"exitAppliesTo\":\"amount_paid\"", "\"minimumToStart\":990000");
+        assertThat(query("SELECT string_agg(kind || '/' || coalesce(instalment_count::text, '-'), ',' ORDER BY "
+                + "sort_order) FROM estate_payment_plans WHERE estate_id = '" + listing.estateId() + "'"))
+                .isEqualTo("FLEXIBLE/-,INSTALMENT/12");
+
+        var tier = listingFor(listing.estateId()).priceTiers().getFirst();
+        var flexible = tier.paymentPlans().getFirst();
+        assertThat(flexible.kind()).isEqualTo("flexible");
+        assertThat(flexible.frequency()).isNull();
+        assertThat(flexible.instalmentCount()).isNull();
+        assertThat(flexible.ifAnInstalmentIsLate()).as("nothing to be late for").isEmpty();
+        assertThat(flexible.planTotal()).isEqualByComparingTo("4950000");
+        assertThat(flexible.deposit()).as("the minimum to start").isEqualByComparingTo("990000");
+        assertThat(flexible.flexible().minimumContribution()).isEqualByComparingTo("100000");
+        assertThat(flexible.flexible().ifYouStopAfterPaying()).satisfiesExactly(
+                start -> {
+                    assertThat(start.paid()).isEqualByComparingTo("990000");
+                    assertThat(start.youGetBack()).isEqualByComparingTo("841500");
+                },
+                half -> {
+                    assertThat(half.paid()).isEqualByComparingTo("2475000");
+                    assertThat(half.youGetBack()).isEqualByComparingTo("2103750");
+                    assertThat(half.developerKeeps()).isEqualByComparingTo("371250");
+                });
+        assertThat(flexible.flexible().ifSoldForMore().buyerSharePct()).isEqualByComparingTo("60");
+        assertThat(flexible.flexible().ifSoldForMore().perMillionAbove()).isEqualByComparingTo("600000");
+        assertThat(flexible.flexible().inactivityMonths()).isEqualTo(6);
+        assertThat(flexible.flexible().maxMonths()).isEqualTo(36);
+        assertThat(tier.paymentPlans().getLast().kind()).isEqualTo("installment");
+        assertThat(listingFor(listing.estateId()).costDisclosure().exitCosts().penaltyBasisPlan())
+                .as("penalties are priced on the instalment plan").isEqualTo("12-month plan");
+        assertThat(query("SELECT detail FROM audit_log_entries WHERE action = 'estate.payment_plans_declared' "
+                + "AND target_id = '" + listing.estateId() + "'")).contains("flexible, 20% to start",
+                "developer keeps 40% of any gain", "finish within 36 months");
+    }
+
+    /** Every flexible term is checked, and the gain share has no default (FC-8). */
+    @Test
+    void aFlexiblePlansTermsAreChecked() {
+        Developer developer = verifiedDeveloper();
+        Listing listing = estateWithATier(developer, TOP_RANK_LAND);
+        String ok = FLEXIBLE_PLAN.strip();
+
+        assertThat(declarePlans(developer, listing.estateId(), "[" + ok.replace("\"depositPct\":20", "\"depositPct\":5")
+                + "]").getBody()).contains("at least 10% of the price");
+        assertThat(declarePlans(developer, listing.estateId(), "[" + ok.replace("\"developerGainSharePct\":40,", "")
+                + "]").getBody()).as("no default gain share").contains("VALIDATION_ERROR", "developerGainSharePct");
+        assertThat(declarePlans(developer, listing.estateId(), "[" + ok.replace("\"inactivityMonths\":6",
+                "\"inactivityMonths\":5") + "]").getBody()).contains("inactivityMonths");
+        assertThat(declarePlans(developer, listing.estateId(), "[" + ok.replace("\"noticeDays\":30",
+                "\"noticeDays\":29") + "]").getBody()).contains("noticeDays");
+        assertThat(declarePlans(developer, listing.estateId(), "[" + ok.replace("\"maxMonths\":36",
+                "\"maxMonths\":11") + "]").getBody()).contains("maxMonths");
+        assertThat(declarePlans(developer, listing.estateId(), "[" + ok.replace("\"premiumPct\":10,",
+                "\"premiumPct\":10,\"instalmentCount\":12,") + "]").getBody()).contains("no fixed deposit, instalments");
+        assertThat(declarePlans(developer, listing.estateId(), """
+                [{"name":"F","kind":"flexible","depositPct":20}]
+                """).getBody()).contains("declare its terms in 'flexible'");
+        assertThat(declarePlans(developer, listing.estateId(), "[" + ok.replace("\"amount_paid\"", "\"sale_price\"")
+                + "]").getBody()).contains("'amount_paid' or 'total_price'");
+        assertThat(declarePlans(developer, listing.estateId(), "[" + ok.replace("\"kind\":\"flexible\"",
+                "\"kind\":\"installment\"") + "]").getBody()).contains("needs an instalmentCount");
+        assertThat(declarePlans(developer, listing.estateId(), "[" + ok.replace("\"kind\":\"flexible\"",
+                "\"kind\":\"weekly\"") + "]").getBody()).contains("'installment' or 'flexible'");
         assertThat(query("SELECT count(*) FROM estate_payment_plans WHERE estate_id = '" + listing.estateId() + "'"))
                 .isEqualTo("0");
     }

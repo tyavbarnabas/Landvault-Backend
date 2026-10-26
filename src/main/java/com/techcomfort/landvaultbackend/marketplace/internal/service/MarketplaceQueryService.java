@@ -3,9 +3,11 @@ package com.techcomfort.landvaultbackend.marketplace.internal.service;
 import com.techcomfort.landvaultbackend.common.CommitmentCalculator;
 import com.techcomfort.landvaultbackend.common.DueTrigger;
 import com.techcomfort.landvaultbackend.common.FeeType;
+import com.techcomfort.landvaultbackend.common.FlexiblePlanCalculator;
 import com.techcomfort.landvaultbackend.common.InstalmentPlanCalculator;
 import com.techcomfort.landvaultbackend.common.PageResponse;
 import com.techcomfort.landvaultbackend.common.PageResponses;
+import com.techcomfort.landvaultbackend.common.PlanKind;
 import com.techcomfort.landvaultbackend.common.RevocationTerms;
 import com.techcomfort.landvaultbackend.common.geojson.GeoJsonFeatureCollectionDto;
 import com.techcomfort.landvaultbackend.common.geojson.GeoJsonFeatureDto;
@@ -68,6 +70,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * The public read side. Anonymous callers, no scope, no audit: the audit log
@@ -293,12 +296,21 @@ public class MarketplaceQueryService {
             return List.of();
         }
         return plans.stream()
-                .flatMap(plan -> InstalmentPlanCalculator.quote(price, plan.terms())
+                .flatMap(plan -> plan.getKind() == PlanKind.FLEXIBLE ? Stream.of(flexibleAt(price, plan))
+                        : InstalmentPlanCalculator.quote(price, plan.terms())
                         .map(q -> new MarketplacePaymentPlanDto(plan.getPlanId(), plan.getName(),
                                 plan.getFrequency().getValue(), q.deposit(), q.instalmentCount(), q.instalment(),
-                                q.lastInstalment(), q.planTotal(), q.premium(), lateSteps(q.instalment(), penalties)))
+                                q.lastInstalment(), q.planTotal(), q.premium(), lateSteps(q.instalment(), penalties),
+                                PlanKind.INSTALMENT.getValue(), null))
                         .stream())
                 .toList();
+    }
+
+    /** A flexible plan at this price: no schedule, so nothing to be late for. */
+    private static MarketplacePaymentPlanDto flexibleAt(BigDecimal price, PaymentPlanView plan) {
+        FlexiblePlanCalculator.Quote q = FlexiblePlanCalculator.quote(price, plan.flexibleTerms());
+        return new MarketplacePaymentPlanDto(plan.getPlanId(), plan.getName(), null, q.minimumToStart(), null, null,
+                null, q.planTotal(), q.premium(), List.of(), PlanKind.FLEXIBLE.getValue(), q);
     }
 
     /** The declared steps on one instalment, in naira. */
@@ -425,9 +437,10 @@ public class MarketplaceQueryService {
         }
 
         // Decided with the user: a penalty is a share of the overdue instalment,
-        // so it's priced on one instalment of the estate's first plan at this
+        // so it's priced on one instalment of the estate's first instalment plan at this
         // tier. No plans: outright buyers have nothing to fall behind on.
         Optional<MarketplacePaymentPlanDto> penaltyBasis = plansAt(basis.getPrice(), plans, penalties).stream()
+                .filter(p -> PlanKind.INSTALMENT.getValue().equals(p.kind()))
                 .findFirst();
         List<ExitCostsDto.PenaltyStepDto> steps = penaltyBasis
                 .map(MarketplacePaymentPlanDto::ifAnInstalmentIsLate).orElse(List.of());

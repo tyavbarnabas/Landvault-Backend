@@ -1,6 +1,7 @@
 package com.techcomfort.landvaultbackend.marketplace.internal.service;
 
 import com.techcomfort.landvaultbackend.common.LatePaymentTerms;
+import com.techcomfort.landvaultbackend.common.PlanKind;
 import com.techcomfort.landvaultbackend.marketplace.EstateEligibility;
 import com.techcomfort.landvaultbackend.marketplace.MarketplaceApi;
 import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
@@ -51,7 +52,9 @@ public class MarketplaceApiImpl implements MarketplaceApi {
     @Override
     @Transactional(readOnly = true)
     public Optional<OfferedPlan> offeredPlan(UUID estateId, UUID planId) {
+        // Flexible plans can't be chosen yet (phase 2 of flexible contribution).
         return paymentPlans.findByPlanIdAndEstateId(planId, estateId)
+                .filter(p -> p.getKind() == PlanKind.INSTALMENT)
                 .map(p -> new OfferedPlan(p.getPlanId(), p.getName(), p.terms()));
     }
 
