@@ -32,15 +32,15 @@ public record DeclarePaymentPlansRequest(
 
     @Schema(name = "PaymentPlanDeclaration", description = """
             An instalment plan: exactly one of depositPct and depositAmount, plus instalmentCount and frequency. A \
-            flexible plan (`kind: "flexible"`): depositPct is the minimum to start (at least 10), and `flexible` \
-            carries its terms; depositAmount, instalmentCount and frequency are refused.""")
+            flexible plan (`kind: "flexible"`): depositPct is the minimum to start, a share of the price (at least \
+            10), and `flexible` carries its terms; depositAmount, instalmentCount and frequency are refused.""")
     public record Plan(
             @NotBlank @Size(max = 80) @Schema(example = "12-month plan") String name,
             @Schema(nullable = true, example = "installment", description = "`installment` (when left out) or "
                     + "`flexible`.") String kind,
             @DecimalMin("1.00") @DecimalMax("99.99")
-            @Schema(nullable = true, example = "30.00", description = "A share of the plan total: the deposit, or on a "
-                    + "flexible plan the minimum to start.")
+            @Schema(nullable = true, example = "30.00", description = "The deposit, a share of the plan total; or on a "
+                    + "flexible plan the minimum to start, a share of the price (the premium is not counted).")
             BigDecimal depositPct,
             @Positive @Schema(nullable = true, description = "A fixed deposit, in the tier's currency. Instalment "
                     + "plans only.")

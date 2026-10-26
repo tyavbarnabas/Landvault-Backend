@@ -6626,7 +6626,7 @@ A third way to buy, decided with the user 2026-10-26 (stories in
 any time** until finished — no schedule, no due dates, no penalties. **It is the instalment machinery with the
 schedule removed** (escrow shares, finance verification, withdrawal, notice, the portfolio), never a parallel system.
 
-Decided: (1) the minimum to start is a share of the total, **at least 10%**; (2) leaving is open **at any time with no
+Decided: (1) the minimum to start is a share of the **land price** (the premium is not counted), **at least 10%**; (2) leaving is open **at any time with no
 one's approval**, refunded at once from escrow on what was paid (the refund terms' two bases), **plus** a share of any
 gain on the plot's next completed sale through HomeTrue — the developer declares the share **they** keep (0–100,
 required, no default), measured against the buyer's agreed land price, paid out of the developer's payout for that
@@ -6649,7 +6649,12 @@ letter, 3 pay and complete, 4 leave and dormancy, 5 the gain share.
 - **`common.FlexiblePlanCalculator`** is the one place the figures are worked out: the total (premium on the whole
   price), the minimum to start, what leaving returns (rounded down to the kobo, `PayoutTranches.shares`'s own rule,
   so the quote is never below what escrow returns — **change one, change both**), and the buyer's gain per
-  ₦1,000,000 above the price. No made-up resale price is ever quoted.
+  ₦1,000,000 above the price plus FC-8's worked example at a sale 20% above it (`EXAMPLE_RISE_PCT`). That example is
+  labelled as one, never a forecast: the developer sets the next price.
+- **The minimum to start is on the land price, not the plan total** (corrected after phase 1 shipped, against the
+  stories' decision 1): the premium pays for time, so it doesn't raise the entry. An instalment deposit percentage is
+  still a share of the plan total — the two differ on purpose. No migration: the database check (`deposit_pct >= 10`)
+  doesn't depend on the base.
 - Every reader of plan rows must check the kind: `PaymentPlanView.terms()` is instalment-only, the exit costs'
   penalty basis is the first **instalment** plan, and `MarketplaceApi.offeredPlan` returns instalment plans only until
   phase 2 — so checkout can't open a flexible purchase on instalment logic (`PLAN_NOT_OFFERED`).

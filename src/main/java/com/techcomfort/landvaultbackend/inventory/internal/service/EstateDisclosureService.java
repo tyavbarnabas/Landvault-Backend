@@ -415,7 +415,7 @@ public class EstateDisclosureService {
     /**
      * Flexible contribution (changeset 110): no schedule, so no deposit amount,
      * instalment count or frequency; the minimum to start is a share of the
-     * total, at least HomeTrue's 10% floor. Every term is required except the
+     * land price (not the premium), at least HomeTrue's 10% floor. Every term is required except the
      * minimum contribution and the maximum time to finish — the gain share in
      * particular has no default (FC-8).
      */
