@@ -6626,7 +6626,7 @@ A third way to buy, decided with the user 2026-10-26 (stories in
 any time** until finished — no schedule, no due dates, no penalties. **It is the instalment machinery with the
 schedule removed** (escrow shares, finance verification, withdrawal, notice, the portfolio), never a parallel system.
 
-Decided: (1) the minimum to start is a share of the total, **at least 10%**; (2) leaving is open **at any time with no
+Decided: (1) the minimum to start is a share of the **land price** (the premium is not counted), **at least 10%**; (2) leaving is open **at any time with no
 one's approval**, refunded at once from escrow on what was paid (the refund terms' two bases), **plus** a share of any
 gain on the plot's next completed sale through HomeTrue — the developer declares the share **they** keep (0–100,
 required, no default), measured against the buyer's agreed land price, paid out of the developer's payout for that
@@ -6637,6 +6637,32 @@ finish** (≥ 12 months from the offer date) — past it an unfinished plan is t
 ends the notice. The maximum time exists so the plan can't be used as a cheap bet on the price (pay 10%, keep it
 alive with the minimum, finish only if prices rise). Phases: 1 declare and publish, 2 choose at checkout and the offer
 letter, 3 pay and complete, 4 leave and dormancy, 5 the gain share.
+
+### A second way out: "sell my plot" (decided 2026-10-26, not built)
+
+From how developers already settle this by hand (sold at ₦4M, ₦1M paid, now worth ₦7M: the developer takes the ₦3M
+still owed plus their share of the gain, the buyer gets ₦2M — their ₦1M back and ₦1M of gain). Decided with the
+user, beside "leave now":
+
+- **The buyer asks HomeTrue to sell the plot** at an asking price **they choose**, with the developer's valuation
+  shown as a guide. The plan stays open while it is listed.
+- **Never below the agreed land price.** A loss-making sale is a separate feature (a distress sale), deliberately
+  not part of this one.
+- **Payments pause while it is listed**: nothing is due and the inactivity clock doesn't run. The buyer may still
+  pay; every verified payment counts in the settlement.
+- **When a new buyer's payment completes the sale**, HomeTrue splits the proceeds: first the balance still owed to
+  the developer, then the gain above the agreed land price by the **same declared percentage** as "leave now"
+  (`developerGainSharePct`) — never a figure decided at sale time — and the buyer gets what they paid plus their
+  share. The settlement uses the price actually paid, never the valuation.
+- **The balance owed is on the land price only**, never the premium: the premium pays for time the buyer is no
+  longer using.
+- **No exit deduction on a sale**: the developer is paid in full from the proceeds. The deduction belongs to "leave
+  now" only.
+- **The buyer may change the asking price or take the plot off sale** while no new buyer holds it.
+- **The sale is complete when finance verifies the new buyer's payment**: outright, the full payment; on a plan,
+  the deposit — the split is then paid from that deposit and the payments that follow.
+- After it: the first buyer's plan ends as sold, their portfolio record closes and their letter reads as
+  transferred; the new buyer gets their own documents.
 
 ### Phase 1: declaring and publishing (changeset 110)
 
@@ -6649,7 +6675,12 @@ letter, 3 pay and complete, 4 leave and dormancy, 5 the gain share.
 - **`common.FlexiblePlanCalculator`** is the one place the figures are worked out: the total (premium on the whole
   price), the minimum to start, what leaving returns (rounded down to the kobo, `PayoutTranches.shares`'s own rule,
   so the quote is never below what escrow returns — **change one, change both**), and the buyer's gain per
-  ₦1,000,000 above the price. No made-up resale price is ever quoted.
+  ₦1,000,000 above the price plus FC-8's worked example at a sale 20% above it (`EXAMPLE_RISE_PCT`). That example is
+  labelled as one, never a forecast: the developer sets the next price.
+- **The minimum to start is on the land price, not the plan total** (corrected after phase 1 shipped, against the
+  stories' decision 1): the premium pays for time, so it doesn't raise the entry. An instalment deposit percentage is
+  still a share of the plan total — the two differ on purpose. No migration: the database check (`deposit_pct >= 10`)
+  doesn't depend on the base.
 - Every reader of plan rows must check the kind: `PaymentPlanView.terms()` is instalment-only, the exit costs'
   penalty basis is the first **instalment** plan, and `MarketplaceApi.offeredPlan` returns instalment plans only until
   phase 2 — so checkout can't open a flexible purchase on instalment logic (`PLAN_NOT_OFFERED`).

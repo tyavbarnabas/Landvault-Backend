@@ -436,7 +436,7 @@ class FullCostDisclosureUnderRlsIT {
         ResponseEntity<String> declared = declarePlans(developer, listing.estateId(), both);
         assertThat(declared.getStatusCode()).as(declared.getBody()).isEqualTo(HttpStatus.OK);
         assertThat(declared.getBody()).contains("\"kind\":\"flexible\"", "\"kind\":\"installment\"",
-                "\"developerGainSharePct\":40", "\"exitAppliesTo\":\"amount_paid\"", "\"minimumToStart\":990000");
+                "\"developerGainSharePct\":40", "\"exitAppliesTo\":\"amount_paid\"", "\"minimumToStart\":900000");
         assertThat(query("SELECT string_agg(kind || '/' || coalesce(instalment_count::text, '-'), ',' ORDER BY "
                 + "sort_order) FROM estate_payment_plans WHERE estate_id = '" + listing.estateId() + "'"))
                 .isEqualTo("FLEXIBLE/-,INSTALMENT/12");
@@ -448,12 +448,13 @@ class FullCostDisclosureUnderRlsIT {
         assertThat(flexible.instalmentCount()).isNull();
         assertThat(flexible.ifAnInstalmentIsLate()).as("nothing to be late for").isEmpty();
         assertThat(flexible.planTotal()).isEqualByComparingTo("4950000");
-        assertThat(flexible.deposit()).as("the minimum to start").isEqualByComparingTo("990000");
+        assertThat(flexible.deposit()).as("the minimum to start: 20% of the price, not of the total")
+                .isEqualByComparingTo("900000");
         assertThat(flexible.flexible().minimumContribution()).isEqualByComparingTo("100000");
         assertThat(flexible.flexible().ifYouStopAfterPaying()).satisfiesExactly(
                 start -> {
-                    assertThat(start.paid()).isEqualByComparingTo("990000");
-                    assertThat(start.youGetBack()).isEqualByComparingTo("841500");
+                    assertThat(start.paid()).isEqualByComparingTo("900000");
+                    assertThat(start.youGetBack()).isEqualByComparingTo("765000");
                 },
                 half -> {
                     assertThat(half.paid()).isEqualByComparingTo("2475000");
@@ -462,6 +463,10 @@ class FullCostDisclosureUnderRlsIT {
                 });
         assertThat(flexible.flexible().ifSoldForMore().buyerSharePct()).isEqualByComparingTo("60");
         assertThat(flexible.flexible().ifSoldForMore().perMillionAbove()).isEqualByComparingTo("600000");
+        var example = flexible.flexible().ifSoldForMore().example();
+        assertThat(example.soldFor()).as("an example sale 20% above the price").isEqualByComparingTo("5400000");
+        assertThat(example.difference()).isEqualByComparingTo("900000");
+        assertThat(example.youGet()).isEqualByComparingTo("540000");
         assertThat(flexible.flexible().inactivityMonths()).isEqualTo(6);
         assertThat(flexible.flexible().maxMonths()).isEqualTo(36);
         assertThat(tier.paymentPlans().getLast().kind()).isEqualTo("installment");

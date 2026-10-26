@@ -413,7 +413,7 @@ buy is 409 `PLAN_NOT_OFFERED` until phase 2). Stories: `~/Documents/hometrue-fle
   optional **`kind`**: `installment` (when left out — existing calls are unchanged) or `flexible`. A flexible plan:
   `{ name, kind: "flexible", depositPct, premiumPct?, flexible: { minimumContribution?, exit: { deductionPct,
   appliesTo }, developerGainSharePct, inactivityMonths, noticeDays, maxMonths? } }`.
-  - `depositPct` is the **minimum to start**, a share of the plan total, **at least 10**. `depositAmount`,
+  - `depositPct` is the **minimum to start**, a share of the **price** (the premium is not counted), **at least 10**. `depositAmount`,
     `instalmentCount` and `frequency` are refused.
   - `exit.appliesTo`: `amount_paid` (that share of each payment) or `total_price` (a fixed sum, that share of the
     agreed price, kept from the first payments) — the refund terms' two bases.
@@ -431,10 +431,13 @@ buy is 409 `PLAN_NOT_OFFERED` until phase 2). Stories: `~/Documents/hometrue-fle
   `ifAnInstalmentIsLate` is empty. **Check `kind` before reading instalment fields.**
 - **`FlexiblePlanQuote`** — every figure in naira, for that tier's price:
   `{ price, planTotal, premium, minimumToStart, minimumContribution, ifYouStopAfterPaying: [{ paid, youGetBack,
-  developerKeeps }], ifSoldForMore: { developerSharePct, buyerSharePct, perMillionAbove }, inactivityMonths,
+  developerKeeps }], ifSoldForMore: { developerSharePct, buyerSharePct, perMillionAbove, example: { risePct, soldFor, difference,
+  youGet } }, inactivityMonths,
   noticeDays, maxMonths }`. `ifYouStopAfterPaying` has two worked examples: after the minimum to start, and after half
-  the total. `perMillionAbove` is what the buyer gets for every ₦1,000,000 the next sale is above `price` — show it as
-  "*if HomeTrue sells it for more*", never as a promised gain.
+  the total. `perMillionAbove` is what the buyer gets for every ₦1,000,000 the next sale is above `price`; `example` works it
+  out for a sale 20% above `price` (FC-8's "at ₦6,000,000 that's ₦1,200,000 more"). Both are examples — show them as
+  "*if HomeTrue sells it for more*", never as a forecast or a promised gain. `youGet` is 0 when the developer keeps
+  it all: say "the developer keeps all of the difference".
 - `costDisclosure.exitCosts.penaltyBasisPlan` is now the estate's first **instalment** plan (a flexible plan has no
   penalties).
 

@@ -32,6 +32,11 @@ class FlexiblePlanCalculatorTest {
         assertThat(quote.ifSoldForMore().buyerSharePct()).isEqualByComparingTo("60");
         assertThat(quote.ifSoldForMore().perMillionAbove()).as("₦6M resale: ₦2M above, ₦1.2M to the buyer")
                 .isEqualByComparingTo("600000");
+        FlexiblePlanCalculator.GainExample example = quote.ifSoldForMore().example();
+        assertThat(example.risePct()).isEqualByComparingTo("20");
+        assertThat(example.soldFor()).isEqualByComparingTo("4800000");
+        assertThat(example.difference()).isEqualByComparingTo("800000");
+        assertThat(example.youGet()).isEqualByComparingTo("480000");
         assertThat(quote.maxMonths()).isEqualTo(36);
     }
 
@@ -46,19 +51,24 @@ class FlexiblePlanCalculatorTest {
                 new BigDecimal("4000000"), fixed);
         assertThat(later.developerKeeps()).isEqualByComparingTo("400000");
         assertThat(later.youGetBack()).isEqualByComparingTo("1600000");
-        assertThat(FlexiblePlanCalculator.quote(new BigDecimal("4000000"), fixed).ifSoldForMore().perMillionAbove())
-                .as("the developer keeps all of any gain").isEqualByComparingTo("0");
+        FlexiblePlanCalculator.Gain keepsAll = FlexiblePlanCalculator.quote(new BigDecimal("4000000"), fixed)
+                .ifSoldForMore();
+        assertThat(keepsAll.perMillionAbove()).as("the developer keeps all of any gain").isEqualByComparingTo("0");
+        assertThat(keepsAll.example().youGet()).isEqualByComparingTo("0");
     }
 
-    /** The premium is on the whole price and the minimum to start a share of that total, as on instalment plans. */
+    /**
+     * The premium is on the whole price, but the minimum to start is a share
+     * of the land price (decision 1) — unlike an instalment deposit.
+     */
     @Test
-    void thePremiumIsOnTheWholePriceAndShareRoundingFavoursTheBuyer() {
+    void thePremiumIsOnTheWholePriceButTheMinimumToStartIsOnTheLandPrice() {
         FlexiblePlanCalculator.Quote quote = FlexiblePlanCalculator.quote(new BigDecimal("4500000"),
                 terms("20", "10", "15", RefundAppliesTo.AMOUNT_PAID, "40"));
 
         assertThat(quote.planTotal()).isEqualByComparingTo("4950000");
         assertThat(quote.premium()).isEqualByComparingTo("450000");
-        assertThat(quote.minimumToStart()).isEqualByComparingTo("990000");
+        assertThat(quote.minimumToStart()).as("20% of ₦4.5M, not of ₦4.95M").isEqualByComparingTo("900000");
         assertThat(FlexiblePlanCalculator.exit(new BigDecimal("1000000.01"), quote.price(),
                 terms("20", "10", "15", RefundAppliesTo.AMOUNT_PAID, "40")).developerKeeps())
                 .as("150,000.0015 rounds down: the developer never keeps a kobo more").isEqualByComparingTo("150000.00");

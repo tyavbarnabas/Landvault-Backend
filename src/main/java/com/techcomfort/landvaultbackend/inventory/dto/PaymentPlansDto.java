@@ -20,7 +20,7 @@ public record PaymentPlansDto(
             String name,
             @Schema(description = "`installment` or `flexible`.") String kind,
             @Schema(nullable = true, description = "The deposit as a share of the plan total; on a flexible plan, the "
-                    + "minimum to start.") BigDecimal depositPct,
+                    + "minimum to start as a share of the price.") BigDecimal depositPct,
             @Schema(nullable = true) BigDecimal depositAmount,
             @Schema(nullable = true, description = "Null on a flexible plan.") Integer instalmentCount,
             @Schema(nullable = true, description = "`monthly` or `quarterly`; null on a flexible plan.") String frequency,

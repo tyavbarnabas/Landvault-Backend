@@ -20,6 +20,11 @@ public final class FlexiblePlanCalculator {
     public static final int MIN_INACTIVITY_MONTHS = 6;
     public static final int MIN_NOTICE_DAYS = 30;
     public static final int MIN_MAX_MONTHS = 12;
+    /**
+     * The rise the worked gain example assumes (FC-8). An example, never a
+     * forecast: the developer sets the next price, and may relist at the old one.
+     */
+    public static final BigDecimal EXAMPLE_RISE_PCT = BigDecimal.valueOf(20);
 
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
     private static final BigDecimal MILLION = BigDecimal.valueOf(1_000_000);
@@ -31,7 +36,7 @@ public final class FlexiblePlanCalculator {
     /**
      * A flexible plan's terms as declared.
      *
-     * @param startPct              the minimum to start, a share of the total (premium included)
+     * @param startPct              the minimum to start, a share of the land price (the premium is not counted)
      * @param minimumContribution   the smallest later payment, except the one that finishes; null for none
      * @param exitDeductionPct      what the developer keeps when the buyer leaves, as a share of {@code exitAppliesTo}
      * @param developerGainSharePct the share of any gain on the next sale the developer keeps
@@ -48,8 +53,8 @@ public final class FlexiblePlanCalculator {
             @Schema(description = "The price under this plan, premium included: what finishing it costs.")
             BigDecimal planTotal,
             @Schema(description = "How much more than paying in full.") BigDecimal premium,
-            @Schema(description = "Paid first; once finance verifies it the plot is held for the buyer.")
-            BigDecimal minimumToStart,
+            @Schema(description = "Paid first, a share of `price` (the premium is not counted); once finance "
+                    + "verifies it the plot is held for the buyer.") BigDecimal minimumToStart,
             @Schema(description = "The smallest later payment; the one that finishes the plan may be smaller. Null "
                     + "when none is declared.", nullable = true) BigDecimal minimumContribution,
             @Schema(description = "What leaving returns at once, from escrow: after paying the minimum to start, "
@@ -74,7 +79,18 @@ public final class FlexiblePlanCalculator {
      * @param perMillionAbove    what the buyer gets for every ₦1,000,000 the next sale is above the price
      */
     @Schema(name = "FlexiblePlanGain")
-    public record Gain(BigDecimal developerSharePct, BigDecimal buyerSharePct, BigDecimal perMillionAbove) {
+    public record Gain(BigDecimal developerSharePct, BigDecimal buyerSharePct, BigDecimal perMillionAbove,
+                       @Schema(description = "A worked example only, never a forecast.") GainExample example) {
+    }
+
+    /**
+     * FC-8's worked example: if the next sale were {@link #EXAMPLE_RISE_PCT}
+     * above the price. {@code youGet} is zero when the developer keeps it all.
+     */
+    @Schema(name = "FlexiblePlanGainExample", description = """
+            An example only: if HomeTrue sold the plot for `risePct`% more than `price`. Not a forecast — the \
+            developer sets the next price, and selling for no more owes nothing.""")
+    public record GainExample(BigDecimal risePct, BigDecimal soldFor, BigDecimal difference, BigDecimal youGet) {
     }
 
     /** The plan at this price. */
@@ -82,14 +98,16 @@ public final class FlexiblePlanCalculator {
         BigDecimal premiumPct = terms.premiumPct() == null ? BigDecimal.ZERO : terms.premiumPct();
         BigDecimal planTotal = price.add(price.multiply(premiumPct).divide(HUNDRED, 10, RoundingMode.HALF_UP))
                 .setScale(KOBO, RoundingMode.HALF_UP);
-        BigDecimal start = planTotal.multiply(terms.startPct()).divide(HUNDRED, KOBO, RoundingMode.HALF_UP);
-        BigDecimal half = planTotal.divide(BigDecimal.TWO, KOBO, RoundingMode.DOWN);
         BigDecimal landPrice = price.setScale(KOBO, RoundingMode.HALF_UP);
+        BigDecimal start = landPrice.multiply(terms.startPct()).divide(HUNDRED, KOBO, RoundingMode.HALF_UP);
+        BigDecimal half = planTotal.divide(BigDecimal.TWO, KOBO, RoundingMode.DOWN);
         BigDecimal buyerShare = HUNDRED.subtract(terms.developerGainSharePct());
+        BigDecimal difference = pctOf(EXAMPLE_RISE_PCT, landPrice);
+        GainExample example = new GainExample(EXAMPLE_RISE_PCT, landPrice.add(difference), difference,
+                pctOf(buyerShare, difference));
         return new Quote(landPrice, planTotal, planTotal.subtract(landPrice), start, terms.minimumContribution(),
                 List.of(exit(start, landPrice, terms), exit(half, landPrice, terms)),
-                new Gain(terms.developerGainSharePct(), buyerShare,
-                        MILLION.multiply(buyerShare).divide(HUNDRED, KOBO, RoundingMode.DOWN)),
+                new Gain(terms.developerGainSharePct(), buyerShare, pctOf(buyerShare, MILLION), example),
                 terms.inactivityMonths(), terms.noticeDays(), terms.maxMonths());
     }
 
