@@ -6619,6 +6619,43 @@ Raised by the frontend, decided with the user; read-only, no migration.
   `NEEDS_ATTENTION` refund has no account submitted. `none` when nothing is owed back. Proven red by making
   `refunded` need more than the amount.
 
+## Flexible contribution (changeset 110 onwards)
+
+A third way to buy, decided with the user 2026-10-26 (stories in
+`~/Documents/hometrue-flexible-contribution-user-stories.md`, FC-1..FC-12): a minimum to start, then **any amount,
+any time** until finished — no schedule, no due dates, no penalties. **It is the instalment machinery with the
+schedule removed** (escrow shares, finance verification, withdrawal, notice, the portfolio), never a parallel system.
+
+Decided: (1) the minimum to start is a share of the total, **at least 10%**; (2) leaving is open **at any time with no
+one's approval**, refunded at once from escrow on what was paid (the refund terms' two bases), **plus** a share of any
+gain on the plot's next completed sale through HomeTrue — the developer declares the share **they** keep (0–100,
+required, no default), measured against the buyer's agreed land price, paid out of the developer's payout for that
+sale, and a fall never reduces the refund; (3) a plan with no verified payment for the declared inactivity period
+(≥ 6 months) may be given notice (≥ 30 days) by the Executive Director and then ended on the buyer's exit terms; (4)
+every term is on the plan and **copied onto the purchase**; (5) an optional premium; (6) an optional **maximum time to
+finish** (≥ 12 months from the offer date) — past it an unfinished plan is treated as dormant, and only finishing
+ends the notice. The maximum time exists so the plan can't be used as a cheap bet on the price (pay 10%, keep it
+alive with the minimum, finish only if prices rise). Phases: 1 declare and publish, 2 choose at checkout and the offer
+letter, 3 pay and complete, 4 leave and dormancy, 5 the gain share.
+
+### Phase 1: declaring and publishing (changeset 110)
+
+- **A flexible plan is a row in `estate_payment_plans`** with `kind = 'FLEXIBLE'`, so versioning, the published view
+  and choosing by `planId` work as for instalment plans. `deposit_pct` is the minimum to start; `instalment_count` and
+  `frequency` are null. **The rules are database CHECKs per kind** as well as the service's checks.
+- `kind` on the request is optional and means `installment` when left out, so existing callers are unchanged.
+  `instalmentCount`/`frequency` lost their bean-validation annotations' "required" — the service requires them for
+  instalment plans only.
+- **`common.FlexiblePlanCalculator`** is the one place the figures are worked out: the total (premium on the whole
+  price), the minimum to start, what leaving returns (rounded down to the kobo, `PayoutTranches.shares`'s own rule,
+  so the quote is never below what escrow returns — **change one, change both**), and the buyer's gain per
+  ₦1,000,000 above the price. No made-up resale price is ever quoted.
+- Every reader of plan rows must check the kind: `PaymentPlanView.terms()` is instalment-only, the exit costs'
+  penalty basis is the first **instalment** plan, and `MarketplaceApi.offeredPlan` returns instalment plans only until
+  phase 2 — so checkout can't open a flexible purchase on instalment logic (`PLAN_NOT_OFFERED`).
+
+Proven red: the checkout guard (a flexible plan was offered) and the penalty basis (priced on the flexible plan).
+
 ## A buyer's address (changeset 097)
 
 Built 2026-10-21, decided with the user, so the allocation letter can name

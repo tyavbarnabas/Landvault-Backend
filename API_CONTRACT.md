@@ -403,6 +403,41 @@ gets it without a new call.
   `penaltyWaived` saying how much was waived; the portfolio's `arrears.penaltyAmount` and the next payment are net
   too. If the instalment reaches a higher step later, only the difference is owed. The buyer is emailed.
 
+### Flexible contribution plans — **phase 1 built** (changeset 110)
+
+A third way to buy: a minimum to start, then any amount at any time until finished — no schedule, no due dates, no
+penalties. Phase 1 is declaring and publishing; **a flexible plan can't be bought yet** (choosing one at Proceed to
+buy is 409 `PLAN_NOT_OFFERED` until phase 2). Stories: `~/Documents/hometrue-flexible-contribution-user-stories.md`.
+
+- **Declared in the same set as instalment plans** (`PUT /api/portal/estates/{id}/payment-plans`). Each plan gains an
+  optional **`kind`**: `installment` (when left out — existing calls are unchanged) or `flexible`. A flexible plan:
+  `{ name, kind: "flexible", depositPct, premiumPct?, flexible: { minimumContribution?, exit: { deductionPct,
+  appliesTo }, developerGainSharePct, inactivityMonths, noticeDays, maxMonths? } }`.
+  - `depositPct` is the **minimum to start**, a share of the plan total, **at least 10**. `depositAmount`,
+    `instalmentCount` and `frequency` are refused.
+  - `exit.appliesTo`: `amount_paid` (that share of each payment) or `total_price` (a fixed sum, that share of the
+    agreed price, kept from the first payments) — the refund terms' two bases.
+  - `developerGainSharePct` 0–100, **required, no default**: the share of any gain the developer keeps when HomeTrue
+    next sells a plot a buyer left for more than that buyer's price.
+  - `inactivityMonths` 6–60, `noticeDays` 30–365, `maxMonths` 12–240 (optional), `minimumContribution` > 0
+    (optional).
+  - Errors: `VALIDATION_ERROR` (with `fieldErrors`, e.g. `plans[0].flexible.developerGainSharePct`), `INVALID_REQUEST`.
+- **`PaymentPlans`** plans gain `kind` and `flexible` (the terms; null on an instalment plan); `instalmentCount` and
+  `frequency` are **null on a flexible plan** (were always numbers/strings). Each quote gains `flexible`
+  (`FlexiblePlanQuote`, below; null on an instalment plan), with `deposit` the minimum to start and
+  `instalmentCount`/`instalment`/`lastInstalment` null.
+- **Marketplace** `priceTiers[].paymentPlans[]` gains `kind` and `flexible`; on a flexible plan `frequency`,
+  `instalmentCount`, `instalment` and `lastInstalment` are null, `deposit` is the minimum to start and
+  `ifAnInstalmentIsLate` is empty. **Check `kind` before reading instalment fields.**
+- **`FlexiblePlanQuote`** — every figure in naira, for that tier's price:
+  `{ price, planTotal, premium, minimumToStart, minimumContribution, ifYouStopAfterPaying: [{ paid, youGetBack,
+  developerKeeps }], ifSoldForMore: { developerSharePct, buyerSharePct, perMillionAbove }, inactivityMonths,
+  noticeDays, maxMonths }`. `ifYouStopAfterPaying` has two worked examples: after the minimum to start, and after half
+  the total. `perMillionAbove` is what the buyer gets for every ₦1,000,000 the next sale is above `price` — show it as
+  "*if HomeTrue sells it for more*", never as a promised gain.
+- `costDisclosure.exitCosts.penaltyBasisPlan` is now the estate's first **instalment** plan (a flexible plan has no
+  penalties).
+
 ### Publication now has SEVEN conditions, not five
 
 An estate is publicly listable only when: `published` is true, the tenant is `verified`, the tenant holds `marketplacePublishing`, the tenant is **`active`** (so an offboarded company's land isn't for sale either), **no conflict blocks it**, **its fee schedule has been declared**, and **its refund terms have been declared**.

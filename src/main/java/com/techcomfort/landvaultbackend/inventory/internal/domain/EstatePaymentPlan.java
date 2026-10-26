@@ -1,7 +1,10 @@
 package com.techcomfort.landvaultbackend.inventory.internal.domain;
 
 import com.techcomfort.landvaultbackend.common.AbstractEntity;
+import com.techcomfort.landvaultbackend.common.FlexiblePlanCalculator;
 import com.techcomfort.landvaultbackend.common.PaymentFrequency;
+import com.techcomfort.landvaultbackend.common.PlanKind;
+import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -50,13 +53,48 @@ public class EstatePaymentPlan extends AbstractEntity {
     @Column(name = "deposit_amount", updatable = false, precision = 19, scale = 4)
     private BigDecimal depositAmount;
 
-    @Column(name = "instalment_count", nullable = false, updatable = false)
+    /** Instalment plans only; null on a flexible plan. */
+    @Column(name = "instalment_count", updatable = false)
     private Integer instalmentCount;
 
+    /** Instalment plans only; null on a flexible plan. */
     @Enumerated(EnumType.STRING)
-    @Column(name = "frequency", nullable = false, updatable = false, length = 16)
+    @Column(name = "frequency", updatable = false, length = 16)
     private PaymentFrequency frequency;
 
     @Column(name = "premium_pct", nullable = false, updatable = false, precision = 5, scale = 2)
     private BigDecimal premiumPct;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "kind", nullable = false, updatable = false, length = 16)
+    private PlanKind kind;
+
+    // Flexible plans only (changeset 110); null on an instalment plan. The minimum to start is depositPct.
+
+    @Column(name = "minimum_contribution", updatable = false, precision = 19, scale = 4)
+    private BigDecimal minimumContribution;
+
+    @Column(name = "exit_deduction_pct", updatable = false, precision = 5, scale = 2)
+    private BigDecimal exitDeductionPct;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "exit_applies_to", updatable = false, length = 16)
+    private RefundAppliesTo exitAppliesTo;
+
+    @Column(name = "developer_gain_share_pct", updatable = false, precision = 5, scale = 2)
+    private BigDecimal developerGainSharePct;
+
+    @Column(name = "inactivity_months", updatable = false)
+    private Integer inactivityMonths;
+
+    @Column(name = "notice_days", updatable = false)
+    private Integer noticeDays;
+
+    @Column(name = "max_months", updatable = false)
+    private Integer maxMonths;
+
+    public FlexiblePlanCalculator.Terms flexibleTerms() {
+        return new FlexiblePlanCalculator.Terms(depositPct, premiumPct, minimumContribution, exitDeductionPct,
+                exitAppliesTo, developerGainSharePct, inactivityMonths, noticeDays, maxMonths);
+    }
 }

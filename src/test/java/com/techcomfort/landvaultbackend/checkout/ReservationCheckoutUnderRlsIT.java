@@ -3103,6 +3103,24 @@ class ReservationCheckoutUnderRlsIT {
                 .isEqualTo("0");
     }
 
+    /** Flexible contribution, phase 1: a flexible plan is published but can't be bought yet (phase 2). */
+    @Test
+    void aFlexiblePlanCantBeChosenYet() {
+        Matcher id = Pattern.compile("\"plans\":\\[\\{\"id\":\"([0-9a-f-]{36})\"").matcher(declarePlans("""
+                [{"name":"Pay as you can","kind":"flexible","depositPct":20,
+                  "flexible":{"exit":{"deductionPct":15,"appliesTo":"amount_paid"},"developerGainSharePct":40,
+                              "inactivityMonths":6,"noticeDays":30}}]
+                """));
+        assertThat(id.find()).isTrue();
+        ReservationDto held = reserve(buyer, plotId);
+
+        ResponseEntity<String> flexible = openRaw(held.id(), "installment", null, UUID.fromString(id.group(1)));
+        assertThat(flexible.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(flexible.getBody()).contains("PLAN_NOT_OFFERED");
+        assertThat(queryString("SELECT count(*) FROM transactions WHERE reservation_id = '" + held.id() + "'"))
+                .isEqualTo("0");
+    }
+
     /**
      * IC-1 + PL-3: the schedule is worked out from the agreed price when the
      * purchase opens, due dates from the offer date, and fixed: redeclaring the

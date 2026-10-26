@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Flexible contribution, phase 1 (decided with the user, 2026-10-26). See
+        AGENTS.md, "Flexible contribution" and
+        ~/Documents/hometrue-flexible-contribution-user-stories.md.
+
+        A flexible plan is a plan in the estate's versioned set (099) with no
+        schedule: a minimum to start (deposit_pct, at least 10% — HomeTrue's
+        floor), an optional minimum contribution, the exit split (a share of
+        each payment, or a fixed sum on the agreed price — the refund terms'
+        two bases), the share of any gain on the next sale the developer keeps
+        (required, no default), the inactivity period before the developer may
+        give notice (at least 6 months), the notice (at least 30 days), an
+        optional maximum time to finish (at least 12 months from the offer
+        date) and the premium (premium_pct, as on instalment plans).
+        Existing rows are instalment plans.
+    -->
+    <changeSet id="110-flexible-plans" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE estate_payment_plans
+                ADD COLUMN kind                     varchar(16) NOT NULL DEFAULT 'INSTALMENT',
+                ADD COLUMN minimum_contribution     numeric(19, 4),
+                ADD COLUMN exit_deduction_pct       numeric(5, 2),
+                ADD COLUMN exit_applies_to          varchar(16),
+                ADD COLUMN developer_gain_share_pct numeric(5, 2),
+                ADD COLUMN inactivity_months        integer,
+                ADD COLUMN notice_days              integer,
+                ADD COLUMN max_months               integer,
+                ALTER COLUMN instalment_count DROP NOT NULL,
+                ALTER COLUMN frequency DROP NOT NULL,
+                ADD CONSTRAINT chk_estate_payment_plans_kind CHECK (kind IN ('INSTALMENT', 'FLEXIBLE')),
+                ADD CONSTRAINT chk_estate_payment_plans_instalment_terms CHECK (kind <> 'INSTALMENT' OR (
+                    instalment_count IS NOT NULL AND frequency IS NOT NULL
+                    AND minimum_contribution IS NULL AND exit_deduction_pct IS NULL AND exit_applies_to IS NULL
+                    AND developer_gain_share_pct IS NULL AND inactivity_months IS NULL AND notice_days IS NULL
+                    AND max_months IS NULL)),
+                ADD CONSTRAINT chk_estate_payment_plans_flexible_terms CHECK (kind <> 'FLEXIBLE' OR (
+                    instalment_count IS NULL AND frequency IS NULL
+                    AND deposit_pct IS NOT NULL AND deposit_pct >= 10 AND deposit_amount IS NULL
+                    AND (minimum_contribution IS NULL OR minimum_contribution > 0)
+                    AND exit_deduction_pct IS NOT NULL AND exit_deduction_pct >= 0 AND exit_deduction_pct <= 100
+                    AND exit_applies_to IN ('AMOUNT_PAID', 'TOTAL_PRICE')
+                    AND developer_gain_share_pct IS NOT NULL
+                    AND developer_gain_share_pct >= 0 AND developer_gain_share_pct <= 100
+                    AND inactivity_months BETWEEN 6 AND 60
+                    AND notice_days BETWEEN 30 AND 365
+                    AND (max_months IS NULL OR max_months BETWEEN 12 AND 240)));
+
+            COMMENT ON COLUMN estate_payment_plans.kind IS
+                'INSTALMENT (a schedule) or FLEXIBLE (any amount, any time; see AGENTS.md, "Flexible contribution").';
+            COMMENT ON COLUMN estate_payment_plans.developer_gain_share_pct IS
+                'Flexible: the share of any gain on the plot''s next completed sale through HomeTrue the developer keeps; the buyer who left gets the rest. Required, no default.';
+        ]]></sql>
+        <rollback><![CDATA[
+            DELETE FROM estate_payment_plans WHERE kind = 'FLEXIBLE';
+            ALTER TABLE estate_payment_plans
+                DROP CONSTRAINT chk_estate_payment_plans_flexible_terms,
+                DROP CONSTRAINT chk_estate_payment_plans_instalment_terms,
+                DROP CONSTRAINT chk_estate_payment_plans_kind,
+                ALTER COLUMN instalment_count SET NOT NULL,
+                ALTER COLUMN frequency SET NOT NULL,
+                DROP COLUMN max_months, DROP COLUMN notice_days, DROP COLUMN inactivity_months,
+                DROP COLUMN developer_gain_share_pct, DROP COLUMN exit_applies_to, DROP COLUMN exit_deduction_pct,
+                DROP COLUMN minimum_contribution, DROP COLUMN kind;
+        ]]></rollback>
+    </changeSet>
+
+    <!-- The published plans gain the flexible terms (appended, so CREATE OR REPLACE keeps the grants). -->
+    <changeSet id="110-marketplace-payment-plans-flexible" author="landvault">
+        <sql><![CDATA[
+            CREATE OR REPLACE VIEW marketplace_payment_plans WITH (security_barrier = true) AS
+            SELECT
+                p.id                        AS plan_id,
+                p.estate_id                 AS estate_id,
+                p.sort_order                AS sort_order,
+                p.name                      AS name,
+                p.deposit_pct               AS deposit_pct,
+                p.deposit_amount            AS deposit_amount,
+                p.instalment_count          AS instalment_count,
+                p.frequency                 AS frequency,
+                p.premium_pct               AS premium_pct,
+                p.kind                      AS kind,
+                p.minimum_contribution      AS minimum_contribution,
+                p.exit_deduction_pct        AS exit_deduction_pct,
+                p.exit_applies_to           AS exit_applies_to,
+                p.developer_gain_share_pct  AS developer_gain_share_pct,
+                p.inactivity_months         AS inactivity_months,
+                p.notice_days               AS notice_days,
+                p.max_months                AS max_months
+            FROM estate_payment_plans p
+            JOIN estates e ON e.id = p.estate_id
+            JOIN marketplace_estate_eligibility el ON el.estate_id = p.estate_id AND el.eligible
+            WHERE p.deleted = false AND p.version = e.payment_plans_version;
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP VIEW marketplace_payment_plans;
+            CREATE VIEW marketplace_payment_plans WITH (security_barrier = true) AS
+            SELECT
+                p.id                AS plan_id,
+                p.estate_id         AS estate_id,
+                p.sort_order        AS sort_order,
+                p.name              AS name,
+                p.deposit_pct       AS deposit_pct,
+                p.deposit_amount    AS deposit_amount,
+                p.instalment_count  AS instalment_count,
+                p.frequency         AS frequency,
+                p.premium_pct       AS premium_pct
+            FROM estate_payment_plans p
+            JOIN estates e ON e.id = p.estate_id
+            JOIN marketplace_estate_eligibility el ON el.estate_id = p.estate_id AND el.eligible
+            WHERE p.deleted = false AND p.version = e.payment_plans_version;
+            REVOKE ALL ON marketplace_payment_plans FROM PUBLIC;
+            REVOKE ALL ON marketplace_payment_plans FROM ${appDbUsername};
+            GRANT SELECT ON marketplace_payment_plans TO ${appDbUsername};
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>
