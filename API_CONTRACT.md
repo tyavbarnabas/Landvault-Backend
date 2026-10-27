@@ -424,7 +424,15 @@ offer letter; phase 3a is the first payment (below). Later payments, payouts and
   portfolio `totalPrice − paidAmount`.
 - **Finishing**: the payment that reaches the plan total — verified by finance — sells the plot (`status: "verified"`)
   and issues the final allocation letter (`HT-ALC-`). A first payment of the whole total finishes it at once.
-- Not yet: leaving (`PLAN_NOT_WITHDRAWABLE`), dormancy notices, "sell my plot" and the gain share.
+- **Leaving (phase 4)**: the same `GET|POST /api/transactions/{id}/withdrawal` as an instalment plan — the quote,
+  then confirm naming its `refund`. Refunded from escrow less the developer's declared share.
+- **A quiet plan (phase 4)**: `transaction.flexibleStanding` — `paid`, `remaining`, `awaitingFinance`,
+  `lastPaymentOn`, `quietFrom`, `finishBy`, `noticeReason` (`inactivity` | `finish_by` | null) and `notice`
+  (`trigger`, `reason`, `givenAt`, `deadline`, `confirmableFrom`). The developer reads
+  `GET /api/portal/finance/flexible-plans` (`portal.payments.verify`, notice-able plans first) and gives notice
+  through the revocation routes (`portal.plans.revoke`); `PlanRevocation` then carries `flexible` and each notice a
+  `trigger`. A verified payment ends an inactivity notice; only finishing ends a finish-by one.
+- Not yet: "sell my plot" and the gain share.
 
 - **Declared in the same set as instalment plans** (`PUT /api/portal/estates/{id}/payment-plans`). Each plan gains an
   optional **`kind`**: `installment` (when left out — existing calls are unchanged) or `flexible`. A flexible plan:

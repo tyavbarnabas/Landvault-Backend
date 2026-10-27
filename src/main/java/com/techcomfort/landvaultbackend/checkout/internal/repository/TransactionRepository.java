@@ -109,7 +109,7 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
     List<Object[]> findOnPlan(@Param("tenantId") UUID tenantId, @Param("ids") Collection<UUID> ids);
 
     /**
-     * Phase 4: every running instalment plan (flexible plans have no schedule to remind about) — one company's ({@code :tenantId}) or, with
+     * Phase 4: every running plan of one kind ({@code :plan}, INSTALLMENT or FLEXIBLE) — one company's ({@code :tenantId}) or, with
      * platform scope and a null id, everyone's — read under the caller's RLS,
      * so a branch officer sees only their branch's.
      */
@@ -117,10 +117,10 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
             + "b.name AS block_name, p.plot_number, t.buyer_user_id, t.plan_name, t.currency, t.updated_at "
             + "FROM transactions t JOIN plots p ON p.id = t.plot_id JOIN estates e ON e.id = t.estate_id "
             + "LEFT JOIN blocks b ON b.id = p.block_id "
-            + "WHERE t.status = 'ON_PLAN' AND t.plan = 'INSTALLMENT' "
+            + "WHERE t.status = 'ON_PLAN' AND t.plan = :plan "
             + "AND (CAST(:tenantId AS uuid) IS NULL OR t.seller_tenant_id = :tenantId) "
             + "ORDER BY t.updated_at", nativeQuery = true)
-    List<Object[]> findRunningPlans(@Param("tenantId") UUID tenantId);
+    List<Object[]> findRunningPlans(@Param("tenantId") UUID tenantId, @Param("plan") String plan);
 
     /** Once only: a plan paid in full becomes a verified sale. */
     @Modifying

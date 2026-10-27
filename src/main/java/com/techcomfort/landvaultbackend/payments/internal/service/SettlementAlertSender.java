@@ -107,6 +107,20 @@ public interface SettlementAlertSender {
     enum RevocationStage { NOTICE, CANCELLED, CLEARED, REVOKED }
 
     /**
+     * Flexible contribution, phase 4: to the buyer, at each step of a notice on
+     * a quiet plan. {@code trigger} is `inactivity` or `finish_by`; amounts are
+     * plain naira strings; {@code refund}/{@code developerKeeps} only on NOTICE
+     * and REVOKED; {@code note} the developer's reason or cancellation note.
+     */
+    record QuietPlanAlert(String to, RevocationStage stage, String purchaseReference, String planName,
+                          String plotLabel, String trigger, int inactivityMonths, String lastPaymentOn,
+                          String finishBy, String remaining, String deadline, String refund, String developerKeeps,
+                          String note, String purchaseUrl) {
+    }
+
+    void quietPlan(QuietPlanAlert alert);
+
+    /**
      * Phase 5b: to the buyer, at each step of a revocation. Amounts are plain
      * naira strings. {@code totalDue}: what is overdue with its penalties, for
      * a notice; {@code refund}/{@code developerKeeps}: what a revocation returns

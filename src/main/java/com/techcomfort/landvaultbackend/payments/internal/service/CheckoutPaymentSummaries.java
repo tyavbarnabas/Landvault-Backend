@@ -3,6 +3,8 @@ package com.techcomfort.landvaultbackend.payments.internal.service;
 import com.techcomfort.landvaultbackend.checkout.PaymentSummary;
 import com.techcomfort.landvaultbackend.checkout.PlanPayment;
 import com.techcomfort.landvaultbackend.checkout.PlanRefund;
+import com.techcomfort.landvaultbackend.checkout.FlexiblePurchase;
+import com.techcomfort.landvaultbackend.checkout.FlexibleStanding;
 import com.techcomfort.landvaultbackend.checkout.PaymentSummaryProvider;
 import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
 import com.techcomfort.landvaultbackend.checkout.PlanStanding;
@@ -45,10 +47,17 @@ public class CheckoutPaymentSummaries implements PaymentSummaryProvider {
     private final RefundRepository refunds;
     private final ReceiptLookup receiptLookup;
     private final PlanStandings planStandings;
+    private final FlexibleStandings flexibleStandings;
 
     @Override
     public Map<UUID, PlanStanding> standingsFor(Map<UUID, PlanSchedule> schedules) {
         return planStandings.standingsOf(schedules, PlanStandings.today());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Map<UUID, FlexibleStanding> flexibleStandingsFor(Map<UUID, FlexiblePurchase> plans) {
+        return flexibleStandings.standingsOf(plans);
     }
 
     @Override

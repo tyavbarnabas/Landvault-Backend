@@ -1,6 +1,7 @@
 package com.techcomfort.landvaultbackend.payments.internal.domain;
 
 import com.techcomfort.landvaultbackend.common.AbstractEntity;
+import com.techcomfort.landvaultbackend.payments.internal.enums.NoticeTrigger;
 import com.techcomfort.landvaultbackend.payments.internal.enums.RevocationStatus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -8,6 +9,7 @@ import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -57,11 +59,17 @@ public class PlanRevocation extends AbstractEntity {
     @Column(name = "notice_days", nullable = false, updatable = false)
     private Integer noticeDays;
 
-    /** The oldest instalment that met the trigger when notice was given. */
-    @Column(name = "instalment_sequence", nullable = false, updatable = false)
+    /** Why notice was given (changeset 113). Every instalment-plan notice is ARREARS. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "trigger", nullable = false, updatable = false, length = 16)
+    @Builder.Default
+    private NoticeTrigger trigger = NoticeTrigger.ARREARS;
+
+    /** The oldest instalment that met the trigger when notice was given; null on a flexible plan's notice. */
+    @Column(name = "instalment_sequence", updatable = false)
     private Integer instalmentSequence;
 
-    @Column(name = "instalment_due_date", nullable = false, updatable = false)
+    @Column(name = "instalment_due_date", updatable = false)
     private LocalDate instalmentDueDate;
 
     @Column(name = "notice_given_at", nullable = false, updatable = false)

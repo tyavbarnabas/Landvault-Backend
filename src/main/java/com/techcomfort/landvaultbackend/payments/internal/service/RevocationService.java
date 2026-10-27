@@ -63,16 +63,24 @@ public class RevocationService {
     private final IdentityApi identityApi;
     private final SettlementAlertSender alerts;
     private final BuyerNotifier buyerNotifier;
+    /** Phase 4 of flexible contribution: a quiet flexible plan, through the same routes. */
+    private final FlexibleNoticeService flexibleNotices;
 
     @Transactional(readOnly = true)
     public RevocationDto get(UUID transactionId) {
         TenantScope scope = companyWide();
+        if (flexibleNotices.handles(transactionId, scope)) {
+            return flexibleNotices.get(transactionId, scope);
+        }
         return view(plan(transactionId, scope), PlanStandings.today());
     }
 
     @Transactional
     public RevocationDto start(UUID transactionId, String reason) {
         TenantScope scope = companyWide();
+        if (flexibleNotices.handles(transactionId, scope)) {
+            return flexibleNotices.start(transactionId, scope, reason);
+        }
         Plan plan = plan(transactionId, scope);
         PayableTransaction purchase = requireRunning(plan);
         RevocationTerms terms = requireTerms(plan);
@@ -119,6 +127,9 @@ public class RevocationService {
     @Transactional
     public RevocationDto cancel(UUID transactionId, String note) {
         TenantScope scope = companyWide();
+        if (flexibleNotices.handles(transactionId, scope)) {
+            return flexibleNotices.cancel(transactionId, scope, note);
+        }
         Plan plan = plan(transactionId, scope);
         PlanRevocation notice = revocations.findOpenLocked(transactionId)
                 .orElseThrow(PaymentException.NoOpenRevocation::new);
@@ -134,6 +145,9 @@ public class RevocationService {
     @Transactional
     public RevocationDto confirm(UUID transactionId) {
         TenantScope scope = companyWide();
+        if (flexibleNotices.handles(transactionId, scope)) {
+            return flexibleNotices.confirm(transactionId, scope);
+        }
         Plan plan = plan(transactionId, scope);
         PayableTransaction purchase = requireRunning(plan);
         RevocationTerms terms = requireTerms(plan);
@@ -214,13 +228,13 @@ public class RevocationService {
                 running && progress.revocationTrigger(today).isPresent(),
                 arrears == null ? BigDecimal.ZERO : arrears.totalDue(),
                 all.stream().filter(PlanRevocation::isOpen).findFirst().map(RevocationService::notice).orElse(null),
-                settlement, all.stream().map(RevocationService::notice).toList());
+                settlement, all.stream().map(RevocationService::notice).toList(), null);
     }
 
-    private static RevocationDto.Notice notice(PlanRevocation r) {
+    static RevocationDto.Notice notice(PlanRevocation r) {
         return new RevocationDto.Notice(r.getId(), r.getStatus().wire(), r.getReason(), r.getNoticeGivenAt(),
-                r.getDeadline(), r.getDeadline().plusDays(1), r.getInstalmentSequence(), r.getClosedAt(),
-                r.getCloseNote());
+                r.getDeadline(), r.getDeadline().plusDays(1), r.getInstalmentSequence(), r.getTrigger().wire(),
+                r.getClosedAt(), r.getCloseNote());
     }
 
     // --- rules ---
@@ -251,7 +265,7 @@ public class RevocationService {
     }
 
     /** Revocation is a company decision: never from a branch-narrowed view. */
-    private static TenantScope companyWide() {
+    static TenantScope companyWide() {
         TenantScope scope = TenantContext.get().orElseThrow(() -> new IllegalStateException(
                 "No TenantContext for an authenticated request — TenantContextFilter should have set one."));
         if (scope.tenantId() == null || scope.branchId() != null) {

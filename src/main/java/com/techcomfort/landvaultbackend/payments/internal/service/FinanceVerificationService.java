@@ -341,8 +341,20 @@ public class FinanceVerificationService {
             throw new PaymentException.PaymentNotConfirmed();
         }
         markVerified(payment, actor);
+        if (c.row().planEnded()) {
+            // Phase 4: the buyer left (or the plan was ended) while this waited; the buyer's part is already
+            // owed back, and verifying only makes the developer's share of it payable.
+            auditApi.record(AuditEntryRequest.of(actor, "payment.contribution_verified", "payment", payment.getId(),
+                    tenantId, "Contribution " + payment.getReference() + " for " + c.row().transactionReference()
+                            + " verified by finance after the plan ended (" + c.row().planStatus()
+                            + "); the developer's share is now payable."));
+            return FinanceDecisionDto.of(payment.getTransactionId(), c.row().planStatus());
+        }
         FlexibleProgress after = FlexibleProgress.of(c.progress().plan(),
                 payments.findAllByTransactionIdOrderByCreatedAtAsc(payment.getTransactionId()));
+        // Phase 4, decision 3: a verified payment ends an inactivity notice; finishing ends any notice.
+        revocationNotices.clearOnContribution(payment.getTransactionId(), c.row().transactionReference(),
+                c.row().planName(), c.row().plotLabel() + ", " + c.row().estateName(), after.complete());
         auditApi.record(AuditEntryRequest.of(actor, "payment.contribution_verified", "payment", payment.getId(),
                 tenantId, "Contribution " + payment.getReference() + " of ₦" + payment.getAmount().toPlainString()
                         + " for " + c.row().transactionReference() + " verified by finance (₦"
@@ -373,6 +385,12 @@ public class FinanceVerificationService {
         Payment payment = c.payment();
         payment.setReviewReason("Refund due: finance rejected this payment — " + reason);
         payment.setRefundRequestedAt(Instant.now());
+        if (c.row().planEnded()) {
+            // Phase 4: the buyer's part is already owed back; now the developer's share is too.
+            payment.setRefundAmount(null);
+            payment.setRefundReason("The developer's finance rejected this payment after your plan ended — "
+                    + "returned in full.");
+        }
         payments.save(payment);
         auditApi.record(AuditEntryRequest.of(actor, "payment.refund_due", "payment", payment.getId(), tenantId,
                 "Contribution " + payment.getReference() + " rejected by finance and flagged for refund; the plan "

@@ -3197,8 +3197,7 @@ class ReservationCheckoutUnderRlsIT {
      * Flexible contribution, phase 3a: the first payment is the buyer's own
      * figure, between the minimum to start and the plan total; finance checks it
      * against those limits, and verifying holds the plot on the plan with a
-     * provisional letter carrying the flexible terms. Nothing can be late, and
-     * leaving waits for phase 4.
+     * provisional letter carrying the flexible terms. Nothing can be late.
      */
     @Test
     void aFlexiblePlansFirstPaymentIsTheBuyersOwnFigureAndHoldsThePlot() {
@@ -3261,7 +3260,7 @@ class ReservationCheckoutUnderRlsIT {
         assertThat(get("/api/portal/finance/plans", officer, String.class).getBody())
                 .as("the running-instalment-plans view has no schedule to show").doesNotContain(purchase.id().toString());
         assertThat(get("/api/transactions/" + purchase.id() + "/withdrawal", buyer.token(), String.class).getBody())
-                .as("leaving comes with phase 4").contains("PLAN_NOT_WITHDRAWABLE");
+                .as("leaving would return the first payment less the developer's 20%").contains("\"refund\":4000000");
     }
 
     /**
@@ -3329,6 +3328,127 @@ class ReservationCheckoutUnderRlsIT {
         assertThat(owed.path("trancheAmount").decimalValue()).as("the first share").isEqualByComparingTo("1000000");
         assertThat(owed.path("amountOwed").decimalValue()).as("three shares and the release: everything paid")
                 .isEqualByComparingTo("22000000");
+    }
+
+    /**
+     * Flexible contribution, phase 4: the buyer leaves at any time, without
+     * anyone's approval, and is refunded from escrow less the developer's
+     * declared share (20% of what was paid) — a payment still waiting for
+     * finance counts. The plot goes back on sale; verifying the waiting
+     * payment afterwards only makes the developer's share of it payable.
+     */
+    @Test
+    void aBuyerLeavesAFlexiblePlanAndIsRefundedFromEscrow() {
+        String before = plotStatus(plotId);
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        TransactionDto purchase = flexibleHeldOnPlan("5000000", officer);
+        contribute(purchase, "3000000", 300_000_000L);
+
+        JsonNode quote = objectMapper.readTree(get("/api/transactions/" + purchase.id() + "/withdrawal", buyer.token(),
+                String.class).getBody());
+        assertThat(quote.path("refund").decimalValue()).as("₦4M + ₦2.4M back").isEqualByComparingTo("6400000");
+        assertThat(quote.path("developerKeeps").decimalValue()).isEqualByComparingTo("1600000");
+        ResponseEntity<String> left = restTemplate.exchange("/api/transactions/" + purchase.id() + "/withdrawal",
+                HttpMethod.POST, entity(buyer.token(), "{\"refund\":6400000}"), String.class);
+        assertThat(left.getStatusCode()).as(left.getBody()).isEqualTo(HttpStatus.OK);
+
+        assertThat(queryString("SELECT status FROM transactions WHERE id = '" + purchase.id() + "'"))
+                .isEqualTo("WITHDRAWN");
+        assertThat(plotStatus(plotId)).as("back on sale as it was").isEqualTo(before);
+        assertThat(queryString("SELECT status FROM owned_plots WHERE transaction_id = '" + purchase.id() + "'"))
+                .isEqualTo("WITHDRAWN");
+        assertThat(queryString("SELECT string_agg(refund_amount::text, ',' ORDER BY paid_at) FROM payments WHERE "
+                + "transaction_id = '" + purchase.id() + "' AND refund_requested_at IS NOT NULL"))
+                .isEqualTo("4000000.00,2400000.00");
+        assertThat(documents(buyer).items()).filteredOn(d -> "provisional_allocation_letter".equals(d.type()))
+                .singleElement().satisfies(d -> assertThat(d.status()).isEqualTo("withdrawn"));
+
+        ResponseEntity<String> late = financeAction(officer, purchase.id(), "verify", null);
+        assertThat(late.getBody()).as(late.getBody()).contains("\"status\":\"withdrawn\"");
+        approvedPayoutAccount(seller.id(), "RCP_seller");
+        JsonNode owed = objectMapper.readTree(readyFor(payoutAdmin(true), purchase));
+        assertThat(owed.path("amountOwed").decimalValue()).as("the two shares, never a release")
+                .isEqualByComparingTo("1600000");
+    }
+
+    /**
+     * Flexible contribution, phase 4: a plan with no payment Paystack confirmed
+     * for its inactivity period (6 months) may be given notice by the Executive
+     * Director; a verified payment ends that notice. Quiet again, and the notice
+     * run out, the plan is ended on the terms for leaving.
+     */
+    @Test
+    void aQuietFlexiblePlanIsGivenNoticeAPaymentEndsItAndOtherwiseThePlanEnds() {
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        TransactionDto purchase = flexibleHeldOnPlan("5000000", officer);
+        String director = seller.token();
+        LocalDate today = LocalDate.now(ZoneId.of("Africa/Lagos"));
+
+        assertThat(revocation(director, purchase, "", "{\"reason\":\"Quiet\"}").getBody()).as("paid today")
+                .contains("REVOCATION_NOT_DUE", "from " + today.plusMonths(6));
+        String paid = "UPDATE payments SET paid_at = now() - interval '7 months' WHERE transaction_id = '"
+                + purchase.id() + "'";
+        execute(paid);
+        assertThat(get("/api/portal/finance/flexible-plans", officer, String.class).getBody())
+                .contains(purchase.id().toString(), "\"noticeReason\":\"inactivity\"");
+        assertThat(revocation(officer, purchase, "", "{\"reason\":\"Quiet\"}").getStatusCode())
+                .as("the Executive Director's decision").isEqualTo(HttpStatus.FORBIDDEN);
+
+        ResponseEntity<String> given = revocation(director, purchase, "", "{\"reason\":\"No payment since spring.\"}");
+        assertThat(given.getStatusCode()).as(given.getBody()).isEqualTo(HttpStatus.OK);
+        assertThat(given.getBody()).contains("\"status\":\"notice\"", "\"trigger\":\"inactivity\"",
+                "\"deadline\":\"" + today.plusDays(30) + "\"");
+        FlexibleStanding told = get("/api/checkout/transactions/" + purchase.id(), buyer.token(), TransactionDto.class)
+                .getBody().flexibleStanding();
+        assertThat(told.notice().trigger()).isEqualTo("inactivity");
+        assertThat(told.notice().confirmableFrom()).isEqualTo(today.plusDays(31));
+        verify(alerts, atLeastOnce()).quietPlan(argThat(a -> a.stage() == SettlementAlertSender.RevocationStage.NOTICE
+                && "4000000.00".equals(a.refund())));
+
+        contribute(purchase, "200000", 20_000_000L);
+        execute("UPDATE plan_revocations SET deadline = current_date - 1 WHERE transaction_id = '" + purchase.id() + "'");
+        assertThat(revocation(director, purchase, "/confirm", null).getBody()).as("verify or reject it first")
+                .contains("REVOCATION_NOT_DUE", "waiting for your finance team");
+        assertThat(financeAction(officer, purchase.id(), "verify", null).getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(queryString("SELECT status FROM plan_revocations WHERE transaction_id = '" + purchase.id() + "'"))
+                .as("a verified payment ends an inactivity notice").isEqualTo("CLEARED");
+        verify(alerts, atLeastOnce()).quietPlan(argThat(a -> a.stage() == SettlementAlertSender.RevocationStage.CLEARED));
+
+        execute(paid);
+        assertThat(revocation(director, purchase, "", "{\"reason\":\"Quiet again.\"}").getStatusCode())
+                .isEqualTo(HttpStatus.OK);
+        execute("UPDATE plan_revocations SET deadline = current_date - 1 WHERE transaction_id = '" + purchase.id()
+                + "' AND status = 'NOTICE'");
+        ResponseEntity<String> ended = revocation(director, purchase, "/confirm", null);
+        assertThat(ended.getStatusCode()).as(ended.getBody()).isEqualTo(HttpStatus.OK);
+        assertThat(objectMapper.readTree(ended.getBody()).path("status").asString()).isEqualTo("revoked");
+        assertThat(queryString("SELECT status FROM owned_plots WHERE transaction_id = '" + purchase.id() + "'"))
+                .isEqualTo("REVOKED");
+        assertThat(queryString("SELECT string_agg(refund_amount::text, ',' ORDER BY amount DESC) FROM payments WHERE "
+                + "transaction_id = '" + purchase.id() + "' AND refund_requested_at IS NOT NULL"))
+                .as("exactly leaving's figures").isEqualTo("4000000.00,160000.00");
+    }
+
+    /** Flexible contribution, phase 4: past the date to finish by, a payment doesn't end the notice — finishing does. */
+    @Test
+    void aFinishByNoticeEndsOnlyWhenThePlanIsFinished() {
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        TransactionDto purchase = flexibleHeldOnPlan("5000000", officer);
+        execute("UPDATE transactions SET flexible_finish_by = current_date - 1 WHERE id = '" + purchase.id() + "'");
+
+        ResponseEntity<String> given = revocation(seller.token(), purchase, "", "{\"reason\":\"Past the date.\"}");
+        assertThat(given.getBody()).as(given.getBody()).contains("\"trigger\":\"finish_by\"");
+        contribute(purchase, "1000000", 100_000_000L);
+        financeAction(officer, purchase.id(), "verify", null);
+        assertThat(queryString("SELECT status FROM plan_revocations WHERE transaction_id = '" + purchase.id() + "'"))
+                .as("a payment isn't finishing").isEqualTo("NOTICE");
+
+        String last = startPaymentRaw(purchase.id(), "?balance=true");
+        paystackSays(last, "success", 1_600_000_000L, "NGN", "Approved");
+        confirm(buyer, last);
+        assertThat(financeAction(officer, purchase.id(), "verify", null).getBody()).contains("\"status\":\"verified\"");
+        assertThat(queryString("SELECT status FROM plan_revocations WHERE transaction_id = '" + purchase.id() + "'"))
+                .as("finishing the plan ends it").isEqualTo("CLEARED");
     }
 
     /** Flexible 3b: a first payment of the whole plan total finishes the plan at once. */

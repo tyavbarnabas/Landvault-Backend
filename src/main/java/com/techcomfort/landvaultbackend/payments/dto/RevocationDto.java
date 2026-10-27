@@ -2,6 +2,8 @@ package com.techcomfort.landvaultbackend.payments.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 
+import com.techcomfort.landvaultbackend.checkout.FlexibleStanding;
+
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -49,7 +51,13 @@ public record RevocationDto(
         Settlement settlement,
 
         @Schema(description = "Every notice on this plan, newest first, including the open one.")
-        List<Notice> history
+        List<Notice> history,
+
+        @Schema(description = "A flexible plan (phase 4): where it stands — `noticeReason` says why notice may be "
+                + "given today. `afterMonthsUnpaid` is then the plan's inactivity period, `revocableFrom` the day it "
+                + "would count as quiet (or the day after its date to finish by), and `overdueToday` zero: nothing on "
+                + "a flexible plan is ever overdue. Null on an instalment plan.", nullable = true)
+        FlexibleStanding flexible
 ) {
 
     /**
@@ -66,8 +74,11 @@ public record RevocationDto(
             @Schema(description = "The last day (Lagos) the buyer may pay what is overdue.") LocalDate deadline,
             @Schema(description = "The day the revocation can be confirmed, if the buyer hasn't caught up.")
             LocalDate confirmableFrom,
-            @Schema(description = "The instalment that made the plan revocable when notice was given.")
-            int instalmentSequence,
+            @Schema(description = "The instalment that made the plan revocable when notice was given; null on a "
+                    + "flexible plan.", nullable = true)
+            Integer instalmentSequence,
+            @Schema(description = "Why notice was given: `arrears` (an instalment plan), `inactivity` or `finish_by` "
+                    + "(a flexible plan).") String trigger,
             @Schema(nullable = true) Instant closedAt,
             @Schema(nullable = true) String closeNote
     ) {
