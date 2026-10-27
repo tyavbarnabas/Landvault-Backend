@@ -118,7 +118,9 @@ public class PaymentService {
                     "The amount comes from your purchase; only a flexible plan lets you choose it.");
         }
         if (transaction.isOnPlan()) {
-            return start(transaction, buyerId, instalmentDue(transaction, balance));
+            return start(transaction, buyerId, transaction.isFlexible()
+                    ? new Due(laterContribution(transaction, balance, amount), PaymentPurpose.CONTRIBUTION, null)
+                    : instalmentDue(transaction, balance));
         }
         if (balance) {
             throw new PaymentException.NothingToPayOff();
@@ -189,6 +191,43 @@ public class PaymentService {
         }
         if (amount.compareTo(plan.minimumToStart()) < 0 || amount.compareTo(plan.planTotal()) > 0) {
             throw new PaymentException.InvalidAmount("Your first payment must be " + limits + ".");
+        }
+        return amount;
+    }
+
+    /**
+     * Flexible contribution, phase 3b: any amount up to what's left — at least
+     * the declared minimum contribution unless it finishes the plan — or, with
+     * {@code balance}, exactly what's left. One payment waits for finance at a
+     * time, as on an instalment plan (decision 1).
+     */
+    private BigDecimal laterContribution(PayableTransaction transaction, boolean balance, BigDecimal amount) {
+        FlexibleProgress progress = FlexibleProgress.of(transaction.flexible(),
+                payments.findAllByTransactionIdOrderByCreatedAtAsc(transaction.id()));
+        if (progress.awaitingFinance().isPresent()) {
+            throw new PaymentException.InstalmentAwaitingVerification();
+        }
+        if (progress.complete()) {
+            throw new PaymentException.TransactionNotPayable("paid in full");
+        }
+        BigDecimal remaining = progress.remaining();
+        if (balance) {
+            if (amount != null && amount.compareTo(remaining) != 0) {
+                throw new PaymentException.InvalidAmount("balance=true pays what's left, " + naira(remaining)
+                        + "; leave amount out, or send that figure.");
+            }
+            return remaining;
+        }
+        BigDecimal minimum = transaction.flexible().minimumContribution();
+        // What's left may be below the minimum contribution: then finishing is the only payment.
+        String limits = minimum == null ? "up to " + naira(remaining)
+                : minimum.compareTo(remaining) >= 0 ? "exactly " + naira(remaining) + ", what's left"
+                : "at least " + naira(minimum) + " and at most " + naira(remaining);
+        if (amount == null) {
+            throw new PaymentException.InvalidAmount("Choose how much to pay (amount): " + limits + ".");
+        }
+        if (!progress.allows(amount)) {
+            throw new PaymentException.InvalidAmount("This payment must be " + limits + ".");
         }
         return amount;
     }

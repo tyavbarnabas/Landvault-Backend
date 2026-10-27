@@ -77,7 +77,7 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
 
     /**
      * Sales the seller is owed on, for payouts: verified ones, (3c)
-     * instalment purchases on their plan, and (5a/5b) withdrawn or revoked plans — the
+     * instalment and flexible purchases on their plan, and (5a/5b) withdrawn or revoked plans — the
      * developer's declared share is still theirs. Rows: transaction id, reference,
      * seller tenant id, estate name, block name, plot number, total price,
      * currency, verified at (the last status change), plan, status, escrow
@@ -88,7 +88,8 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
             + "t.penalties_refundable "
             + "FROM transactions t JOIN plots p ON p.id = t.plot_id JOIN estates e ON e.id = t.estate_id "
             + "LEFT JOIN blocks b ON b.id = p.block_id "
-            + "WHERE (t.status = 'VERIFIED' OR (t.status IN ('ON_PLAN', 'WITHDRAWN', 'REVOKED') AND t.plan = 'INSTALLMENT')) "
+            + "WHERE (t.status = 'VERIFIED' OR (t.status IN ('ON_PLAN', 'WITHDRAWN', 'REVOKED') "
+            + "AND t.plan IN ('INSTALLMENT', 'FLEXIBLE'))) "
             + "AND (CAST(:id AS uuid) IS NULL OR t.id = :id) "
             + "ORDER BY t.updated_at", nativeQuery = true)
     List<Object[]> findVerifiedSales(@Param("id") UUID id);
@@ -101,7 +102,7 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
      */
     @Query(value = "SELECT t.id, t.reference, e.id AS estate_id, e.name, p.id AS plot_id, b.name AS block_name, "
             + "p.plot_number, t.buyer_user_id, t.total_price, t.currency, t.updated_at, t.deposit_amount, "
-            + "t.plan_name, t.status "
+            + "t.plan_name, t.status, CASE WHEN t.plan = 'FLEXIBLE' THEN t.plan_total END AS flexible_plan_total "
             + "FROM transactions t JOIN plots p ON p.id = t.plot_id JOIN estates e ON e.id = t.estate_id "
             + "LEFT JOIN blocks b ON b.id = p.block_id "
             + "WHERE t.status IN ('ON_PLAN', 'WITHDRAWN', 'REVOKED') AND t.seller_tenant_id = :tenantId AND t.id IN (:ids)", nativeQuery = true)

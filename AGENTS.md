@@ -6746,9 +6746,29 @@ can only be refunded; no reminders.
   list have no schedule to show); payouts never list a running flexible plan (`findVerifiedSales` was already
   instalment-only for `ON_PLAN`); leaving (`PLAN_NOT_WITHDRAWABLE`), restructures and waivers refuse it (no escrow
   terms or schedule for them); a late first payment is refund-only (`LATE_DEPOSIT_NOT_SUPPORTED`).
-- **Not yet (3b)**: later contributions (paying again on `on_plan` is still `PAYMENT_PLAN_NOT_SUPPORTED`), escrow
-  payouts, completion and the final letter. **Before completing anything in 3b**: a `VERIFIED` flexible purchase
-  would reach `findVerifiedSales` with no escrow and be paid out as an outright sale — 3b must add its escrow.
+
+### Phase 3b: later payments, escrow payouts and finishing
+
+- **Paying again** (`?amount=` on an `on_plan` flexible purchase): at least the declared minimum contribution unless
+  it is exactly what's left, never more than what's left; `?balance=true` pays exactly what's left. One payment waits
+  for finance at a time (`INSTALMENT_AWAITING_VERIFICATION`). `FlexibleProgress` is the one reading of the plan —
+  what finance verified, what's waiting, what's left — the schedule-free twin of `PlanProgress`; a rejected payment
+  (flagged for refund) doesn't count.
+- **Confirmation**: a contribution on a running plan is a plan payment — it doesn't move the purchase, finance
+  verifies it on its own; the first still moves `pending_payment → awaiting_finance`.
+- **Finance**: later contributions join the plan-payment part of the queue (`paymentFor: contribution`,
+  `remainingAfter`), checked against the limits *as they stand at verification*. A rejected one is refunded alone and
+  the plan carries on. The payment that reaches the plan total completes the plan in the same transaction
+  (`CheckoutApi.completePlan`: plot `SOLD`, purchase `verified`, portfolio `COMPLETED`, the final letter) — including
+  a first payment of the whole total, which issues the provisional letter and then the final one. That needed
+  `verifyAndAllocate` to refresh its copy of the purchase after the native status update, or `completePlan` read it
+  as still awaiting finance.
+- **The final letter carries no plan terms**: once paid in full there is nothing to leave or sell, so it prints the
+  conditions alone, like an outright sale's. Only the provisional letter carries the flexible terms.
+- **Escrow payouts**: `findVerifiedSales` lists flexible plans like instalment ones, with `VerifiedSale.Escrow` built
+  from the plan's own exit split (copied into `escrow_*` at checkout). `PayoutTranches` is unchanged: a share of each
+  verified contribution, the rest held and released at completion — never one full-price `SALE` tranche (asserted).
+- Buyer email on each verified contribution: what was paid, what's paid so far, what's left — no "next due".
 
 ## A buyer's address (changeset 097)
 

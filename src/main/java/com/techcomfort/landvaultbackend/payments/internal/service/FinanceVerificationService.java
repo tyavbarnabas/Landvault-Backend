@@ -5,6 +5,7 @@ import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
 import com.techcomfort.landvaultbackend.checkout.CheckoutApi;
 import com.techcomfort.landvaultbackend.checkout.FinanceDecision;
 import com.techcomfort.landvaultbackend.checkout.FinanceQueueRow;
+import com.techcomfort.landvaultbackend.checkout.FlexiblePurchase;
 import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
 import com.techcomfort.landvaultbackend.common.TenantContext;
 import com.techcomfort.landvaultbackend.common.TenantScope;
@@ -60,7 +61,8 @@ public class FinanceVerificationService {
     private final RevocationNotices revocationNotices;
     private final RestructureNotices restructureNotices;
 
-    private static final List<PaymentPurpose> PLAN_PAYMENTS = List.of(PaymentPurpose.INSTALMENT, PaymentPurpose.BALANCE);
+    private static final List<PaymentPurpose> PLAN_PAYMENTS = List.of(PaymentPurpose.INSTALMENT, PaymentPurpose.BALANCE,
+            PaymentPurpose.CONTRIBUTION);
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.UK);
 
     /**
@@ -81,8 +83,11 @@ public class FinanceVerificationService {
         Map<UUID, FinanceQueueRow> rows = checkoutApi.onPlan(tenantId, ids).stream()
                 .collect(Collectors.toMap(FinanceQueueRow::transactionId, Function.identity()));
         Map<UUID, PlanSchedule> schedules = checkoutApi.schedulesOf(rows.keySet());
+        Map<UUID, FlexiblePurchase> flexible = checkoutApi.flexiblePlansOf(rows.keySet());
         planPayments.stream().filter(p -> rows.containsKey(p.getTransactionId()))
-                .map(p -> planItem(rows.get(p.getTransactionId()), p, schedules.get(p.getTransactionId())))
+                .map(p -> flexible.containsKey(p.getTransactionId())
+                        ? contributionItem(rows.get(p.getTransactionId()), p, flexible.get(p.getTransactionId()))
+                        : planItem(rows.get(p.getTransactionId()), p, schedules.get(p.getTransactionId())))
                 .forEach(items::add);
         return items;
     }
@@ -101,6 +106,10 @@ public class FinanceVerificationService {
                 .findFirst()
                 .orElse(null);
         if (row == null) {
+            Optional<Contribution> contribution = contributionAwaiting(transactionId, tenantId);
+            if (contribution.isPresent()) {
+                return verifyContribution(contribution.get(), tenantId, scope.userId());
+            }
             Optional<PlanPayment> planPayment = planPaymentAwaiting(transactionId, tenantId);
             if (planPayment.isPresent()) {
                 return verifyPlanPayment(planPayment.get(), tenantId, scope.userId());
@@ -121,10 +130,20 @@ public class FinanceVerificationService {
             throw failure(decision);
         }
         markVerified(payment.get(), scope.userId());
+        // Flexible 3b: a first payment of the whole plan total finishes it at once — the
+        // provisional letter, then the final one, in this same transaction.
+        boolean finished = row.isFlexible() && payment.get().getAmount().compareTo(row.flexiblePlanTotal()) == 0;
+        if (finished) {
+            FinanceDecision completed = checkoutApi.completePlan(transactionId, tenantId, scope.userId());
+            if (completed != FinanceDecision.DONE) {
+                throw failure(completed);
+            }
+        }
         log.info("Transaction {} verified by finance user {}; plot allocated", transactionId, scope.userId());
         Optional<AllocationLetterLookup.LetterRef> letter = letterLookup.letterFor(transactionId);
-        tellBuyer(row, payment.get().getAmount(), true, null, letter, row.isDeposit());
-        return row.isDeposit() ? FinanceDecisionDto.depositVerified(transactionId, letter)
+        boolean onPlan = row.isDeposit() && !finished;
+        tellBuyer(row, payment.get().getAmount(), true, null, letter, onPlan);
+        return onPlan ? FinanceDecisionDto.depositVerified(transactionId, letter)
                 : FinanceDecisionDto.verified(transactionId, letter);
     }
 
@@ -135,6 +154,10 @@ public class FinanceVerificationService {
         UUID tenantId = companyOf(scope);
         payments.findAllByTransactionIdIn(List.of(transactionId)).stream().findFirst()
                 .ifPresent(p -> refuseOwnPurchase(p.getBuyerUserId(), scope.userId()));
+        Optional<Contribution> contribution = contributionAwaiting(transactionId, tenantId);
+        if (contribution.isPresent()) {
+            return rejectContribution(contribution.get(), tenantId, scope.userId(), reason.trim());
+        }
         Optional<PlanPayment> planPayment = planPaymentAwaiting(transactionId, tenantId);
         if (planPayment.isPresent()) {
             return rejectPlanPayment(planPayment.get(), tenantId, scope.userId(), reason.trim());
@@ -198,7 +221,7 @@ public class FinanceVerificationService {
 
     private Optional<PlanPayment> planPaymentAwaiting(UUID transactionId, UUID tenantId) {
         Optional<FinanceQueueRow> row = checkoutApi.onPlan(tenantId, List.of(transactionId)).stream().findFirst();
-        if (row.isEmpty()) {
+        if (row.isEmpty() || row.get().isFlexible()) {
             return Optional.empty();
         }
         PlanSchedule schedule = checkoutApi.schedulesOf(List.of(transactionId)).get(transactionId);
@@ -286,6 +309,95 @@ public class FinanceVerificationService {
      * everything still owed, plus the penalty it was charged when it started
      * (phase 4: fixed then, never recomputed here).
      */
+    // ------------------------------------------------------------------ flexible contribution (3b)
+
+    /** A later contribution awaiting finance, with its purchase (as this caller sees it) and where the plan stands. */
+    private record Contribution(Payment payment, FinanceQueueRow row, FlexibleProgress progress) {
+    }
+
+    private Optional<Contribution> contributionAwaiting(UUID transactionId, UUID tenantId) {
+        Optional<FinanceQueueRow> row = checkoutApi.onPlan(tenantId, List.of(transactionId)).stream()
+                .filter(FinanceQueueRow::isFlexible).findFirst();
+        FlexiblePurchase plan = checkoutApi.flexiblePlansOf(List.of(transactionId)).get(transactionId);
+        if (row.isEmpty() || plan == null) {
+            return Optional.empty();
+        }
+        FlexibleProgress progress = FlexibleProgress.of(plan, payments.findAllByTransactionIdOrderByCreatedAtAsc(
+                transactionId));
+        return progress.awaitingFinance().map(p -> new Contribution(p, row.get(), progress));
+    }
+
+    /**
+     * Decision 1: finance verifies every contribution, against the plan's
+     * limits as they stand now — no more than what's left, and at least the
+     * minimum contribution unless it finishes the plan. The payment that
+     * reaches the plan total completes it — the plot sold, the purchase
+     * verified, the final letter — in this same transaction.
+     */
+    private FinanceDecisionDto verifyContribution(Contribution c, UUID tenantId, UUID actor) {
+        refuseOwnPurchase(c.row().buyerUserId(), actor);
+        Payment payment = c.payment();
+        if (!contributionMatches(payment, c.row(), c.progress())) {
+            throw new PaymentException.PaymentNotConfirmed();
+        }
+        markVerified(payment, actor);
+        FlexibleProgress after = FlexibleProgress.of(c.progress().plan(),
+                payments.findAllByTransactionIdOrderByCreatedAtAsc(payment.getTransactionId()));
+        auditApi.record(AuditEntryRequest.of(actor, "payment.contribution_verified", "payment", payment.getId(),
+                tenantId, "Contribution " + payment.getReference() + " of ₦" + payment.getAmount().toPlainString()
+                        + " for " + c.row().transactionReference() + " verified by finance (₦"
+                        + after.verified().toPlainString() + " paid, ₦" + after.remaining().toPlainString()
+                        + " left)."));
+        if (!after.complete()) {
+            identityApi.emailOf(c.row().buyerUserId()).ifPresent(to -> buyerNotifier.afterCommit(
+                    "contribution verified", () -> alerts.contributionVerified(new SettlementAlertSender.ContributionAlert(
+                            to, c.row().plotLabel(), c.row().estateName(), payment.getAmount().toPlainString(),
+                            after.verified().toPlainString(), after.remaining().toPlainString(),
+                            buyerNotifier.purchaseUrl(payment.getTransactionId())))));
+            return FinanceDecisionDto.of(payment.getTransactionId(), "on_plan");
+        }
+        FinanceDecision decision = checkoutApi.completePlan(payment.getTransactionId(), tenantId, actor);
+        if (decision != FinanceDecision.DONE) {
+            throw failure(decision);
+        }
+        log.info("Flexible plan for transaction {} paid in full; verified by finance user {}",
+                payment.getTransactionId(), actor);
+        Optional<AllocationLetterLookup.LetterRef> letter = letterLookup.letterFor(payment.getTransactionId());
+        tellBuyer(c.row(), payment.getAmount(), true, null, letter, false);
+        return FinanceDecisionDto.verified(payment.getTransactionId(), letter);
+    }
+
+    /** A contribution finance won't accept: refunded on its own; the plan carries on. */
+    private FinanceDecisionDto rejectContribution(Contribution c, UUID tenantId, UUID actor, String reason) {
+        refuseOwnPurchase(c.row().buyerUserId(), actor);
+        Payment payment = c.payment();
+        payment.setReviewReason("Refund due: finance rejected this payment — " + reason);
+        payment.setRefundRequestedAt(Instant.now());
+        payments.save(payment);
+        auditApi.record(AuditEntryRequest.of(actor, "payment.refund_due", "payment", payment.getId(), tenantId,
+                "Contribution " + payment.getReference() + " rejected by finance and flagged for refund; the plan "
+                        + "continues."));
+        tellBuyer(c.row(), payment.getAmount(), false, reason, Optional.empty(), false);
+        return FinanceDecisionDto.of(payment.getTransactionId(), c.row().planStatus());
+    }
+
+    private static boolean contributionMatches(Payment payment, FinanceQueueRow row, FlexibleProgress progress) {
+        return payment.getPurpose() == PaymentPurpose.CONTRIBUTION && payment.getCurrency() == row.currency()
+                && progress.allows(payment.getAmount());
+    }
+
+    private FinanceQueueItemDto contributionItem(FinanceQueueRow row, Payment p, FlexiblePurchase plan) {
+        FlexibleProgress progress = FlexibleProgress.of(plan, payments.findAllByTransactionIdOrderByCreatedAtAsc(
+                row.transactionId()));
+        boolean matches = contributionMatches(p, row, progress);
+        return new FinanceQueueItemDto(row.transactionId(), row.transactionReference(), row.estateId(),
+                row.estateName(), row.plotId(), row.plotLabel(), identityApi.emailOf(row.buyerUserId()).orElse(null),
+                matches ? p.getAmount() : null, row.currency().name(), p.getPaidAt(), gateway(p), matches,
+                row.letterApproved(), "contribution", row.planName(), null, null, null, null, BigDecimal.ZERO,
+                List.of(), row.planWithdrawn(), row.planRevoked(),
+                matches ? progress.remaining().subtract(p.getAmount()) : null);
+    }
+
     private static BigDecimal expectedAmount(Payment payment, PlanSchedule schedule, PlanProgress progress) {
         BigDecimal owed = payment.getPurpose() == PaymentPurpose.BALANCE ? progress.balance()
                 : schedule.instalments().stream().filter(i -> i.sequence() == payment.getInstalmentSequence())

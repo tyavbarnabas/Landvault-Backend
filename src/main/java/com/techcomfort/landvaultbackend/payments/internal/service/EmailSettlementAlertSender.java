@@ -248,6 +248,28 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
         log.info("Instalment verification delivered to a buyer");
     }
 
+    /** Flexible contribution (3b). Factual and calm: nothing is ever due, so there is no "next" to chase. */
+    @Override
+    public void contributionVerified(ContributionAlert alert) {
+        SimpleMailMessage message = new SimpleMailMessage();
+        message.setFrom(fromAddress);
+        message.setTo(alert.to());
+        message.setSubject("Payment verified: " + alert.plotLabel() + " at " + alert.estateName());
+        message.setText("""
+                Hello,
+
+                The developer has verified your payment of NGN %s for %s, %s. You have now paid NGN %s, and \
+                NGN %s is left. You can pay any amount, at any time, until it's finished.
+
+                See your purchase:
+
+                    %s
+                """.formatted(alert.amount(), alert.plotLabel(), alert.estateName(), alert.paidSoFar(),
+                alert.remaining(), alert.purchaseUrl()));
+        mailSender.send(message);
+        log.info("Contribution verification delivered to a buyer");
+    }
+
     /** Phase 5a. Factual: what was paid, what comes back, what the developer keeps, and what happens next. */
     @Override
     public void planWithdrawn(WithdrawalAlert alert) {

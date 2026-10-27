@@ -3197,9 +3197,8 @@ class ReservationCheckoutUnderRlsIT {
      * Flexible contribution, phase 3a: the first payment is the buyer's own
      * figure, between the minimum to start and the plan total; finance checks it
      * against those limits, and verifying holds the plot on the plan with a
-     * provisional letter carrying the flexible terms. Nothing is owed for
-     * payout yet, nothing can be late, and leaving and later payments wait for
-     * their phases.
+     * provisional letter carrying the flexible terms. Nothing can be late, and
+     * leaving waits for phase 4.
      */
     @Test
     void aFlexiblePlansFirstPaymentIsTheBuyersOwnFigureAndHoldsThePlot() {
@@ -3259,14 +3258,119 @@ class ReservationCheckoutUnderRlsIT {
         assertThat(onPlan.payments()).extracting(PortfolioPaymentDto::type, PortfolioPaymentDto::status)
                 .containsExactly(tuple("contribution", "confirmed"));
 
-        assertThat(queryString("SELECT count(*) FROM transactions WHERE status = 'VERIFIED' AND id = '"
-                + purchase.id() + "'")).as("no payout until 3b builds the escrow for it").isEqualTo("0");
         assertThat(get("/api/portal/finance/plans", officer, String.class).getBody())
                 .as("the running-instalment-plans view has no schedule to show").doesNotContain(purchase.id().toString());
         assertThat(get("/api/transactions/" + purchase.id() + "/withdrawal", buyer.token(), String.class).getBody())
                 .as("leaving comes with phase 4").contains("PLAN_NOT_WITHDRAWABLE");
-        assertThat(payAmount(buyer, purchase.id(), "1000000").getBody()).as("later payments come with phase 3b")
-                .contains("PAYMENT_PLAN_NOT_SUPPORTED");
+    }
+
+    /**
+     * Flexible contribution, phase 3b: once the plot is held the buyer pays
+     * any amount, any time — at least the minimum contribution unless it
+     * finishes the plan, never more than what's left, one waiting for finance at
+     * a time. Finance verifies each (a rejected one is refunded alone and the
+     * plan carries on); the payment that reaches the plan total sells the plot
+     * and issues the final letter, without the plan's leaving terms. Payouts
+     * come from escrow by the plan's own exit split, never as a full-price sale.
+     */
+    @Test
+    void aFlexiblePlanTakesAnyAmountUntilPaidAndIsPaidOutFromEscrow() {
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        TransactionDto purchase = flexibleHeldOnPlan("5000000", officer);
+        approvedPayoutAccount(seller.id(), "RCP_seller");
+        String admin = payoutAdmin(true);
+        assertThat(readyFor(admin, purchase)).as("20% of the first payment; the rest is held")
+                .contains("\"tranche\":\"share\"", "\"trancheAmount\":1000000", "\"heldInEscrow\":4000000");
+
+        assertThat(payAmount(buyer, purchase.id(), "99999").getBody()).as("below the minimum contribution")
+                .contains("INVALID_AMOUNT", "at least ₦100,000.00 and at most ₦17,000,000.00");
+        assertThat(payAmount(buyer, purchase.id(), "17000000.01").getBody()).as("more than what's left")
+                .contains("INVALID_AMOUNT");
+        assertThat(pay(buyer, purchase.id()).getBody()).as("no amount named").contains("INVALID_AMOUNT");
+
+        String rejected = contribute(purchase, "7000000", 700_000_000L);
+        assertThat(payAmount(buyer, purchase.id(), "1000000").getBody()).as("one waiting for finance at a time")
+                .contains("INSTALMENT_AWAITING_VERIFICATION");
+        ResponseEntity<String> refused = financeAction(officer, purchase.id(), "reject", "{\"reason\":\"Wrong account\"}");
+        assertThat(refused.getBody()).as(refused.getBody()).contains("\"status\":\"on_plan\"");
+        assertThat(queryString("SELECT refund_requested_at IS NOT NULL FROM payments WHERE reference = '" + rejected
+                + "'")).as("refunded on its own").isEqualTo("t");
+
+        contribute(purchase, "7000000", 700_000_000L);
+        assertThat(get("/api/portal/finance/transactions", officer, String.class).getBody())
+                .contains("\"paymentFor\":\"contribution\"", "\"expectedAmount\":7000000", "\"amountsMatch\":true",
+                        "\"remainingAfter\":10000000");
+        assertThat(financeAction(officer, purchase.id(), "verify", null).getBody()).contains("\"status\":\"on_plan\"");
+        assertThat(portfolio(buyer).items().getFirst().paidAmount()).isEqualByComparingTo("12000000");
+        assertThat(readyFor(admin, purchase)).contains("\"amountOwed\":2400000", "\"heldInEscrow\":9600000");
+
+        String last = startPaymentRaw(purchase.id(), "?balance=true");
+        assertThat(queryString("SELECT amount_kobo FROM payments WHERE reference = '" + last + "'"))
+                .as("balance=true pays exactly what's left").isEqualTo("1000000000");
+        paystackSays(last, "success", 1_000_000_000L, "NGN", "Approved");
+        confirm(buyer, last);
+        ResponseEntity<String> finished = financeAction(officer, purchase.id(), "verify", null);
+        assertThat(finished.getBody()).as(finished.getBody()).contains("\"status\":\"verified\"")
+                .containsPattern("\"allocationLetterNumber\":\"HT-ALC-");
+
+        assertThat(plotStatus(plotId)).isEqualTo("SOLD");
+        assertThat(queryString("SELECT status FROM transactions WHERE id = '" + purchase.id() + "'")).isEqualTo("VERIFIED");
+        assertThat(queryString("SELECT status FROM owned_plots WHERE transaction_id = '" + purchase.id() + "'"))
+                .isEqualTo("COMPLETED");
+        String letters = "FROM allocation_letters WHERE transaction_id = '" + purchase.id() + "'";
+        assertThat(queryString("SELECT string_agg(kind, ',' ORDER BY issued_at) " + letters))
+                .isEqualTo("PROVISIONAL,ALLOCATION");
+        assertThat(queryString("SELECT array_to_string(clauses, '|') " + letters + " AND kind = 'ALLOCATION'"))
+                .as("nothing left to leave or sell").doesNotContain("ask HomeTrue to sell the plot", "That this allocation is provisional");
+        assertThat(payAmount(buyer, purchase.id(), "1").getBody()).contains("TRANSACTION_NOT_PAYABLE");
+        JsonNode owed = objectMapper.readTree(readyFor(admin, purchase));
+        assertThat(owed.path("tranche").asString()).as("from escrow, never one full-price sale").isEqualTo("share");
+        assertThat(owed.path("trancheLabel").asString()).isEqualTo("Developer's share of the contribution");
+        assertThat(owed.path("trancheAmount").decimalValue()).as("the first share").isEqualByComparingTo("1000000");
+        assertThat(owed.path("amountOwed").decimalValue()).as("three shares and the release: everything paid")
+                .isEqualByComparingTo("22000000");
+    }
+
+    /** Flexible 3b: a first payment of the whole plan total finishes the plan at once. */
+    @Test
+    void aFlexibleFirstPaymentOfTheWholeTotalCompletesThePlanAtOnce() {
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        TransactionDto purchase = flexibleHeldOnPlan("22000000", officer);
+
+        assertThat(plotStatus(plotId)).isEqualTo("SOLD");
+        assertThat(queryString("SELECT status FROM transactions WHERE id = '" + purchase.id() + "'")).isEqualTo("VERIFIED");
+        assertThat(queryString("SELECT status FROM owned_plots WHERE transaction_id = '" + purchase.id() + "'"))
+                .isEqualTo("COMPLETED");
+        assertThat(queryString("SELECT string_agg(kind, ',' ORDER BY issued_at) FROM allocation_letters WHERE "
+                + "transaction_id = '" + purchase.id() + "'")).isEqualTo("PROVISIONAL,ALLOCATION");
+    }
+
+    /** A flexible purchase whose first payment ({@code first} naira) finance has verified; returns it. */
+    private TransactionDto flexibleHeldOnPlan(String first, String officer) {
+        UUID planId = planIds(declarePlans(FLEXIBLE_AND_INSTALMENT_PLANS)).get("Pay as you can");
+        TransactionDto purchase = objectMapper.readValue(
+                openRaw(reserve(buyer, plotId).id(), "flexible", null, planId).getBody(), TransactionDto.class);
+        assertThat(acceptOffer(buyer, purchase.offer().id()).getStatusCode()).isEqualTo(HttpStatus.OK);
+        paystackReturnsALink();
+        contribute(purchase, first, new BigDecimal(first).movePointRight(2).longValueExact());
+        ResponseEntity<String> verified = financeAction(officer, purchase.id(), "verify", null);
+        assertThat(verified.getStatusCode()).as(verified.getBody()).isEqualTo(HttpStatus.OK);
+        return purchase;
+    }
+
+    /** Starts a contribution of {@code amount}, has Paystack confirm it, and returns its reference. */
+    private String contribute(TransactionDto purchase, String amount, long kobo) {
+        String reference = startPaymentRaw(purchase.id(), "?amount=" + amount);
+        paystackSays(reference, "success", kobo, "NGN", "Approved");
+        assertThat(confirm(buyer, reference).getBody()).contains("\"status\":\"succeeded\"");
+        return reference;
+    }
+
+    private String startPaymentRaw(UUID transactionId, String query) {
+        ResponseEntity<String> started = restTemplate.exchange("/api/transactions/" + transactionId + "/payments"
+                + query, HttpMethod.POST, entity(buyer.token(), null), String.class);
+        assertThat(started.getStatusCode()).as(started.getBody()).isEqualTo(HttpStatus.CREATED);
+        return objectMapper.readTree(started.getBody()).path("reference").asString();
     }
 
     /** Only a flexible plan lets the buyer name the amount. */

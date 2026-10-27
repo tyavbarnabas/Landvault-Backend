@@ -418,7 +418,13 @@ offer letter; phase 3a is the first payment (below). Later payments, payouts and
 - **Portfolio**: `plan: "flexible"`, `status: "installment_active"`, `totalPrice` = plan total, `paidAmount` = what
   finance verified, payments typed `contribution`, `planName`; `nextDueDate`, `installmentMonths` and `arrears` stay
   null — nothing is ever due.
-- Not yet: paying again once `on_plan` (`PAYMENT_PLAN_NOT_SUPPORTED`), leaving (`PLAN_NOT_WITHDRAWABLE`).
+- **Paying again (3b)**, once `on_plan`: `?amount=` — at least `flexible.minimumContribution` unless it is exactly
+  what's left, never more than what's left (`INVALID_AMOUNT` names the limits); `?balance=true` pays exactly what's
+  left. While one payment waits for finance the next is 409 `INSTALMENT_AWAITING_VERIFICATION`. What's left is
+  portfolio `totalPrice − paidAmount`.
+- **Finishing**: the payment that reaches the plan total — verified by finance — sells the plot (`status: "verified"`)
+  and issues the final allocation letter (`HT-ALC-`). A first payment of the whole total finishes it at once.
+- Not yet: leaving (`PLAN_NOT_WITHDRAWABLE`), dormancy notices, "sell my plot" and the gain share.
 
 - **Declared in the same set as instalment plans** (`PUT /api/portal/estates/{id}/payment-plans`). Each plan gains an
   optional **`kind`**: `installment` (when left out — existing calls are unchanged) or `flexible`. A flexible plan:

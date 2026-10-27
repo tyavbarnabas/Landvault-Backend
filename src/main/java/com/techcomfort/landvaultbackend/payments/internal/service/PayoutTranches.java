@@ -170,6 +170,9 @@ final class PayoutTranches {
         if (p.getPurpose() == PaymentPurpose.BALANCE) {
             return "balance payment";
         }
+        if (p.getPurpose() == PaymentPurpose.CONTRIBUTION) {
+            return "contribution";
+        }
         return p.getPurpose() == PaymentPurpose.INSTALMENT ? "instalment " + p.getInstalmentSequence() : "payment";
     }
 }

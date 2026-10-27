@@ -95,10 +95,11 @@ public class AllocationLetterIssuer {
                 .filter(o -> acceptances.findByOfferLetterId(o.getId()).isPresent());
         boolean flexible = "flexible".equals(event.plan());
         List<String> clauses = new ArrayList<>();
-        // Flexible contribution: the plan's own terms (leaving, the gain share, selling, a quiet plan) come
-        // first, as the offer stated them — they replace the estate's instalment-style withdrawal and
-        // revocation terms that follow, and say so.
-        if (flexible) {
+        // Flexible contribution: while the plan runs, its own terms (leaving, the gain share, selling, a
+        // quiet plan) come first, as the offer stated them — they replace the estate's instalment-style
+        // withdrawal and revocation terms that follow, and say so. Once paid in full there is no plan to
+        // leave, and the final letter carries the conditions alone, like an outright sale's.
+        if (flexible && kind == LetterKind.PROVISIONAL) {
             offer.ifPresent(o -> clauses.addAll(List.of(o.getPriceClauses())));
         }
         clauses.addAll(offer.map(o -> List.of(o.getClauses())).orElseGet(() -> LetterClauses.of(

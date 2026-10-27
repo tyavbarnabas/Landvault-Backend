@@ -46,6 +46,12 @@ public class LoggingSettlementAlertSender implements SettlementAlertSender {
     }
 
     @Override
+    public void contributionVerified(ContributionAlert alert) {
+        log.info("[TEST-ONLY contribution verified] to={} paid={} remaining={}", alert.to(), alert.paidSoFar(),
+                alert.remaining());
+    }
+
+    @Override
     public void planWithdrawn(WithdrawalAlert alert) {
         log.info("[TEST-ONLY plan withdrawn] to={} developer={} purchase={} refund={} developerKeeps={}", alert.to(),
                 alert.toDeveloper(), alert.purchaseReference(), alert.refund(), alert.developerKeeps());

@@ -79,7 +79,8 @@ public class CheckoutApiImpl implements CheckoutApi {
                 r[5] == null ? "Plot " + r[6] : "Block " + r[5] + ", Plot " + r[6],
                 (UUID) r[7], (BigDecimal) r[8], Currency.valueOf((String) r[9]), (Instant) r[10],
                 letters.computeIfAbsent((UUID) r[2], letterGate::letterReady),
-                (BigDecimal) r[11], (String) r[12], "WITHDRAWN".equals(r[13]), "REVOKED".equals(r[13]))).toList();
+                (BigDecimal) r[11], (String) r[12], "WITHDRAWN".equals(r[13]), "REVOKED".equals(r[13]),
+                (BigDecimal) r[14])).toList();
     }
 
     @Override
@@ -352,6 +353,9 @@ public class CheckoutApiImpl implements CheckoutApi {
         if (transactions.moveFromAwaitingFinance(transactionId, next.name()) != 1) {
             throw new IllegalStateException("Transaction " + transactionId + " left awaiting_finance while locked");
         }
+        // The update is native: reload this request's copy, so a plan completed in the same
+        // transaction (a flexible plan's first payment of the whole total) reads it on the plan.
+        entityManager.refresh(transaction);
         Reservation reservation = locked.get();
         Instant reservedAt = reservation.getCreatedAt();
         reservation.setStatus(ReservationStatus.CONVERTED);
@@ -487,7 +491,9 @@ public class CheckoutApiImpl implements CheckoutApi {
         return new VerifiedSale((UUID) r[0], (String) r[1], (UUID) r[2], (String) r[3],
                 r[4] == null ? "Plot " + r[5] : "Block " + r[4] + ", Plot " + r[5],
                 (BigDecimal) r[6], Currency.valueOf((String) r[7]), (Instant) r[8],
-                !"INSTALLMENT".equals(r[9]) ? null : new VerifiedSale.Escrow("VERIFIED".equals(r[10]),
+                // Instalment and flexible plans are paid from escrow; a flexible plan's split is its own exit terms.
+                !"INSTALLMENT".equals(r[9]) && !"FLEXIBLE".equals(r[9]) ? null
+                        : new VerifiedSale.Escrow("VERIFIED".equals(r[10]),
                         (BigDecimal) r[11], r[12] == null ? null : RefundAppliesTo.valueOf((String) r[12]),
                         !Boolean.FALSE.equals(r[13]), "WITHDRAWN".equals(r[10]), "REVOKED".equals(r[10])));
     }
