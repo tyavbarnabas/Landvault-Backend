@@ -507,7 +507,8 @@ public class CheckoutApiImpl implements CheckoutApi {
                 !"INSTALLMENT".equals(r[9]) && !"FLEXIBLE".equals(r[9]) ? null
                         : new VerifiedSale.Escrow("VERIFIED".equals(r[10]),
                         (BigDecimal) r[11], r[12] == null ? null : RefundAppliesTo.valueOf((String) r[12]),
-                        !Boolean.FALSE.equals(r[13]), "WITHDRAWN".equals(r[10]), "REVOKED".equals(r[10])));
+                        !Boolean.FALSE.equals(r[13]), "WITHDRAWN".equals(r[10]), "REVOKED".equals(r[10])),
+                (UUID) r[14]);
     }
 
     private static PayableTransaction toPayable(Transaction t) {

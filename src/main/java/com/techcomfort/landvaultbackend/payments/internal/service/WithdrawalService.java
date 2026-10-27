@@ -57,6 +57,7 @@ public class WithdrawalService {
     private final BuyerNotifier buyerNotifier;
     private final RevocationNotices notices;
     private final RestructureNotices restructureNotices;
+    private final GainShareService gainShares;
 
     /** The quote while the plan runs; what was settled once withdrawn. The buyer's own purchase only. */
     @Transactional(readOnly = true)
@@ -86,6 +87,8 @@ public class WithdrawalService {
         }
         Instant now = Instant.now();
         flagRefunds(purchase, quote, purchase.buyerUserId(), now, "You withdrew from your plan", "the buyer withdrew");
+        // Flexible phase 5: the buyer keeps a claim on any gain when the plot next sells.
+        gainShares.open(purchase, purchase.buyerUserId());
         // 5b: a notice of revocation running at the time is overtaken; 5c: so is a restructure.
         notices.closeOnWithdrawal(transactionId);
         restructureNotices.closeOnPlanEnded(transactionId, "the buyer withdrew");

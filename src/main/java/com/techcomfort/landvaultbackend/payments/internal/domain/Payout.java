@@ -33,8 +33,13 @@ public class Payout extends AbstractEntity {
     @Column(name = "transaction_id", nullable = false)
     private UUID transactionId;
 
-    @Column(name = "settlement_account_id", nullable = false)
+    /** The company's account; null on a GAIN tranche, which goes to {@link #gainClaimId}'s buyer instead. */
+    @Column(name = "settlement_account_id")
     private UUID settlementAccountId;
+
+    /** Phase 5 of flexible contribution: the claim a GAIN tranche pays; null otherwise. */
+    @Column(name = "gain_claim_id")
+    private UUID gainClaimId;
 
     @Column(name = "recipient_code", nullable = false, length = 64)
     private String recipientCode;

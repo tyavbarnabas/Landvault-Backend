@@ -45,6 +45,7 @@ public class PayoutOutcomeService {
     private final IdentityApi identityApi;
     private final SettlementAlertSender alerts;
     private final AuditApi auditApi;
+    private final GainShareService gainShares;
 
     @Value("${landvault.payouts.stuck-sending-after}")
     private Duration stuckSendingAfter;
@@ -106,6 +107,9 @@ public class PayoutOutcomeService {
         payouts.save(payout);
         audit(payout, "Paystack reports payout " + reference + " is now " + paystackSays.wire()
                 + (current == PayoutStatus.SUCCESS ? " (it had been recorded as success)" : "") + ".");
+        if (paystackSays == PayoutStatus.SUCCESS && payout.getGainClaimId() != null) {
+            gainShares.paid(payout);
+        }
         if (paystackSays == PayoutStatus.FAILED || paystackSays == PayoutStatus.REVERSED) {
             alert(payout, paystackSays.wire(), current == PayoutStatus.SUCCESS
                     ? "Paystack had reported this part as successful; it now says " + paystackSays.wire()

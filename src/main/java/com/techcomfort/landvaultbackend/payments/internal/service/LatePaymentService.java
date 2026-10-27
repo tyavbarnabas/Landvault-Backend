@@ -44,6 +44,7 @@ public class LatePaymentService {
     private final PaymentRepository payments;
     private final CheckoutApi checkoutApi;
     private final AllocationLetterLookup letterLookup;
+    private final GainShareService gainShares;
     private final IdentityApi identityApi;
     private final SettlementAlertSender alerts;
     private final AuditApi auditApi;
@@ -89,6 +90,7 @@ public class LatePaymentService {
         payment.setFinanceVerifiedAt(Instant.now());
         payment.setFinanceVerifiedBy(scope.userId());
         payments.save(payment);
+        gainShares.settleOn(transactionId, scope.userId());
         auditApi.record(AuditEntryRequest.of(scope.userId(), "payment.late_allocated", "payment", payment.getId(),
                 tenantId, "Late payment " + payment.getReference() + " accepted; " + sale.plotLabel() + " allocated."));
         Optional<AllocationLetterLookup.LetterRef> letter = letterLookup.letterFor(transactionId);

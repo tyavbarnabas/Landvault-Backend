@@ -60,6 +60,7 @@ public class FinanceVerificationService {
     private final PaymentPenaltyRepository penalties;
     private final RevocationNotices revocationNotices;
     private final RestructureNotices restructureNotices;
+    private final GainShareService gainShares;
 
     private static final List<PaymentPurpose> PLAN_PAYMENTS = List.of(PaymentPurpose.INSTALMENT, PaymentPurpose.BALANCE,
             PaymentPurpose.CONTRIBUTION);
@@ -139,9 +140,13 @@ public class FinanceVerificationService {
                 throw failure(completed);
             }
         }
+        boolean onPlan = row.isDeposit() && !finished;
+        if (!onPlan) {
+            // Phase 5: a completed sale settles earlier buyers' gain claims on the plot.
+            gainShares.settleOn(transactionId, scope.userId());
+        }
         log.info("Transaction {} verified by finance user {}; plot allocated", transactionId, scope.userId());
         Optional<AllocationLetterLookup.LetterRef> letter = letterLookup.letterFor(transactionId);
-        boolean onPlan = row.isDeposit() && !finished;
         tellBuyer(row, payment.get().getAmount(), true, null, letter, onPlan);
         return onPlan ? FinanceDecisionDto.depositVerified(transactionId, letter)
                 : FinanceDecisionDto.verified(transactionId, letter);
@@ -277,6 +282,7 @@ public class FinanceVerificationService {
         if (decision != FinanceDecision.DONE) {
             throw failure(decision);
         }
+        gainShares.settleOn(payment.getTransactionId(), actor);
         log.info("Plan for transaction {} paid in full; verified by finance user {}", payment.getTransactionId(), actor);
         Optional<AllocationLetterLookup.LetterRef> letter = letterLookup.letterFor(payment.getTransactionId());
         tellBuyer(pp.row(), payment.getAmount(), true, null, letter, false);
@@ -372,6 +378,7 @@ public class FinanceVerificationService {
         if (decision != FinanceDecision.DONE) {
             throw failure(decision);
         }
+        gainShares.settleOn(payment.getTransactionId(), actor);
         log.info("Flexible plan for transaction {} paid in full; verified by finance user {}",
                 payment.getTransactionId(), actor);
         Optional<AllocationLetterLookup.LetterRef> letter = letterLookup.letterFor(payment.getTransactionId());

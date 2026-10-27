@@ -85,7 +85,7 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
      */
     @Query(value = "SELECT t.id, t.reference, t.seller_tenant_id, e.name, b.name AS block_name, p.plot_number, "
             + "t.total_price, t.currency, t.updated_at, t.plan, t.status, t.escrow_deduction_pct, t.escrow_applies_to, "
-            + "t.penalties_refundable "
+            + "t.penalties_refundable, p.id AS plot_id "
             + "FROM transactions t JOIN plots p ON p.id = t.plot_id JOIN estates e ON e.id = t.estate_id "
             + "LEFT JOIN blocks b ON b.id = p.block_id "
             + "WHERE (t.status = 'VERIFIED' OR (t.status IN ('ON_PLAN', 'WITHDRAWN', 'REVOKED') "

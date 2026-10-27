@@ -2,6 +2,7 @@ package com.techcomfort.landvaultbackend.payments.internal.service;
 
 import com.techcomfort.landvaultbackend.checkout.VerifiedSale;
 import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
+import com.techcomfort.landvaultbackend.payments.internal.domain.GainShareClaim;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
 import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentPurpose;
 import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentStatus;
@@ -33,6 +34,7 @@ final class PayoutTranches {
     static final String SALE = "SALE";
     static final String RELEASE = "RELEASE";
     static final String SHARE_PREFIX = "SHARE:";
+    static final String GAIN_PREFIX = "GAIN:";
 
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
 
@@ -48,6 +50,45 @@ final class PayoutTranches {
     }
 
     static Owed of(VerifiedSale sale, List<Payment> payments) {
+        return of(sale, payments, List.of());
+    }
+
+    /**
+     * Flexible contribution, phase 5: with {@code gains} — earlier buyers'
+     * shares of the gain owed out of this sale — taken off the developer's
+     * whole-price tranche (outright) or release (a plan, at completion) and
+     * paid as their own tranches after the developer's. Settlement capped
+     * them at what that tranche was, so it never goes below zero.
+     */
+    static Owed of(VerifiedSale sale, List<Payment> payments, List<GainShareClaim> gains) {
+        Owed owed = withoutGains(sale, payments);
+        if (gains.isEmpty()) {
+            return owed;
+        }
+        BigDecimal deducted = sum(gains.stream().map(GainShareClaim::getBuyerAmount).toList());
+        List<Tranche> tranches = new ArrayList<>();
+        for (Tranche t : owed.tranches()) {
+            if (t.key().equals(SALE) || t.key().equals(RELEASE)) {
+                BigDecimal left = t.amount().subtract(deducted);
+                if (left.signum() > 0) {
+                    tranches.add(new Tranche(t.key(), left, null));
+                }
+            } else {
+                tranches.add(t);
+            }
+        }
+        gains.forEach(g -> tranches.add(new Tranche(g.trancheKey(), g.getBuyerAmount(), null)));
+        return new Owed(tranches, owed.heldInEscrow());
+    }
+
+    /** What the developer would be owed from this sale's whole-price tranche or release; zero when it has none. */
+    static BigDecimal developerRemainder(VerifiedSale sale, List<Payment> payments) {
+        return withoutGains(sale, payments).tranches().stream()
+                .filter(t -> t.key().equals(SALE) || t.key().equals(RELEASE))
+                .map(Tranche::amount).findFirst().orElse(BigDecimal.ZERO);
+    }
+
+    private static Owed withoutGains(VerifiedSale sale, List<Payment> payments) {
         if (sale.escrow() == null) {
             return new Owed(List.of(new Tranche(SALE, sale.totalPrice(), null)), null);
         }
@@ -146,9 +187,14 @@ final class PayoutTranches {
         return amount.multiply(pct).divide(HUNDRED, 2, RoundingMode.DOWN);
     }
 
-    /** The wire value: sale, share or release. */
+    /** The wire value: sale, share, release or (phase 5) gain. */
     static String kind(String key) {
-        return key.startsWith(SHARE_PREFIX) ? "share" : key.equals(RELEASE) ? "release" : "sale";
+        return key.startsWith(SHARE_PREFIX) ? "share" : key.equals(RELEASE) ? "release"
+                : key.startsWith(GAIN_PREFIX) ? "gain" : "sale";
+    }
+
+    static UUID gainClaimId(String key) {
+        return key.startsWith(GAIN_PREFIX) ? UUID.fromString(key.substring(GAIN_PREFIX.length())) : null;
     }
 
     static UUID sharePaymentId(String key) {
@@ -158,6 +204,7 @@ final class PayoutTranches {
     static String label(Tranche tranche) {
         return switch (kind(tranche.key())) {
             case "release" -> "Escrow release at plan completion";
+            case "gain" -> "Gain share for an earlier buyer of this plot";
             case "share" -> "Developer's share of the " + describe(tranche.payment());
             default -> "Full sale price";
         };

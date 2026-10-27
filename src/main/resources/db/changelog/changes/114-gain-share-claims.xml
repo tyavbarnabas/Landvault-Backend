@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Flexible contribution, phase 5 (decided with the user, 2026-10-27): a
+        buyer who left a flexible plan, or whose quiet plan was ended, keeps a
+        claim on the plot: if the next completed sale of it through HomeTrue
+        (fully paid and verified by finance) is above their agreed price, they
+        get their share of the difference — measured agreed price to agreed
+        price, no time limit — paid out of the developer's payout for that sale
+        before the developer is paid. Several open claims on one plot are
+        settled oldest first, never more in total than the developer is owed
+        from that sale. See AGENTS.md, "Flexible contribution".
+
+        Buyer-owned like transactions: not RLS-policied, reached by
+        buyer_user_id (the buyer) or by the sale (payouts, platform scope).
+        Never deleted. The buyer's share is paid as a payout tranche
+        GAIN:<claim id> on the sale, to the buyer's own account — so payouts
+        gain a payee that is not a settlement account.
+    -->
+    <changeSet id="114-gain-share-claims" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE gain_share_claims (
+                id                     uuid NOT NULL PRIMARY KEY,
+                tenant_id              uuid,
+                branch_id              uuid,
+                created_at             timestamp(6) with time zone NOT NULL,
+                updated_at             timestamp(6) with time zone,
+                created_by             varchar(255),
+                updated_by             varchar(255),
+                deleted                boolean NOT NULL DEFAULT false,
+
+                claim_transaction_id   uuid NOT NULL REFERENCES transactions (id),
+                plot_id                uuid NOT NULL REFERENCES plots (id),
+                buyer_user_id          uuid NOT NULL REFERENCES users (id),
+                seller_tenant_id       uuid NOT NULL REFERENCES organizations (id),
+                agreed_price           numeric(19, 4) NOT NULL,
+                currency               varchar(3) NOT NULL,
+                developer_share_pct    numeric(5, 2) NOT NULL,
+                opened_at              timestamp(6) with time zone NOT NULL,
+                status                 varchar(16) NOT NULL,
+                sale_transaction_id    uuid REFERENCES transactions (id),
+                sale_price             numeric(19, 4),
+                gain                   numeric(19, 2),
+                buyer_amount           numeric(19, 2),
+                settled_at             timestamp(6) with time zone,
+                account_bank_code      varchar(16),
+                account_bank_name      varchar(120),
+                account_number         varchar(10),
+                account_name           varchar(255),
+                recipient_code         varchar(64),
+                account_given_at       timestamp(6) with time zone,
+
+                CONSTRAINT uq_gain_share_claims_claim UNIQUE (claim_transaction_id),
+                CONSTRAINT chk_gain_share_claims_status CHECK (status IN ('OPEN', 'OWED', 'NO_GAIN')),
+                CONSTRAINT chk_gain_share_claims_share CHECK (developer_share_pct >= 0 AND developer_share_pct < 100),
+                CONSTRAINT chk_gain_share_claims_settled CHECK ((status = 'OPEN') = (sale_transaction_id IS NULL)
+                    AND (status = 'OPEN') = (settled_at IS NULL) AND (status = 'OPEN') = (sale_price IS NULL)
+                    AND (status = 'OWED') = (buyer_amount IS NOT NULL) AND (buyer_amount IS NULL OR buyer_amount > 0)),
+                CONSTRAINT chk_gain_share_claims_account CHECK ((account_number IS NULL) = (recipient_code IS NULL)
+                    AND (account_number IS NULL) = (account_given_at IS NULL))
+            );
+            CREATE INDEX idx_gain_share_claims_plot_open ON gain_share_claims (plot_id) WHERE status = 'OPEN';
+            CREATE INDEX idx_gain_share_claims_sale ON gain_share_claims (sale_transaction_id);
+            CREATE INDEX idx_gain_share_claims_buyer ON gain_share_claims (buyer_user_id);
+            REVOKE DELETE, TRUNCATE ON gain_share_claims FROM ${appDbUsername};
+            COMMENT ON TABLE gain_share_claims IS
+                'A flexible buyer''s claim on a later sale''s gain, after they left or their quiet plan was ended. OPEN until the plot''s next completed sale; then OWED (paid as payout tranche GAIN:<id>) or NO_GAIN.';
+
+            ALTER TABLE payouts
+                ALTER COLUMN settlement_account_id DROP NOT NULL,
+                ADD COLUMN gain_claim_id uuid REFERENCES gain_share_claims (id),
+                ADD CONSTRAINT chk_payouts_payee CHECK (CASE WHEN tranche LIKE 'GAIN:%'
+                    THEN gain_claim_id IS NOT NULL AND settlement_account_id IS NULL
+                    ELSE gain_claim_id IS NULL AND settlement_account_id IS NOT NULL END);
+            COMMENT ON COLUMN payouts.gain_claim_id IS
+                'A GAIN:<claim id> tranche: the earlier buyer''s share of the gain, paid to their own account instead of the company''s.';
+        ]]></sql>
+        <rollback><![CDATA[
+            DELETE FROM payouts WHERE gain_claim_id IS NOT NULL;
+            ALTER TABLE payouts
+                DROP CONSTRAINT chk_payouts_payee,
+                DROP COLUMN gain_claim_id,
+                ALTER COLUMN settlement_account_id SET NOT NULL;
+            DROP TABLE gain_share_claims;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

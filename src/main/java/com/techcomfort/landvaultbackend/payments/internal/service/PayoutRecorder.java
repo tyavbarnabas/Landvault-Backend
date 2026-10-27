@@ -5,15 +5,18 @@ import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
 import com.techcomfort.landvaultbackend.checkout.CheckoutApi;
 import com.techcomfort.landvaultbackend.checkout.VerifiedSale;
 import com.techcomfort.landvaultbackend.common.Currency;
+import com.techcomfort.landvaultbackend.payments.internal.domain.GainShareClaim;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payout;
 import com.techcomfort.landvaultbackend.payments.internal.domain.SettlementAccount;
+import com.techcomfort.landvaultbackend.payments.internal.enums.GainShareStatus;
 import com.techcomfort.landvaultbackend.payments.internal.enums.PayoutStatus;
 import com.techcomfort.landvaultbackend.payments.internal.enums.SettlementAccountStatus;
 import com.techcomfort.landvaultbackend.payments.internal.exceptions.PaymentException;
 import com.techcomfort.landvaultbackend.payments.internal.paystack.PaystackAmounts;
 import com.techcomfort.landvaultbackend.payments.internal.paystack.PaystackClient;
 import com.techcomfort.landvaultbackend.payments.internal.repository.PaymentRepository;
+import com.techcomfort.landvaultbackend.payments.internal.repository.GainShareClaimRepository;
 import com.techcomfort.landvaultbackend.payments.internal.repository.PayoutRepository;
 import com.techcomfort.landvaultbackend.payments.internal.repository.SettlementAccountRepository;
 import com.techcomfort.landvaultbackend.tenancy.TenancyApi;
@@ -47,6 +50,7 @@ public class PayoutRecorder {
     private final PayoutRepository payouts;
     private final PaymentRepository salePayments;
     private final SettlementAccountRepository accounts;
+    private final GainShareClaimRepository claims;
     private final CheckoutApi checkoutApi;
     private final TenancyApi tenancyApi;
     private final AuditApi auditApi;
@@ -96,9 +100,12 @@ public class PayoutRecorder {
     public record Owing(PayoutTranches.Owed owed, PayoutTranches.Tranche next, Plan nextPlan, BigDecimal amountOwed) {
     }
 
-    /** Tranches are paid in order — shares as finance verified them, then the release. */
-    Owing owing(VerifiedSale sale, List<Payout> attempts, List<Payment> salePayments) {
-        PayoutTranches.Owed owed = PayoutTranches.of(sale, salePayments);
+    /**
+     * Tranches are paid in order — shares as finance verified them, then the
+     * release, then (phase 5) any earlier buyers' gain shares taken off it.
+     */
+    Owing owing(VerifiedSale sale, List<Payout> attempts, List<Payment> salePayments, List<GainShareClaim> gains) {
+        PayoutTranches.Owed owed = PayoutTranches.of(sale, salePayments, gains);
         long owedKobo = 0;
         PayoutTranches.Tranche next = null;
         Plan nextPlan = null;
@@ -146,7 +153,9 @@ public class PayoutRecorder {
         if (sale.currency() != Currency.NGN) {
             throw new PaymentException.SaleNotPayable();
         }
-        Owing owing = owing(sale, attempts, paymentsFor(sale));
+        List<GainShareClaim> gains = claims.findBySaleTransactionIdInAndStatus(List.of(transactionId),
+                GainShareStatus.OWED);
+        Owing owing = owing(sale, attempts, paymentsFor(sale), gains);
         if (owing.next() == null) {
             // 5a/5b: on a withdrawn or revoked plan, nothing more comes to the developer
             // except a share still waiting for their own finance to verify its payment.
@@ -156,18 +165,28 @@ public class PayoutRecorder {
                     ? new PaymentException.HeldInEscrow() : new PaymentException.SaleAlreadyPaid();
         }
         Plan plan = owing.nextPlan();
-        if (!tenancyApi.isTenantActive(sale.sellerTenantId())) {
-            throw new PaymentException.CompanyNotActive();
+        // Phase 5: a gain share goes to the earlier buyer's own account; it doesn't wait on the company.
+        UUID gainClaimId = PayoutTranches.gainClaimId(owing.next().key());
+        GainShareClaim gain = gainClaimId == null ? null : gains.stream()
+                .filter(g -> g.getId().equals(gainClaimId)).findFirst().orElseThrow();
+        SettlementAccount account = null;
+        if (gain == null) {
+            if (!tenancyApi.isTenantActive(sale.sellerTenantId())) {
+                throw new PaymentException.CompanyNotActive();
+            }
+            account = accounts.findByTenantIdAndStatus(sale.sellerTenantId(),
+                    SettlementAccountStatus.APPROVED).orElseThrow(PaymentException.NoApprovedPayoutAccount::new);
+        } else if (gain.getRecipientCode() == null) {
+            throw new PaymentException.BuyerAccountNeeded();
         }
-        SettlementAccount account = accounts.findByTenantIdAndStatus(sale.sellerTenantId(),
-                SettlementAccountStatus.APPROVED).orElseThrow(PaymentException.NoApprovedPayoutAccount::new);
         long kobo = plan.nextPartKobo();
 
         Payout payout = Payout.builder()
                 .tenantId(sale.sellerTenantId())
                 .transactionId(transactionId)
-                .settlementAccountId(account.getId())
-                .recipientCode(account.getRecipientCode())
+                .settlementAccountId(account == null ? null : account.getId())
+                .gainClaimId(gainClaimId)
+                .recipientCode(account == null ? gain.getRecipientCode() : account.getRecipientCode())
                 .amount(PaystackAmounts.fromKobo(kobo))
                 .currency(Currency.NGN)
                 .amountKobo(kobo)
@@ -187,8 +206,10 @@ public class PayoutRecorder {
         auditApi.record(AuditEntryRequest.of(actor, "payout.started", "payout", payout.getId(), sale.sellerTenantId(),
                 PayoutTranches.label(owing.next()) + ", part " + plan.nextPart() + " of " + plan.partCount() + ": NGN "
                         + payout.getAmount().toPlainString() + " of " + owing.next().amount().toPlainString() + " for "
-                        + sale.transactionReference() + " (" + sale.plotLabel() + ") to " + account.getBankName()
-                        + " ending " + last4(account.getAccountNumber()) + ", reference " + payout.getReference() + "."));
+                        + sale.transactionReference() + " (" + sale.plotLabel() + ") to "
+                        + (account == null ? "the earlier buyer's " + gain.getAccountBankName() + " account ending "
+                        + last4(gain.getAccountNumber()) : account.getBankName() + " ending "
+                        + last4(account.getAccountNumber())) + ", reference " + payout.getReference() + "."));
         return prepared(payout, false);
     }
 
