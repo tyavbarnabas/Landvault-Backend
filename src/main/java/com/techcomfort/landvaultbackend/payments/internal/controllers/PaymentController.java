@@ -27,6 +27,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 
@@ -56,7 +57,11 @@ public class PaymentController {
                     verified). With `?balance=true`, everything still owed on the plan in one payment. A late \
                     instalment carries the declared penalty it has reached today, fixed now and shown as \
                     `penaltyAmount` (included in `amount`); a pay-off carries every late instalment's.
-                    - Outright and instalment purchases; NGN only.
+                    - **A flexible plan is the one exception**: the buyer chooses the figure with `?amount=`. \
+                    The first payment must be at least the plan's `minimumToStart` and at most its `planTotal` \
+                    (`INVALID_AMOUNT` otherwise, or when it's left out); `amount` on any other plan is refused. \
+                    Later payments on a flexible plan aren't built yet.
+                    - Outright, instalment and flexible purchases; NGN only.
                     - Pressing pay again within 30 minutes returns **the same open link** (200) instead \
                     of opening a second payment (201).
                     - **Landing back on the frontend proves nothing.** A payment counts only once \
@@ -73,8 +78,9 @@ public class PaymentController {
     @PostMapping("/transactions/{transactionId}/payments")
     @PreAuthorize("hasAuthority('client.checkout.reserve')")
     public ResponseEntity<PaymentDto> start(@PathVariable UUID transactionId,
-                                            @RequestParam(defaultValue = "false") boolean balance) {
-        PaymentService.Started started = service.start(transactionId, balance);
+                                            @RequestParam(defaultValue = "false") boolean balance,
+                                            @RequestParam(required = false) BigDecimal amount) {
+        PaymentService.Started started = service.start(transactionId, balance, amount);
         return ResponseEntity.status(started.created() ? HttpStatus.CREATED : HttpStatus.OK).body(started.payment());
     }
 

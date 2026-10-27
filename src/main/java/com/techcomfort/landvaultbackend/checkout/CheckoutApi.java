@@ -90,6 +90,9 @@ public interface CheckoutApi {
     /** Each instalment purchase's plan and fixed schedule, by transaction id; outright purchases have none. */
     Map<UUID, PlanSchedule> schedulesOf(Collection<UUID> transactionIds);
 
+    /** Flexible contribution: each flexible purchase's terms as copied when it opened, by transaction id. */
+    Map<UUID, FlexiblePurchase> flexiblePlansOf(Collection<UUID> transactionIds);
+
     /** OL: the purchase's offer letter; empty for purchases opened before offers existed. */
     Optional<OfferSummary> offerFor(UUID transactionId);
 

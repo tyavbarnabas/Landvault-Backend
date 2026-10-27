@@ -93,10 +93,18 @@ public class AllocationLetterIssuer {
                 "allocationDate", DocumentFormats.date(issuedAt));
         Optional<OfferLetter> offer = offers.findByTransactionId(event.transactionId())
                 .filter(o -> acceptances.findByOfferLetterId(o.getId()).isPresent());
-        List<String> clauses = new ArrayList<>(offer.map(o -> List.of(o.getClauses())).orElseGet(() -> LetterClauses.of(
+        boolean flexible = "flexible".equals(event.plan());
+        List<String> clauses = new ArrayList<>();
+        // Flexible contribution: the plan's own terms (leaving, the gain share, selling, a quiet plan) come
+        // first, as the offer stated them — they replace the estate's instalment-style withdrawal and
+        // revocation terms that follow, and say so.
+        if (flexible) {
+            offer.ifPresent(o -> clauses.addAll(List.of(o.getPriceClauses())));
+        }
+        clauses.addAll(offer.map(o -> List.of(o.getClauses())).orElseGet(() -> LetterClauses.of(
                 setup.template().standardClauses(), List.of(setup.terms().getClauses()), setup.facts())));
         if (kind == LetterKind.PROVISIONAL) {
-            clauses.add(provisionalClause(offer.map(OfferLetter::getNumber).orElse(null)));
+            clauses.add(provisionalClause(offer.map(OfferLetter::getNumber).orElse(null), flexible));
         }
 
         PrintedLetterheadDto p = setup.letterhead();
@@ -168,9 +176,14 @@ public class AllocationLetterIssuer {
     }
 
     /** HomeTrue's fixed line on a provisional letter (decision 4): what makes it final, and what ends it. */
-    static String provisionalClause(String offerNumber) {
-        return "That this allocation is provisional: it becomes final, and the letter of allocation is issued, when "
-                + "every instalment in your accepted offer" + (offerNumber == null ? "" : " (" + offerNumber + ")")
+    static String provisionalClause(String offerNumber, boolean flexible) {
+        String offer = offerNumber == null ? "" : " (" + offerNumber + ")";
+        return flexible
+                ? "That this allocation is provisional: it becomes final, and the letter of allocation is issued, "
+                + "when the plan total in your accepted offer" + offer + " has been paid and verified. If you leave "
+                + "the plan, or it is ended, the allocation ends on the terms of that offer."
+                : "That this allocation is provisional: it becomes final, and the letter of allocation is issued, when "
+                + "every instalment in your accepted offer" + offer
                 + " has been paid and verified. If the plan is revoked, the allocation ends on the terms of that "
                 + "offer.";
     }

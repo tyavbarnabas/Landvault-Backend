@@ -6,6 +6,7 @@ import com.techcomfort.landvaultbackend.checkout.PaymentSummaryProvider;
 import com.techcomfort.landvaultbackend.checkout.PendingPurchase;
 import com.techcomfort.landvaultbackend.checkout.PlanPayment;
 import com.techcomfort.landvaultbackend.checkout.PlanRefund;
+import com.techcomfort.landvaultbackend.checkout.FlexiblePurchase;
 import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
 import com.techcomfort.landvaultbackend.checkout.PlanStanding;
 import com.techcomfort.landvaultbackend.common.Currency;
@@ -142,9 +143,12 @@ public class PortfolioService implements PortfolioApi {
 
         List<Entry> out = new ArrayList<>(owned.size() + pending.size());
         pending.forEach(p -> out.add(pendingDto(p, details.get(p.plotId()), paid.get(p.transactionId()))));
-        List<UUID> onPlans = owned.stream().filter(o -> "INSTALLMENT".equals(o.getPlan()) && o.getTransactionId() != null)
+        List<UUID> onPlans = owned.stream().filter(o -> ("INSTALLMENT".equals(o.getPlan())
+                        || "FLEXIBLE".equals(o.getPlan())) && o.getTransactionId() != null)
                 .map(OwnedPlot::getTransactionId).toList();
         Map<UUID, PlanSchedule> schedules = checkoutApi.schedulesOf(onPlans);
+        // Flexible contribution: no schedule, the terms copied onto the purchase instead.
+        Map<UUID, FlexiblePurchase> flexible = checkoutApi.flexiblePlansOf(onPlans);
         Map<UUID, List<PlanPayment>> planPayments = payments.succeededPaymentsFor(onPlans);
         // Phase 4: where each running plan stands today — arrears and penalties.
         Map<UUID, PlanSchedule> running = new HashMap<>();
@@ -157,7 +161,12 @@ public class PortfolioService implements PortfolioApi {
                 .filter(Objects::nonNull).toList();
         Map<UUID, PlanRefund> refunds = endedPlans.isEmpty() ? Map.of() : payments.refundsFor(endedPlans);
         // A record with no sale behind it (an upgrade's) has no transaction id, and no plan.
-        owned.forEach(o -> out.add(ownedDto(o, o.getTransactionId() == null ? null : schedules.get(o.getTransactionId()),
+        owned.stream().filter(o -> o.getTransactionId() != null && flexible.containsKey(o.getTransactionId()))
+                .forEach(o -> out.add(flexibleDto(o, flexible.get(o.getTransactionId()),
+                        planPayments.getOrDefault(o.getTransactionId(), List.of()), details.get(o.getPlotId()),
+                        endedPlan(o) ? refunds.get(o.getTransactionId()) : null)));
+        owned.stream().filter(o -> o.getTransactionId() == null || !flexible.containsKey(o.getTransactionId()))
+                .forEach(o -> out.add(ownedDto(o, o.getTransactionId() == null ? null : schedules.get(o.getTransactionId()),
                 o.getTransactionId() == null ? List.of() : planPayments.getOrDefault(o.getTransactionId(), List.of()),
                 details.get(o.getPlotId()),
                 o.getTransactionId() == null ? null : paid.get(o.getTransactionId()),
@@ -247,6 +256,35 @@ public class PortfolioService implements PortfolioApi {
                 p.supersedes()), entry.sortTime());
     }
 
+    /**
+     * Flexible contribution (phase 3a): the plan total, what finance has
+     * verified ("paid" means verified), and every succeeded payment. No next
+     * due date and no arrears — there is no schedule, so nothing is ever late.
+     */
+    private Entry flexibleDto(OwnedPlot o, FlexiblePurchase plan, List<PlanPayment> planPayments, PlotDetails d,
+                              PlanRefund refund) {
+        BigDecimal verified = planPayments.stream().filter(PlanPayment::verified).map(PlanPayment::amount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        List<PortfolioPaymentDto> history = planPayments.stream().map(p -> new PortfolioPaymentDto(p.reference(),
+                p.paidAt() == null ? null : LocalDate.ofInstant(p.paidAt(), NIGERIA), p.amount(), o.getCurrency().name(),
+                p.purpose(), p.verified() ? "confirmed" : "pending_verification",
+                p.receiptId() == null ? null : p.receiptId().toString(), null, p.financeVerifiedAt(),
+                p.penaltyAmount())).toList();
+        Entry entry = dto(o.getId(), o.getTransactionId(), o.getEstateId(), o.getPlotId(), d, o.getCornerPremiumPct(),
+                o.getBasePrice(), o.getIntent().getValue(), o.getPlan().toLowerCase(Locale.ROOT), plan.planTotal(),
+                verified, o.getCurrency(), LocalDate.ofInstant(o.getAcquiredAt(), NIGERIA), o.getStatus(), history,
+                o.getSupersedes(), o.getAcquiredAt());
+        OwnedPlotDto p = entry.dto();
+        return new Entry(new OwnedPlotDto(p.id(), p.transactionId(), p.estateId(), p.plotId(), p.plotLabel(),
+                p.estate(), p.location(), p.sqm(), p.actualSqm(), p.isCorner(), p.cornerPremiumPct(),
+                p.basePrice(), p.titleType(), p.titleStatus(), p.titleVerified(), p.intent(), p.plan(),
+                p.totalPrice(), p.paidAmount(), p.currency(), p.acquiredDate(), p.status(), null, null, p.payments(),
+                null, null, null, null, plan.planName(), p.acquiredDate(), endedAt(o),
+                refund == null ? null : new PlanRefundDto(refund.amount(), refund.refunded(), o.getCurrency().name(),
+                        refund.status(), refund.needsYourAccount()),
+                p.supersedes()), entry.sortTime());
+    }
+
     private static ArrearsDto arrears(PlanStanding standing) {
         PlanStanding.Arrears a = standing.arrears();
         if (a == null) {
@@ -269,7 +307,7 @@ public class PortfolioService implements PortfolioApi {
     private Entry pendingDto(PendingPurchase p, PlotDetails d, PaymentSummary payment) {
         List<PortfolioPaymentDto> history = payment != null && "succeeded".equals(payment.status())
                 ? List.of(paymentDto(payment, p.currency(), "pending_verification", null,
-                "installment".equals(p.plan()) ? "deposit" : "outright"))
+                "installment".equals(p.plan()) ? "deposit" : "flexible".equals(p.plan()) ? "contribution" : "outright"))
                 : List.of();
         return dto(p.transactionId(), p.transactionId(), p.estateId(), p.plotId(), d, p.cornerPremiumPct(),
                 p.basePrice(), p.intent().getValue(), p.plan(), p.totalPrice(), BigDecimal.ZERO, p.currency(),

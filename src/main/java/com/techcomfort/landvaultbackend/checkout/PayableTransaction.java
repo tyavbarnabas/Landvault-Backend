@@ -28,7 +28,9 @@ public record PayableTransaction(
          * plans were declared (it has no deposit to charge), and for a flexible
          * purchase until paying one is built (phase 3).
          */
-        BigDecimal amountDue
+        BigDecimal amountDue,
+        /** Flexible contribution: the plan's terms as copied onto the purchase; null for every other plan. */
+        FlexiblePurchase flexible
 ) {
 
     public boolean isPendingPayment() {
@@ -56,5 +58,9 @@ public record PayableTransaction(
 
     public boolean isInstalment() {
         return "installment".equals(plan);
+    }
+
+    public boolean isFlexible() {
+        return flexible != null;
     }
 }

@@ -117,6 +117,7 @@
     <include file="changes/109-penalty-waivers.xml" relativeToChangelogFile="true"/>
     <include file="changes/110-flexible-plans.xml" relativeToChangelogFile="true"/>
     <include file="changes/111-flexible-purchases.xml" relativeToChangelogFile="true"/>
+    <include file="changes/112-flexible-contributions.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

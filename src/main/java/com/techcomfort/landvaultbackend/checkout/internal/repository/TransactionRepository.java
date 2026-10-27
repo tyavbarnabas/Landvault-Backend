@@ -57,11 +57,13 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
      * officer sees only their branch's sales without any branch condition here.
      * Rows: transaction id, reference, estate id, estate name, plot id, block
      * name, plot number, buyer id, total price, currency, awaiting since,
-     * the plan's deposit and name (null when paying in full).
+     * the plan's deposit (a flexible plan's minimum to start) and name (null
+     * when paying in full), and a flexible plan's total.
      */
     @Query(value = "SELECT t.id, t.reference, e.id AS estate_id, e.name, p.id AS plot_id, b.name AS block_name, "
-            + "p.plot_number, t.buyer_user_id, t.total_price, t.currency, t.updated_at, t.deposit_amount, "
-            + "t.plan_name "
+            + "p.plot_number, t.buyer_user_id, t.total_price, t.currency, t.updated_at, "
+            + "COALESCE(t.deposit_amount, t.flexible_minimum_to_start) AS amount_due, t.plan_name, "
+            + "CASE WHEN t.plan = 'FLEXIBLE' THEN t.plan_total END AS flexible_plan_total "
             + "FROM transactions t JOIN plots p ON p.id = t.plot_id JOIN estates e ON e.id = t.estate_id "
             + "LEFT JOIN blocks b ON b.id = p.block_id "
             + "WHERE t.status = 'AWAITING_FINANCE' AND t.seller_tenant_id = :tenantId "
@@ -106,7 +108,7 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
     List<Object[]> findOnPlan(@Param("tenantId") UUID tenantId, @Param("ids") Collection<UUID> ids);
 
     /**
-     * Phase 4: every running plan — one company's ({@code :tenantId}) or, with
+     * Phase 4: every running instalment plan (flexible plans have no schedule to remind about) — one company's ({@code :tenantId}) or, with
      * platform scope and a null id, everyone's — read under the caller's RLS,
      * so a branch officer sees only their branch's.
      */
@@ -114,7 +116,8 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
             + "b.name AS block_name, p.plot_number, t.buyer_user_id, t.plan_name, t.currency, t.updated_at "
             + "FROM transactions t JOIN plots p ON p.id = t.plot_id JOIN estates e ON e.id = t.estate_id "
             + "LEFT JOIN blocks b ON b.id = p.block_id "
-            + "WHERE t.status = 'ON_PLAN' AND (CAST(:tenantId AS uuid) IS NULL OR t.seller_tenant_id = :tenantId) "
+            + "WHERE t.status = 'ON_PLAN' AND t.plan = 'INSTALLMENT' "
+            + "AND (CAST(:tenantId AS uuid) IS NULL OR t.seller_tenant_id = :tenantId) "
             + "ORDER BY t.updated_at", nativeQuery = true)
     List<Object[]> findRunningPlans(@Param("tenantId") UUID tenantId);
 
