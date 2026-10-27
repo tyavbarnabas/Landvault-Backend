@@ -27,14 +27,33 @@ public record FinanceQueueRow(
         /** Phase 5a: the buyer withdrew from this plan; a payment may still await finance. */
         boolean planWithdrawn,
         /** Phase 5b: the developer revoked this plan; a payment may still await finance. */
-        boolean planRevoked
+        boolean planRevoked,
+        /**
+         * Flexible contribution: the plan total — the most a payment may be.
+         * {@code amountDue} is then the least (the minimum to start). Null on
+         * every other plan.
+         */
+        BigDecimal flexiblePlanTotal
 ) {
 
     public FinanceQueueRow(UUID transactionId, String transactionReference, UUID estateId, String estateName,
                            UUID plotId, String plotLabel, UUID buyerUserId, BigDecimal totalPrice, Currency currency,
                            Instant awaitingSince, boolean letterApproved, BigDecimal amountDue, String planName) {
         this(transactionId, transactionReference, estateId, estateName, plotId, plotLabel, buyerUserId, totalPrice,
-                currency, awaitingSince, letterApproved, amountDue, planName, false, false);
+                currency, awaitingSince, letterApproved, amountDue, planName, false, false, null);
+    }
+
+    public FinanceQueueRow(UUID transactionId, String transactionReference, UUID estateId, String estateName,
+                           UUID plotId, String plotLabel, UUID buyerUserId, BigDecimal totalPrice, Currency currency,
+                           Instant awaitingSince, boolean letterApproved, BigDecimal amountDue, String planName,
+                           boolean planWithdrawn, boolean planRevoked) {
+        this(transactionId, transactionReference, estateId, estateName, plotId, plotLabel, buyerUserId, totalPrice,
+                currency, awaitingSince, letterApproved, amountDue, planName, planWithdrawn, planRevoked, null);
+    }
+
+    /** A flexible plan: the buyer chose the amount, within {@code amountDue}..{@code flexiblePlanTotal}. */
+    public boolean isFlexible() {
+        return flexiblePlanTotal != null;
     }
 
     /** The plan ended early, withdrawn or revoked: the buyer's part of any payment is already owed back. */
@@ -47,7 +66,7 @@ public record FinanceQueueRow(
         return planRevoked ? "revoked" : planWithdrawn ? "withdrawn" : "on_plan";
     }
 
-    /** True when the payment being verified is an instalment plan's deposit, not the full price. */
+    /** True when the payment being verified holds the plot on a plan (a deposit, or a flexible plan's first payment). */
     public boolean isDeposit() {
         return planName != null;
     }

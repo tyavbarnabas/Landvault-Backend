@@ -6715,10 +6715,40 @@ the offer, and the first payment at least the minimum to start and at most the p
   while listed, and the split; **a quiet plan** — the inactivity notice, and past the finish date only finishing
   stops it; and that these terms **replace the estate's general withdrawal and revocation terms** printed below
   (those are written for instalment plans). Proven red by issuing the outright clauses instead.
-- **Not payable yet**: `PayableTransaction.amountDue` is null and payments refuses it (`PAYMENT_PLAN_NOT_SUPPORTED`)
-  until phase 3. Meanwhile an opened flexible purchase is abandoned by the payment sweep like any unpaid one.
-- **For phase 3**: the allocation letter copies the offer's conditions, which include the estate's withdrawal and
-  revocation clauses — a flexible buyer's letter must carry the replacement clause too, or leave those out.
+- An opened flexible purchase whose first payment never comes is abandoned by the payment sweep like any unpaid one.
+
+### Phase 3a: the first payment (changeset 112)
+
+Decided with the user (2026-10-27, all as recommended): one payment awaiting finance at a time; every flexible payment
+is a `CONTRIBUTION`; the instalment statuses are reused; the letters carry the flexible terms; a late first payment
+can only be refunded; no reminders.
+
+- **The buyer names the amount**: `POST /api/transactions/{id}/payments?amount=` — the only route where a figure
+  comes from the buyer, and only on a flexible plan (`amount` anywhere else is `INVALID_AMOUNT`). The first must be at
+  least the minimum to start and at most the plan total, in whole kobo (`INVALID_AMOUNT` with the limits otherwise,
+  or when left out). The offer must be accepted first, as for every plan. `payments.purpose = CONTRIBUTION`, no
+  instalment sequence.
+- **Finance checks it against the limits, not one figure**: the queue row carries the minimum (`amountDue`) and the
+  plan total (`FinanceQueueRow.flexiblePlanTotal`); `amountsMatch` means a confirmed `CONTRIBUTION` within them.
+  `paymentFor: contribution`, `expectedAmount` what was paid, `remainingAfter` what's left (proven red by checking
+  for an exact amount).
+- **Verifying holds the plot on the plan**, exactly like a deposit: `ON_PLAN`, the reservation converted,
+  `PlotAllocated(provisional)` → the portfolio's `INSTALLMENT_ACTIVE` record (`plan: flexible`) and the
+  **provisional letter**. The buyer's email says first payment, not deposit.
+- **The letters put the flexible terms first** (`AllocationLetterIssuer`): the offer's flexible clauses — which end
+  "these terms … take the place of the estate's general withdrawal and revocation terms set out below" — then the
+  conditions, then a flexible provisional line ("final when the plan total … has been paid and verified"). Proven red
+  by leaving the flexible clauses out.
+- **The portfolio** (`PortfolioService.flexibleDto`): `totalPrice` the plan total, `paidAmount` what finance
+  verified, every succeeded payment typed `contribution`, `planName`; no next due date and no arrears — nothing is
+  ever late. Read through the new `CheckoutApi.flexiblePlansOf`.
+- **Kept out of instalment machinery**: `findRunningPlans` is instalment-only (reminders and the developer's plan
+  list have no schedule to show); payouts never list a running flexible plan (`findVerifiedSales` was already
+  instalment-only for `ON_PLAN`); leaving (`PLAN_NOT_WITHDRAWABLE`), restructures and waivers refuse it (no escrow
+  terms or schedule for them); a late first payment is refund-only (`LATE_DEPOSIT_NOT_SUPPORTED`).
+- **Not yet (3b)**: later contributions (paying again on `on_plan` is still `PAYMENT_PLAN_NOT_SUPPORTED`), escrow
+  payouts, completion and the final letter. **Before completing anything in 3b**: a `VERIFIED` flexible purchase
+  would reach `findVerifiedSales` with no escrow and be paid out as an outright sale — 3b must add its escrow.
 
 ## A buyer's address (changeset 097)
 

@@ -37,10 +37,20 @@ public interface SettlementAlertSender {
      * The developer's finance verified (plot allocated) or rejected (money returned) a purchase — sent to the buyer.
      * {@code letterNumber}/{@code letterUrl} name the allocation letter when verified, otherwise null.
      */
-    /** {@code planName}: set when the payment verified was an instalment plan's deposit, null otherwise. */
+    /**
+     * {@code planName}: set when the payment verified was a plan's deposit, null otherwise;
+     * {@code flexible}: that plan is a flexible one, and the payment its first.
+     */
     record PurchaseDecisionAlert(String to, String plotLabel, String estateName, String amount, boolean verified,
                                  String reason, String purchaseUrl, String letterNumber, String letterUrl,
-                                 String planName) {
+                                 String planName, boolean flexible) {
+
+        PurchaseDecisionAlert(String to, String plotLabel, String estateName, String amount, boolean verified,
+                              String reason, String purchaseUrl, String letterNumber, String letterUrl,
+                              String planName) {
+            this(to, plotLabel, estateName, amount, verified, reason, purchaseUrl, letterNumber, letterUrl, planName,
+                    false);
+        }
     }
 
     void accountSubmitted(AccountSubmittedAlert alert);

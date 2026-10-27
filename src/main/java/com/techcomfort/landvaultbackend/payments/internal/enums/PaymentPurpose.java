@@ -9,5 +9,7 @@ public enum PaymentPurpose {
     /** One instalment of the schedule; the payment names which ({@code instalmentSequence}). */
     INSTALMENT,
     /** Everything still owed on the plan, in one payment ("pay off the balance"). */
-    BALANCE
+    BALANCE,
+    /** Flexible contribution (changeset 112): an amount the buyer chose, within the plan's limits. */
+    CONTRIBUTION
 }

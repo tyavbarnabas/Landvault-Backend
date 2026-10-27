@@ -12,6 +12,7 @@ import com.techcomfort.landvaultbackend.testsupport.EstateTitleFixture;
 import com.techcomfort.landvaultbackend.portfolio.dto.PortfolioSummaryDto;
 import com.techcomfort.landvaultbackend.payments.dto.PortalPlanDto;
 import com.techcomfort.landvaultbackend.portfolio.dto.OwnedPlotDto;
+import com.techcomfort.landvaultbackend.portfolio.dto.PortfolioPaymentDto;
 import com.techcomfort.landvaultbackend.checkout.PlanStanding;
 import com.techcomfort.landvaultbackend.checkout.dto.CreateReservationRequest;
 import com.techcomfort.landvaultbackend.checkout.dto.ReservationDto;
@@ -121,6 +122,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 /**
  * Reserving and buying, against a database where row-level security is
@@ -3135,7 +3137,7 @@ class ReservationCheckoutUnderRlsIT {
      * Flexible contribution, phase 2: the plan's terms are copied onto the
      * purchase from the agreed price and fixed — redeclaring the estate's plans
      * changes nothing — with no schedule and no instalment rows. The offer
-     * states the plan and both ways out in naira, and paying waits for phase 3.
+     * states the plan and both ways out in naira.
      */
     @Test
     void aFlexiblePurchaseFixesItsTermsAndTheOfferStatesBothWaysOut() {
@@ -3189,11 +3191,97 @@ class ReservationCheckoutUnderRlsIT {
                         "take the place of the estate's general withdrawal and revocation terms")
                 .doesNotContain("instalments fall due");
 
+    }
+
+    /**
+     * Flexible contribution, phase 3a: the first payment is the buyer's own
+     * figure, between the minimum to start and the plan total; finance checks it
+     * against those limits, and verifying holds the plot on the plan with a
+     * provisional letter carrying the flexible terms. Nothing is owed for
+     * payout yet, nothing can be late, and leaving and later payments wait for
+     * their phases.
+     */
+    @Test
+    void aFlexiblePlansFirstPaymentIsTheBuyersOwnFigureAndHoldsThePlot() {
+        UUID planId = planIds(declarePlans(FLEXIBLE_AND_INSTALMENT_PLANS)).get("Pay as you can");
+        TransactionDto purchase = objectMapper.readValue(
+                openRaw(reserve(buyer, plotId).id(), "flexible", null, planId).getBody(), TransactionDto.class);
         assertThat(acceptOffer(buyer, purchase.offer().id()).getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(pay(buyer, purchase.id()).getBody()).as("paying a flexible plan is phase 3")
+        paystackReturnsALink();
+
+        assertThat(pay(buyer, purchase.id()).getBody()).as("no amount named").contains("INVALID_AMOUNT");
+        assertThat(payAmount(buyer, purchase.id(), "1999999.99").getBody()).as("below the minimum to start")
+                .contains("INVALID_AMOUNT", "at least ₦2,000,000.00 and at most ₦22,000,000.00");
+        assertThat(payAmount(buyer, purchase.id(), "22000000.01").getBody()).as("above the plan total")
+                .contains("INVALID_AMOUNT");
+        assertThat(payAmount(buyer, purchase.id(), "2000000.001").getBody()).as("finer than a kobo")
+                .contains("INVALID_AMOUNT");
+        String payment = "FROM payments WHERE transaction_id = '" + purchase.id() + "'";
+        assertThat(queryString("SELECT count(*) " + payment)).isEqualTo("0");
+
+        ResponseEntity<String> started = payAmount(buyer, purchase.id(), "5000000");
+        assertThat(started.getStatusCode()).as(started.getBody()).isEqualTo(HttpStatus.CREATED);
+        assertThat(queryString("SELECT purpose || '/' || amount_kobo " + payment)).isEqualTo("CONTRIBUTION/500000000");
+        String reference = queryString("SELECT reference " + payment);
+        paystackSays(reference, "success", 500_000_000L, "NGN", "Approved");
+        assertThat(confirm(buyer, reference).getBody()).contains("\"status\":\"succeeded\"");
+        assertThat(queryString("SELECT status FROM transactions WHERE id = '" + purchase.id() + "'"))
+                .isEqualTo("AWAITING_FINANCE");
+
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        assertThat(get("/api/portal/finance/transactions", officer, String.class).getBody())
+                .contains("\"paymentFor\":\"contribution\"", "\"planName\":\"Pay as you can\"",
+                        "\"expectedAmount\":5000000", "\"amountsMatch\":true", "\"remainingAfter\":17000000");
+        ResponseEntity<String> verified = financeAction(officer, purchase.id(), "verify", null);
+        assertThat(verified.getStatusCode()).as(verified.getBody()).isEqualTo(HttpStatus.OK);
+        assertThat(verified.getBody()).contains("\"status\":\"on_plan\"")
+                .containsPattern("\"allocationLetterNumber\":\"HT-PAL-");
+
+        assertThat(plotStatus(plotId)).as("held on the plan, not sold").isEqualTo("ON_PLAN");
+        assertThat(queryString("SELECT status FROM transactions WHERE id = '" + purchase.id() + "'")).isEqualTo("ON_PLAN");
+        assertThat(queryString("SELECT finance_verified_at IS NOT NULL " + payment)).isEqualTo("t");
+        String letters = "FROM allocation_letters WHERE transaction_id = '" + purchase.id() + "'";
+        assertThat(queryString("SELECT kind " + letters)).isEqualTo("PROVISIONAL");
+        assertThat(queryString("SELECT array_to_string(clauses, '|') " + letters))
+                .as("the flexible terms, then the conditions, then the provisional line")
+                .contains("That you have chosen the Pay as you can", "ask HomeTrue to sell the plot",
+                        "take the place of the estate's general withdrawal and revocation terms")
+                .endsWith("If you leave the plan, or it is ended, the allocation ends on the terms of that offer.");
+
+        OwnedPlotDto onPlan = portfolio(buyer).items().getFirst();
+        assertThat(onPlan.status()).isEqualTo("installment_active");
+        assertThat(onPlan.plan()).isEqualTo("flexible");
+        assertThat(onPlan.planName()).isEqualTo("Pay as you can");
+        assertThat(onPlan.totalPrice()).as("what the plan costs").isEqualByComparingTo("22000000");
+        assertThat(onPlan.paidAmount()).as("what finance verified").isEqualByComparingTo("5000000");
+        assertThat(onPlan.nextDueDate()).as("nothing falls due").isNull();
+        assertThat(onPlan.arrears()).isNull();
+        assertThat(onPlan.payments()).extracting(PortfolioPaymentDto::type, PortfolioPaymentDto::status)
+                .containsExactly(tuple("contribution", "confirmed"));
+
+        assertThat(queryString("SELECT count(*) FROM transactions WHERE status = 'VERIFIED' AND id = '"
+                + purchase.id() + "'")).as("no payout until 3b builds the escrow for it").isEqualTo("0");
+        assertThat(get("/api/portal/finance/plans", officer, String.class).getBody())
+                .as("the running-instalment-plans view has no schedule to show").doesNotContain(purchase.id().toString());
+        assertThat(get("/api/transactions/" + purchase.id() + "/withdrawal", buyer.token(), String.class).getBody())
+                .as("leaving comes with phase 4").contains("PLAN_NOT_WITHDRAWABLE");
+        assertThat(payAmount(buyer, purchase.id(), "1000000").getBody()).as("later payments come with phase 3b")
                 .contains("PAYMENT_PLAN_NOT_SUPPORTED");
+    }
+
+    /** Only a flexible plan lets the buyer name the amount. */
+    @Test
+    void anAmountIsRefusedOnAnyOtherPlan() {
+        TransactionDto purchase = outrightTransaction();
+        paystackReturnsALink();
+        assertThat(payAmount(buyer, purchase.id(), "1").getBody()).contains("INVALID_AMOUNT");
         assertThat(queryString("SELECT count(*) FROM payments WHERE transaction_id = '" + purchase.id() + "'"))
                 .isEqualTo("0");
+    }
+
+    private ResponseEntity<String> payAmount(Buyer who, UUID transactionId, String amount) {
+        return restTemplate.exchange("/api/transactions/" + transactionId + "/payments?amount=" + amount,
+                HttpMethod.POST, entity(who.token(), null), String.class);
     }
 
     /** A flexible plan (10% to start on ₦20M, 10% premium) beside the 12-month plan. */

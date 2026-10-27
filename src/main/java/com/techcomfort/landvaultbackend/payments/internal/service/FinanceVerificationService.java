@@ -173,18 +173,21 @@ public class FinanceVerificationService {
                         buyerNotifier.purchaseUrl(row.transactionId()),
                         letter.map(AllocationLetterLookup.LetterRef::number).orElse(null),
                         letter.map(l -> buyerNotifier.letterUrl(l.id())).orElse(null),
-                        verified && deposit ? row.planName() : null))));
+                        verified && deposit ? row.planName() : null, verified && deposit && row.isFlexible()))));
     }
 
     private FinanceQueueItemDto toItem(FinanceQueueRow row) {
         Optional<Payment> payment = confirmedPaymentFor(row.transactionId());
         FinanceQueueItemDto.GatewayRecord record = payment.map(FinanceVerificationService::gateway).orElse(null);
+        boolean matches = payment.isPresent() && matches(payment.get(), row);
+        // Flexible: the buyer chose the amount, so within the plan's limits what was paid is what's expected.
+        BigDecimal expected = row.isFlexible() && matches ? payment.get().getAmount() : row.amountDue();
         return new FinanceQueueItemDto(row.transactionId(), row.transactionReference(), row.estateId(),
                 row.estateName(), row.plotId(), row.plotLabel(), identityApi.emailOf(row.buyerUserId()).orElse(null),
-                row.amountDue(), row.currency().name(), row.awaitingSince(), record,
-                payment.isPresent() && matches(payment.get(), row), row.letterApproved(),
-                row.isDeposit() ? "deposit" : "full_price", row.planName(), null, null, null, null, BigDecimal.ZERO, List.of(),
-                false, false);
+                expected, row.currency().name(), row.awaitingSince(), record, matches, row.letterApproved(),
+                row.isFlexible() ? "contribution" : row.isDeposit() ? "deposit" : "full_price", row.planName(),
+                null, null, null, null, BigDecimal.ZERO, List.of(), false, false,
+                row.isFlexible() && matches ? row.flexiblePlanTotal().subtract(payment.get().getAmount()) : null);
     }
 
     // ------------------------------------------------------------------ 3b: instalments
@@ -313,7 +316,7 @@ public class FinanceVerificationService {
                         .sorted(Comparator.comparing(PaymentPenalty::getInstalmentSequence))
                         .map(l -> new FinanceQueueItemDto.PenaltyLine(l.getInstalmentSequence(), l.getMonthsLate(),
                                 l.getPenaltyPct(), l.getAmount()))
-                        .toList(), row.planWithdrawn(), row.planRevoked());
+                        .toList(), row.planWithdrawn(), row.planRevoked(), null);
     }
 
     private void markVerified(Payment payment, UUID actor) {
@@ -331,8 +334,21 @@ public class FinanceVerificationService {
         return payments.findFirstByTransactionIdAndStatusOrderByCreatedAtDesc(transactionId, PaymentStatus.SUCCEEDED);
     }
 
+    /**
+     * The confirmed payment is what this purchase was waiting for: exactly the
+     * amount due, or — the buyer's own figure on a flexible plan — between the
+     * minimum to start and the plan total. The human check backs the gateway
+     * and the limits the payment was started under.
+     */
     private static boolean matches(Payment payment, FinanceQueueRow row) {
-        return payment.getAmount().compareTo(row.amountDue()) == 0 && payment.getCurrency() == row.currency();
+        if (payment.getCurrency() != row.currency()) {
+            return false;
+        }
+        return row.isFlexible()
+                ? payment.getPurpose() == PaymentPurpose.CONTRIBUTION
+                && payment.getAmount().compareTo(row.amountDue()) >= 0
+                && payment.getAmount().compareTo(row.flexiblePlanTotal()) <= 0
+                : payment.getAmount().compareTo(row.amountDue()) == 0;
     }
 
     /**

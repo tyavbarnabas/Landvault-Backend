@@ -10,6 +10,7 @@ import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
 import com.techcomfort.landvaultbackend.checkout.CheckoutApi;
 import com.techcomfort.landvaultbackend.checkout.FinanceDecision;
 import com.techcomfort.landvaultbackend.checkout.FinanceQueueRow;
+import com.techcomfort.landvaultbackend.checkout.FlexiblePurchase;
 import com.techcomfort.landvaultbackend.checkout.PayableTransaction;
 import com.techcomfort.landvaultbackend.checkout.PendingPurchase;
 import com.techcomfort.landvaultbackend.checkout.PlanRevoked;
@@ -243,6 +244,17 @@ public class CheckoutApiImpl implements CheckoutApi {
 
     @Override
     @Transactional(readOnly = true)
+    public Map<UUID, FlexiblePurchase> flexiblePlansOf(Collection<UUID> transactionIds) {
+        Map<UUID, FlexiblePurchase> out = new HashMap<>();
+        if (!transactionIds.isEmpty()) {
+            transactions.findAllById(transactionIds)
+                    .forEach(t -> t.flexiblePlan().ifPresent(f -> out.put(t.getId(), f)));
+        }
+        return out;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public Optional<OfferSummary> offerFor(UUID transactionId) {
         return Optional.ofNullable(offerLetters.forTransactions(List.of(transactionId)).get(transactionId));
     }
@@ -298,7 +310,8 @@ public class CheckoutApiImpl implements CheckoutApi {
                 r[5] == null ? "Plot " + r[6] : "Block " + r[5] + ", Plot " + r[6],
                 (UUID) r[7], (BigDecimal) r[8], Currency.valueOf((String) r[9]), (Instant) r[10],
                 letters.computeIfAbsent((UUID) r[2], letterGate::letterReady),
-                r[11] == null ? (BigDecimal) r[8] : (BigDecimal) r[11], (String) r[12])).toList();
+                r[11] == null ? (BigDecimal) r[8] : (BigDecimal) r[11], (String) r[12], false, false,
+                (BigDecimal) r[13])).toList();
     }
 
     @Override
@@ -325,9 +338,11 @@ public class CheckoutApiImpl implements CheckoutApi {
         if (!letterGate.letterReady(transaction.getEstateId())) {
             return FinanceDecision.LETTER_NOT_APPROVED;
         }
-        // Phase 3a: an instalment plan's deposit holds the plot on the plan; the
-        // last instalment sells it (3b). Paying in full sells it now.
-        boolean deposit = transaction.getPlan() == PaymentPlan.INSTALLMENT;
+        // Phase 3a: an instalment plan's deposit — or a flexible plan's first
+        // payment — holds the plot on the plan; the last payment sells it (3b).
+        // Paying in full sells it now.
+        boolean flexible = transaction.getPlan() == PaymentPlan.FLEXIBLE;
+        boolean deposit = transaction.getPlan() == PaymentPlan.INSTALLMENT || flexible;
         if (!(deposit ? plotLockGateway.holdOnPlan(transaction.getPlotId())
                 : plotLockGateway.sell(transaction.getPlotId()))) {
             return FinanceDecision.PLOT_NOT_RESERVED;
@@ -344,7 +359,8 @@ public class CheckoutApiImpl implements CheckoutApi {
         reservations.save(reservation);
         auditApi.record(deposit
                 ? AuditEntryRequest.of(financeUserId, "transaction.deposit_verified", "transaction", transactionId,
-                tenantId, "Deposit for " + transaction.getReference() + " (" + transaction.getPlanName()
+                tenantId, (flexible ? "First payment" : "Deposit") + " for " + transaction.getReference() + " ("
+                        + transaction.getPlanName()
                         + ") verified by finance; plot " + transaction.getPlotId()
                         + " held on the plan and the reservation converted.")
                 : AuditEntryRequest.of(financeUserId, "transaction.verified", "transaction", transactionId,
@@ -398,7 +414,8 @@ public class CheckoutApiImpl implements CheckoutApi {
         if (transaction.getStatus() != TransactionStatus.ABANDONED) {
             return FinanceDecision.NOT_ABANDONED;
         }
-        if (transaction.getPlan() == PaymentPlan.INSTALLMENT) {
+        // A plan's first payment can only be refunded when it arrives late (instalment or flexible).
+        if (transaction.getPlan() == PaymentPlan.INSTALLMENT || transaction.getPlan() == PaymentPlan.FLEXIBLE) {
             return FinanceDecision.LATE_DEPOSIT_NOT_SUPPORTED;
         }
         // Checked before anything is written: if the plot is taken, nothing changes.
@@ -479,8 +496,9 @@ public class CheckoutApiImpl implements CheckoutApi {
         return new PayableTransaction(t.getId(), t.getReference(), t.getBuyerUserId(), t.getReservationId(),
                 t.getPlotId(), t.getEstateId(), t.getSellerTenantId(), t.getTotalPrice(), t.getCurrency(),
                 t.getPlan() == null ? null : t.getPlan().getValue(), t.getStatus().getValue(),
-                // Flexible: nothing payable until phase 3 builds it — payments refuses the plan.
+                // Flexible: the buyer names each amount; the first must be at least the minimum to start.
                 t.getPlan() == PaymentPlan.INSTALLMENT ? t.getDepositAmount()
-                        : t.getPlan() == PaymentPlan.FLEXIBLE ? null : t.getTotalPrice());
+                        : t.getPlan() == PaymentPlan.FLEXIBLE ? t.getFlexibleMinimumToStart() : t.getTotalPrice(),
+                t.flexiblePlan().orElse(null));
     }
 }

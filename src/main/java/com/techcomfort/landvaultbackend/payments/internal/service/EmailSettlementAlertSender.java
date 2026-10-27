@@ -161,7 +161,24 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
         SimpleMailMessage message = new SimpleMailMessage();
         message.setFrom(fromAddress);
         message.setTo(alert.to());
-        if (alert.verified() && alert.planName() != null) {
+        if (alert.verified() && alert.flexible()) {
+            // Flexible contribution, phase 3a: the first payment holds the plot; no schedule follows.
+            message.setSubject("First payment verified: " + alert.plotLabel() + " at " + alert.estateName()
+                    + " is held for you");
+            message.setText("""
+                    Hello,
+
+                    The developer has verified your first payment of NGN %s on the %s. %s, %s is now held for \
+                    you, and becomes yours when the plan total is paid and verified. You can pay any amount, at \
+                    any time, until then.
+                    %s
+                    See your purchase:
+
+                        %s
+                    """.formatted(alert.amount(), alert.planName(), alert.plotLabel(), alert.estateName(),
+                    letterParagraph("provisional allocation letter", alert.letterNumber(), alert.letterUrl()),
+                    alert.purchaseUrl()));
+        } else if (alert.verified() && alert.planName() != null) {
             // Phase 3a: a deposit holds the plot on the plan; it is the buyer's once every instalment is paid.
             message.setSubject("Deposit verified: " + alert.plotLabel() + " at " + alert.estateName()
                     + " is held for you");

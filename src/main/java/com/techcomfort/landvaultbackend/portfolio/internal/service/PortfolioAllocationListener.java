@@ -36,16 +36,18 @@ public class PortfolioAllocationListener {
     @Transactional(propagation = Propagation.MANDATORY)
     public void on(PlotAllocated event) {
         // Outright sales arrive paid in full; an instalment plan arrives at its
-        // verified deposit (phase 3a) and stays active until the last
-        // instalment. Anything else would be a plan the portfolio can't show.
-        boolean onPlan = event.provisional() && "installment".equals(event.plan());
-        if (!event.provisional() && "installment".equals(event.plan())) {
+        // verified deposit (phase 3a), and a flexible plan at its verified first
+        // payment, and stays active until paid in full. Anything else would be a
+        // plan the portfolio can't show.
+        boolean plan = "installment".equals(event.plan()) || "flexible".equals(event.plan());
+        boolean onPlan = event.provisional() && plan;
+        if (!event.provisional() && plan) {
             completePlan(event);
             return;
         }
         if (!onPlan && !"outright".equals(event.plan())) {
             throw new IllegalStateException("Allocated a " + event.plan() + " sale; the portfolio knows outright "
-                    + "sales and instalment plans at their deposit.");
+                    + "sales and plans at their first verified payment.");
         }
         OwnedPlot owned = ownedPlots.saveAndFlush(OwnedPlot.builder()
                 .buyerUserId(event.buyerUserId())
@@ -64,7 +66,7 @@ public class PortfolioAllocationListener {
                 .acquiredAt(Instant.now())
                 .build());
         auditApi.record(AuditEntryRequest.of(event.actorUserId(), "portfolio.plot_owned", "owned_plot", owned.getId(),
-                event.sellerTenantId(), "Plot " + event.plotId() + (onPlan ? " is held on an instalment plan for buyer "
+                event.sellerTenantId(), "Plot " + event.plotId() + (onPlan ? " is held on a " + event.plan() + " plan for buyer "
                         : " is now owned by buyer ") + event.buyerUserId()
                         + " (sale " + event.transactionId() + ")."));
         log.info("Owned plot {} recorded for sale {}", owned.getId(), event.transactionId());

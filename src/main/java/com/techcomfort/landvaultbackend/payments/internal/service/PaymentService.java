@@ -3,6 +3,7 @@ package com.techcomfort.landvaultbackend.payments.internal.service;
 import com.techcomfort.landvaultbackend.audit.AuditApi;
 import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
 import com.techcomfort.landvaultbackend.checkout.CheckoutApi;
+import com.techcomfort.landvaultbackend.checkout.FlexiblePurchase;
 import com.techcomfort.landvaultbackend.checkout.PayableTransaction;
 import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
 import com.techcomfort.landvaultbackend.common.LatePaymentTerms;
@@ -27,6 +28,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
 import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
@@ -96,9 +99,24 @@ public class PaymentService {
      */
     @Transactional
     public Started start(UUID transactionId, boolean balance) {
+        return start(transactionId, balance, null);
+    }
+
+    /**
+     * As {@link #start(UUID, boolean)}; {@code amount} is a flexible plan's
+     * contribution, the one figure a buyer names (phase 3a: the first, at
+     * least the minimum to start and at most the plan total). Refused on any
+     * other plan, where the amount always comes from the purchase.
+     */
+    @Transactional
+    public Started start(UUID transactionId, boolean balance, BigDecimal amount) {
         UUID buyerId = currentScope().userId();
         PayableTransaction transaction = checkoutApi.transactionForBuyer(transactionId, buyerId)
                 .orElseThrow(PaymentException.TransactionNotFound::new);
+        if (amount != null && !transaction.isFlexible()) {
+            throw new PaymentException.InvalidAmount(
+                    "The amount comes from your purchase; only a flexible plan lets you choose it.");
+        }
         if (transaction.isOnPlan()) {
             return start(transaction, buyerId, instalmentDue(transaction, balance));
         }
@@ -111,13 +129,18 @@ public class PaymentService {
         // An instalment purchase pays its deposit first (phase 3a); its
         // instalments come with phase 3b. Milestone plans aren't payable yet,
         // nor an instalment purchase opened before plans were declared.
-        if (!transaction.isOutright() && !(transaction.isInstalment() && transaction.amountDue() != null)) {
+        if (!transaction.isOutright() && !transaction.isFlexible()
+                && !(transaction.isInstalment() && transaction.amountDue() != null)) {
             throw new PaymentException.PlanNotSupported(transaction.plan());
         }
         // OL: no money before the buyer has accepted the offer letter. Purchases
         // opened before offer letters existed have none, and stay payable.
         if (checkoutApi.offerFor(transactionId).filter(offer -> !offer.accepted()).isPresent()) {
             throw new PaymentException.OfferNotAccepted();
+        }
+        if (transaction.isFlexible()) {
+            return start(transaction, buyerId, new Due(firstContribution(transaction, amount),
+                    PaymentPurpose.CONTRIBUTION, null));
         }
         return start(transaction, buyerId, new Due(transaction.amountDue(),
                 transaction.isInstalment() ? PaymentPurpose.DEPOSIT : PaymentPurpose.OUTRIGHT, null));
@@ -151,6 +174,27 @@ public class PaymentService {
         PlanSchedule.Instalment next = progress.next().orElseThrow();
         return new Due(next.amount(), PaymentPurpose.INSTALMENT, next.sequence(),
                 progress.penaltyDue(next, today).map(p -> List.of(new PenaltyLine(next.sequence(), p))).orElse(List.of()));
+    }
+
+    /**
+     * Flexible contribution, phase 3a: the first payment is the buyer's own
+     * figure, at least the minimum to start and at most the plan total. Its
+     * kobo is checked when it is converted for Paystack.
+     */
+    private static BigDecimal firstContribution(PayableTransaction transaction, BigDecimal amount) {
+        FlexiblePurchase plan = transaction.flexible();
+        String limits = "at least " + naira(plan.minimumToStart()) + " and at most " + naira(plan.planTotal());
+        if (amount == null) {
+            throw new PaymentException.InvalidAmount("Choose how much to pay first (amount): " + limits + ".");
+        }
+        if (amount.compareTo(plan.minimumToStart()) < 0 || amount.compareTo(plan.planTotal()) > 0) {
+            throw new PaymentException.InvalidAmount("Your first payment must be " + limits + ".");
+        }
+        return amount;
+    }
+
+    private static String naira(BigDecimal amount) {
+        return "₦" + new DecimalFormat("#,##0.00", DecimalFormatSymbols.getInstance(Locale.UK)).format(amount);
     }
 
     private Started start(PayableTransaction transaction, UUID buyerId, Due due) {

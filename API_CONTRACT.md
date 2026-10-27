@@ -407,7 +407,18 @@ gets it without a new call.
 
 A third way to buy: a minimum to start, then any amount at any time until finished — no schedule, no due dates, no
 penalties. Phase 1 is declaring and publishing; phase 2 is choosing one at Proceed to buy (see Checkout) and the
-offer letter. **A flexible purchase can't be paid yet** (`PAYMENT_PLAN_NOT_SUPPORTED` until phase 3).
+offer letter; phase 3a is the first payment (below). Later payments, payouts and finishing are 3b.
+
+- **The first payment is the buyer's figure**: `POST /api/transactions/{id}/payments?amount=5000000` — at least
+  `flexible.minimumToStart`, at most `flexible.planTotal`, whole kobo; `INVALID_AMOUNT` otherwise (the message names
+  both limits) or when `amount` is left out. `amount` is refused on every other plan. Accept the offer first.
+- **Finance's queue** shows it as `paymentFor: "contribution"`, `expectedAmount` = what was paid, `amountsMatch` =
+  within the limits, and `remainingAfter`. Verifying holds the plot on the plan (`status: "on_plan"`) and issues the
+  provisional letter (`HT-PAL-`), which carries the flexible terms.
+- **Portfolio**: `plan: "flexible"`, `status: "installment_active"`, `totalPrice` = plan total, `paidAmount` = what
+  finance verified, payments typed `contribution`, `planName`; `nextDueDate`, `installmentMonths` and `arrears` stay
+  null — nothing is ever due.
+- Not yet: paying again once `on_plan` (`PAYMENT_PLAN_NOT_SUPPORTED`), leaving (`PLAN_NOT_WITHDRAWABLE`).
 
 - **Declared in the same set as instalment plans** (`PUT /api/portal/estates/{id}/payment-plans`). Each plan gains an
   optional **`kind`**: `installment` (when left out — existing calls are unchanged) or `flexible`. A flexible plan:

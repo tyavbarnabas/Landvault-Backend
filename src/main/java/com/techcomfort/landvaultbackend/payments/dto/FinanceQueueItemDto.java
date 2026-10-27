@@ -35,7 +35,10 @@ public record FinanceQueueItemDto(
         boolean letterApproved,
         @Schema(description = "`full_price`; on an instalment plan `deposit` (verifying holds the plot on the plan and "
                 + "issues the provisional allocation letter), `instalment`, or `balance` (everything left, paid off). "
-                + "Verifying the last instalment, or a balance, sells the plot and issues the final letter.")
+                + "Verifying the last instalment, or a balance, sells the plot and issues the final letter. On a "
+                + "flexible plan `contribution`: an amount the buyer chose — the first must be at least the minimum to "
+                + "start (`expectedAmount` is then what was paid, when it is within the plan's limits) and holds the "
+                + "plot on the plan, with the provisional letter.")
         String paymentFor,
         @Schema(description = "The instalment plan's name; null when paying in full.", nullable = true)
         String planName,
@@ -61,7 +64,11 @@ public record FinanceQueueItemDto(
 
         @Schema(description = "Phase 5b: you revoked this plan after the buyer fell behind. As for a withdrawal: "
                 + "verifying releases only your share of this payment; rejecting returns your share to the buyer too.")
-        boolean planRevoked
+        boolean planRevoked,
+
+        @Schema(description = "A `contribution` on a flexible plan: what is left of the plan total once this "
+                + "payment is verified. Null otherwise.", nullable = true)
+        BigDecimal remainingAfter
 ) {
 
     /** A penalty charged on one instalment: the step reached and its amount. */

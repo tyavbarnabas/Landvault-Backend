@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Flexible contribution, phase 3a (decided with the user, 2026-10-27):
+        every payment on a flexible plan is a CONTRIBUTION, an amount the buyer
+        chose within the plan's limits. It names no instalment (there is no
+        schedule). See AGENTS.md, "Flexible contribution".
+    -->
+    <changeSet id="112-flexible-contributions" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE payments
+                DROP CONSTRAINT chk_payments_purpose,
+                ADD CONSTRAINT chk_payments_purpose
+                    CHECK (purpose IN ('OUTRIGHT', 'DEPOSIT', 'INSTALMENT', 'BALANCE', 'CONTRIBUTION'));
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE payments
+                DROP CONSTRAINT chk_payments_purpose,
+                ADD CONSTRAINT chk_payments_purpose
+                    CHECK (purpose IN ('OUTRIGHT', 'DEPOSIT', 'INSTALMENT', 'BALANCE'));
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>
