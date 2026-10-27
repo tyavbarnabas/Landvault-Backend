@@ -52,6 +52,12 @@ public class LoggingSettlementAlertSender implements SettlementAlertSender {
     }
 
     @Override
+    public void quietPlan(QuietPlanAlert alert) {
+        log.info("[TEST-ONLY quiet plan] to={} stage={} trigger={} deadline={}", alert.to(), alert.stage(),
+                alert.trigger(), alert.deadline());
+    }
+
+    @Override
     public void planWithdrawn(WithdrawalAlert alert) {
         log.info("[TEST-ONLY plan withdrawn] to={} developer={} purchase={} refund={} developerKeeps={}", alert.to(),
                 alert.toDeveloper(), alert.purchaseReference(), alert.refund(), alert.developerKeeps());

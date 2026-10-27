@@ -388,7 +388,7 @@ public abstract class PaymentException extends RuntimeException {
     /** 5b: only a running plan can be revoked. */
     public static class PlanNotRevocable extends PaymentException {
         public PlanNotRevocable(String status) {
-            super("Only a running instalment plan can be revoked (this purchase is " + status + ").");
+            super("Only a running plan can be revoked (this purchase is " + status + ").");
         }
     }
 
@@ -410,7 +410,7 @@ public abstract class PaymentException extends RuntimeException {
     /** 5b: one open notice per plan. */
     public static class RevocationAlreadyNotified extends PaymentException {
         public RevocationAlreadyNotified(LocalDate deadline) {
-            super("The buyer already has notice of revocation, with until " + deadline + " to pay what is overdue.");
+            super("The buyer already has notice of revocation, with until " + deadline + " to act on it.");
         }
     }
 
@@ -424,7 +424,7 @@ public abstract class PaymentException extends RuntimeException {
     /** 5b: the buyer still has time. */
     public static class RevocationNoticeRunning extends PaymentException {
         public RevocationNoticeRunning(LocalDate deadline) {
-            super("The buyer has until the end of " + deadline + " to pay what is overdue. The revocation can be "
+            super("The buyer has until the end of " + deadline + " to act on the notice. The revocation can be "
                     + "confirmed from the day after.");
         }
     }

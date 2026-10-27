@@ -119,7 +119,7 @@ public class CheckoutApiImpl implements CheckoutApi {
     @Transactional(readOnly = true)
     public Optional<PayableTransaction> planForSeller(UUID transactionId, UUID tenantId) {
         return transactions.findById(transactionId)
-                .filter(t -> t.getPlan() == PaymentPlan.INSTALLMENT)
+                .filter(t -> t.getPlan() == PaymentPlan.INSTALLMENT || t.getPlan() == PaymentPlan.FLEXIBLE)
                 .filter(t -> tenantId.equals(t.getSellerTenantId()))
                 .filter(t -> plotLockGateway.isVisible(t.getPlotId()))
                 .map(CheckoutApiImpl::toPayable);
@@ -192,7 +192,9 @@ public class CheckoutApiImpl implements CheckoutApi {
     @Override
     @Transactional(readOnly = true)
     public Optional<PlanEscrow> escrowOf(UUID transactionId) {
-        return transactions.findById(transactionId).filter(t -> t.getPlan() == PaymentPlan.INSTALLMENT)
+        // Flexible plans too: leaving one settles on the plan's own exit split, copied into escrow_*.
+        return transactions.findById(transactionId)
+                .filter(t -> t.getPlan() == PaymentPlan.INSTALLMENT || t.getPlan() == PaymentPlan.FLEXIBLE)
                 .map(t -> new PlanEscrow(t.getTotalPrice(), new VerifiedSale.Escrow(
                         t.getStatus() == TransactionStatus.VERIFIED, t.getEscrowDeductionPct(),
                         t.getEscrowAppliesTo(), !Boolean.FALSE.equals(t.getPenaltiesRefundable()),
@@ -202,8 +204,18 @@ public class CheckoutApiImpl implements CheckoutApi {
     @Override
     @Transactional(readOnly = true)
     public List<RunningPlan> runningPlans(UUID tenantId) {
-        return transactions.findRunningPlans(tenantId).stream().map(r -> new RunningPlan((UUID) r[0], (String) r[1],
-                (UUID) r[2], (UUID) r[3], (String) r[4], (UUID) r[5],
+        return running(tenantId, PaymentPlan.INSTALLMENT);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<RunningPlan> runningFlexiblePlans(UUID tenantId) {
+        return running(tenantId, PaymentPlan.FLEXIBLE);
+    }
+
+    private List<RunningPlan> running(UUID tenantId, PaymentPlan plan) {
+        return transactions.findRunningPlans(tenantId, plan.name()).stream().map(r -> new RunningPlan((UUID) r[0],
+                (String) r[1], (UUID) r[2], (UUID) r[3], (String) r[4], (UUID) r[5],
                 r[6] == null ? "Plot " + r[7] : "Block " + r[6] + ", Plot " + r[7], (UUID) r[8], (String) r[9],
                 Currency.valueOf((String) r[10]), (Instant) r[11])).toList();
     }

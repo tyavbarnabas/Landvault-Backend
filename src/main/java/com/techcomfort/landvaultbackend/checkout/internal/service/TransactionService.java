@@ -2,6 +2,8 @@ package com.techcomfort.landvaultbackend.checkout.internal.service;
 
 import com.techcomfort.landvaultbackend.audit.AuditApi;
 import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
+import com.techcomfort.landvaultbackend.checkout.FlexiblePurchase;
+import com.techcomfort.landvaultbackend.checkout.FlexibleStanding;
 import com.techcomfort.landvaultbackend.checkout.NewPurchase;
 import com.techcomfort.landvaultbackend.checkout.OfferLetters;
 import com.techcomfort.landvaultbackend.checkout.OfferSummary;
@@ -217,7 +219,7 @@ public class TransactionService {
                 "Pending purchase opened (" + plan.getValue() + ")"));
 
         // Nothing paid yet on a purchase opened this instant.
-        return toDto(transaction, null, offer, schedule, null);
+        return toDto(transaction, null, offer, schedule, null, null);
     }
 
     /** A buyer's own transaction. Another buyer's is not found, not forbidden. */
@@ -237,8 +239,9 @@ public class TransactionService {
         Map<UUID, OfferSummary> offers = offerLetters.forTransactions(ids);
         Map<UUID, PlanSchedule> schedules = schedulesOf(page.getContent());
         Map<UUID, PlanStanding> standings = standingsOf(page.getContent(), schedules);
+        Map<UUID, FlexibleStanding> flexible = flexibleStandingsOf(page.getContent());
         return PageResponses.from(page, t -> toDto(t, summaries.get(t.getId()), offers.get(t.getId()),
-                Optional.ofNullable(schedules.get(t.getId())), standings.get(t.getId())));
+                Optional.ofNullable(schedules.get(t.getId())), standings.get(t.getId()), flexible.get(t.getId())));
     }
 
     private TransactionDto withPayment(Transaction transaction) {
@@ -247,7 +250,16 @@ public class TransactionService {
         return toDto(transaction, paymentSummaries.summariesFor(id).get(transaction.getId()),
                 offerLetters.forTransactions(id).get(transaction.getId()),
                 Optional.ofNullable(schedules.get(transaction.getId())),
-                standingsOf(List.of(transaction), schedules).get(transaction.getId()));
+                standingsOf(List.of(transaction), schedules).get(transaction.getId()),
+                flexibleStandingsOf(List.of(transaction)).get(transaction.getId()));
+    }
+
+    /** Flexible contribution, phase 4: only while the plan runs. */
+    private Map<UUID, FlexibleStanding> flexibleStandingsOf(List<Transaction> transactions) {
+        Map<UUID, FlexiblePurchase> running = new HashMap<>();
+        transactions.stream().filter(t -> t.getStatus() == TransactionStatus.ON_PLAN)
+                .forEach(t -> t.flexiblePlan().ifPresent(f -> running.put(t.getId(), f)));
+        return running.isEmpty() ? Map.of() : paymentSummaries.flexibleStandingsFor(running);
     }
 
     /** Phase 4: only once the plot is held on the plan (or paid off) — before that nothing is owed yet. */
@@ -399,7 +411,8 @@ public class TransactionService {
     }
 
     private static TransactionDto toDto(Transaction transaction, PaymentSummary payment, OfferSummary offer,
-                                        Optional<PlanSchedule> schedule, PlanStanding standing) {
+                                        Optional<PlanSchedule> schedule, PlanStanding standing,
+                                        FlexibleStanding flexibleStanding) {
         return new TransactionDto(
                 transaction.getId(),
                 transaction.getReference(),
@@ -420,6 +433,7 @@ public class TransactionService {
                 offer,
                 schedule.orElse(null),
                 transaction.flexiblePlan().orElse(null),
+                flexibleStanding,
                 standing,
                 transaction.getWithdrawnAt(),
                 transaction.getRevokedAt());

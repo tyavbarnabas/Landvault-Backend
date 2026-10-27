@@ -87,6 +87,9 @@ public interface CheckoutApi {
      */
     List<RunningPlan> runningPlans(UUID tenantId);
 
+    /** Flexible contribution, phase 4: running flexible plans, the same way. */
+    List<RunningPlan> runningFlexiblePlans(UUID tenantId);
+
     /** Each instalment purchase's plan and fixed schedule, by transaction id; outright purchases have none. */
     Map<UUID, PlanSchedule> schedulesOf(Collection<UUID> transactionIds);
 

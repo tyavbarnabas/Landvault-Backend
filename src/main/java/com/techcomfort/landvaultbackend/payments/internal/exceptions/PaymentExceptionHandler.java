@@ -7,6 +7,7 @@ import com.techcomfort.landvaultbackend.payments.internal.controllers.AdminSettl
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PaymentController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PaystackWebhookController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalFinanceController;
+import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalFlexiblePlanController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalLatePaymentController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalPlanController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalRestructureController;
@@ -34,7 +35,7 @@ import java.util.stream.Collectors;
         AdminPayoutController.class, PortalPayoutController.class, AdminRefundController.class,
         PortalLatePaymentController.class, PortalPlanController.class, WithdrawalController.class,
         PortalRevocationController.class, RestructureController.class, PortalRestructureController.class,
-        PortalPenaltyWaiverController.class})
+        PortalPenaltyWaiverController.class, PortalFlexiblePlanController.class})
 public class PaymentExceptionHandler {
 
     @ExceptionHandler(PaymentException.class)

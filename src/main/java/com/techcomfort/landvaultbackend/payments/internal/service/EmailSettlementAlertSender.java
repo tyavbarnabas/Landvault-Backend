@@ -270,6 +270,64 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
         log.info("Contribution verification delivered to a buyer");
     }
 
+    /**
+     * Flexible contribution, phase 4: a notice on a quiet plan, step by step.
+     * Calm and factual, like the conflict guidance: what was found, what the
+     * buyer can do, by when, and what ending the plan would mean in naira.
+     */
+    @Override
+    public void quietPlan(QuietPlanAlert alert) {
+        boolean finishBy = "finish_by".equals(alert.trigger());
+        String plan = alert.planName() + " for " + alert.plotLabel() + " (purchase " + alert.purchaseReference() + ")";
+        String subject;
+        String body;
+        switch (alert.stage()) {
+            case NOTICE -> {
+                subject = "Notice on your plan for " + alert.plotLabel();
+                body = """
+                        The developer has given notice on your %s: %s
+
+                        %s If not, from the day after, the developer may end the plan on the terms for leaving: you \
+                        would get back NGN %s, and the developer keeps NGN %s. You can also leave now on those same \
+                        terms.
+
+                        The developer's reason: %s
+                        """.formatted(plan, finishBy
+                                ? "the plan was due to be finished by " + alert.finishBy() + "."
+                                : "no payment has been made since " + alert.lastPaymentOn() + ", and the plan allows "
+                                + alert.inactivityMonths() + " months without one.",
+                        finishBy ? "To keep the plot, finish the plan (NGN " + alert.remaining() + " is left) by "
+                                + alert.deadline() + "."
+                                : "To keep the plan going, make a payment of any amount by " + alert.deadline() + ".",
+                        alert.refund(), alert.developerKeeps(), alert.note());
+            }
+            case CANCELLED -> {
+                subject = "Notice withdrawn: your plan for " + alert.plotLabel();
+                body = "The developer has withdrawn the notice on your " + plan + ". Nothing changes; you can carry "
+                        + "on paying any amount, at any time." + (alert.note() == null ? "" : "\n\nTheir note: "
+                        + alert.note()) + "\n";
+            }
+            case CLEARED -> {
+                subject = "Notice ended: your plan for " + alert.plotLabel();
+                body = "The notice on your " + plan + " has ended. " + alert.note() + "\n";
+            }
+            default -> {
+                subject = "Your plan for " + alert.plotLabel() + " has ended";
+                body = """
+                        The developer has ended your %s after the notice ran out, on the terms for leaving. You will \
+                        get back NGN %s; the developer keeps NGN %s. HomeTrue sends the refund to you.
+                        """.formatted(plan, alert.refund(), alert.developerKeeps());
+            }
+        }
+        SimpleMailMessage message = new SimpleMailMessage();
+        message.setFrom(fromAddress);
+        message.setTo(alert.to());
+        message.setSubject(subject);
+        message.setText("Hello,\n\n" + body + "\nSee your purchase:\n\n    " + alert.purchaseUrl() + "\n");
+        mailSender.send(message);
+        log.info("Quiet-plan {} delivered to a buyer", alert.stage().name().toLowerCase(Locale.ROOT));
+    }
+
     /** Phase 5a. Factual: what was paid, what comes back, what the developer keeps, and what happens next. */
     @Override
     public void planWithdrawn(WithdrawalAlert alert) {

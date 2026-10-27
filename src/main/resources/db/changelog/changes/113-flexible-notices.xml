@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Flexible contribution, phase 4 (decided with the user, 2026-10-27): a
+        quiet flexible plan is given notice through the same plan_revocations
+        record as an instalment plan in arrears, with the reason it was given:
+        ARREARS (an instalment unpaid long enough — every existing row),
+        INACTIVITY (no payment for the plan's declared months) or FINISH_BY
+        (past the plan's date to finish by). Only an ARREARS notice names an
+        instalment. For INACTIVITY, revocation_after_months holds the plan's
+        inactivity period. See AGENTS.md, "Flexible contribution".
+    -->
+    <changeSet id="113-flexible-notices" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE plan_revocations
+                ADD COLUMN trigger varchar(16) NOT NULL DEFAULT 'ARREARS',
+                ALTER COLUMN instalment_sequence DROP NOT NULL,
+                ALTER COLUMN instalment_due_date DROP NOT NULL,
+                ADD CONSTRAINT chk_plan_revocations_trigger
+                    CHECK (trigger IN ('ARREARS', 'INACTIVITY', 'FINISH_BY')),
+                ADD CONSTRAINT chk_plan_revocations_instalment
+                    CHECK ((trigger = 'ARREARS') = (instalment_sequence IS NOT NULL)
+                       AND (trigger = 'ARREARS') = (instalment_due_date IS NOT NULL));
+            COMMENT ON COLUMN plan_revocations.trigger IS
+                'Why notice was given: ARREARS (instalment plan), INACTIVITY or FINISH_BY (flexible plan). Only a verified payment ends an INACTIVITY notice; only finishing the plan ends a FINISH_BY one.';
+        ]]></sql>
+        <rollback><![CDATA[
+            DELETE FROM plan_revocations WHERE trigger <> 'ARREARS';
+            ALTER TABLE plan_revocations
+                DROP CONSTRAINT chk_plan_revocations_instalment,
+                DROP CONSTRAINT chk_plan_revocations_trigger,
+                ALTER COLUMN instalment_due_date SET NOT NULL,
+                ALTER COLUMN instalment_sequence SET NOT NULL,
+                DROP COLUMN trigger;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

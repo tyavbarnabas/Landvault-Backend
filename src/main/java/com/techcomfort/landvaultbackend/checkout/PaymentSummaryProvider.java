@@ -25,6 +25,9 @@ public interface PaymentSummaryProvider {
      */
     Map<UUID, PlanStanding> standingsFor(Map<UUID, PlanSchedule> schedules);
 
+    /** Flexible contribution, phase 4: where each running flexible plan stands today, keyed like {@code plans}. */
+    Map<UUID, FlexibleStanding> flexibleStandingsFor(Map<UUID, FlexiblePurchase> plans);
+
     /** What is coming back on each purchase that has money owed back; others are absent. */
     Map<UUID, PlanRefund> refundsFor(Collection<UUID> transactionIds);
 }

@@ -5,6 +5,7 @@ import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
 import com.techcomfort.landvaultbackend.checkout.FinanceQueueRow;
 import com.techcomfort.landvaultbackend.identity.IdentityApi;
 import com.techcomfort.landvaultbackend.payments.internal.domain.PlanRevocation;
+import com.techcomfort.landvaultbackend.payments.internal.enums.NoticeTrigger;
 import com.techcomfort.landvaultbackend.payments.internal.enums.RevocationStatus;
 import com.techcomfort.landvaultbackend.payments.internal.repository.PlanRevocationRepository;
 import lombok.RequiredArgsConstructor;
@@ -13,6 +14,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Locale;
 import java.util.UUID;
 
 /**
@@ -70,6 +72,30 @@ public class RevocationNotices {
                             notice.getRevocationAfterMonths(), RevocationService.DATE.format(notice.getDeadline()),
                             null, null, null, null, buyerNotifier.purchaseUrl(transactionId)))));
         });
+    }
+
+    /**
+     * Flexible contribution, phase 4 (decision 3): finance verified a payment
+     * on a flexible plan. An inactivity notice ends with it; a finish-by notice
+     * doesn't — only finishing the plan ends that one ({@code finished}).
+     */
+    void clearOnContribution(UUID transactionId, String reference, String planName, String plot, boolean finished) {
+        revocations.findOpenLocked(transactionId)
+                .filter(notice -> finished || notice.getTrigger() == NoticeTrigger.INACTIVITY)
+                .ifPresent(notice -> {
+                    String why = finished ? "The plan was paid in full." : "The buyer made a payment.";
+                    close(notice, RevocationStatus.CLEARED, null, why);
+                    auditApi.record(AuditEntryRequest.of(null, "plan.revocation_cleared", "plan_revocation",
+                            notice.getId(), notice.getSellerTenantId(), "Notice on flexible plan " + reference
+                                    + " ended: " + why.toLowerCase(Locale.ROOT)));
+                    log.info("Quiet-plan notice {} cleared: {}", notice.getId(), why);
+                    identityApi.emailOf(notice.getBuyerUserId()).ifPresent(to -> buyerNotifier.afterCommit(
+                            "quiet plan cleared", () -> alerts.quietPlan(new SettlementAlertSender.QuietPlanAlert(to,
+                                    SettlementAlertSender.RevocationStage.CLEARED, reference, planName, plot,
+                                    notice.getTrigger().wire(), notice.getRevocationAfterMonths(), null, null, null,
+                                    RevocationService.DATE.format(notice.getDeadline()), null, null, why,
+                                    buyerNotifier.purchaseUrl(transactionId)))));
+                });
     }
 
     void close(PlanRevocation notice, RevocationStatus status, UUID by, String note) {

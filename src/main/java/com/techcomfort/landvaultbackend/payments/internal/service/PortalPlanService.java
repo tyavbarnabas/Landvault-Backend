@@ -1,12 +1,15 @@
 package com.techcomfort.landvaultbackend.payments.internal.service;
 
 import com.techcomfort.landvaultbackend.checkout.CheckoutApi;
+import com.techcomfort.landvaultbackend.checkout.FlexiblePurchase;
+import com.techcomfort.landvaultbackend.checkout.FlexibleStanding;
 import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
 import com.techcomfort.landvaultbackend.checkout.PlanStanding;
 import com.techcomfort.landvaultbackend.checkout.RunningPlan;
 import com.techcomfort.landvaultbackend.common.TenantContext;
 import com.techcomfort.landvaultbackend.common.TenantScope;
 import com.techcomfort.landvaultbackend.identity.IdentityApi;
+import com.techcomfort.landvaultbackend.payments.dto.PortalFlexiblePlanDto;
 import com.techcomfort.landvaultbackend.payments.dto.PortalPlanDto;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
 import com.techcomfort.landvaultbackend.payments.internal.enums.PaymentPurpose;
@@ -45,6 +48,7 @@ public class PortalPlanService {
     private final PlanStandings planStandings;
     private final IdentityApi identityApi;
     private final PaymentRepository payments;
+    private final FlexibleStandings flexibleStandings;
 
     @Transactional(readOnly = true)
     public List<PortalPlanDto> plans(String status) {
@@ -67,12 +71,40 @@ public class PortalPlanService {
                 .orElseThrow(PaymentException.TransactionNotFound::new);
     }
 
+    /**
+     * Flexible contribution, phase 4 (decision 4): running flexible plans, the
+     * ones notice may be given on first, then those with a notice running, then
+     * by when each would count as quiet. Read-only, like the instalment list.
+     */
+    @Transactional(readOnly = true)
+    public List<PortalFlexiblePlanDto> flexiblePlans() {
+        Map<UUID, RunningPlan> running = checkoutApi.runningFlexiblePlans(company()).stream()
+                .collect(Collectors.toMap(RunningPlan::transactionId, Function.identity()));
+        Map<UUID, FlexiblePurchase> plans = checkoutApi.flexiblePlansOf(running.keySet());
+        Map<UUID, FlexibleStanding> standings = flexibleStandings.standingsOf(plans);
+        return plans.entrySet().stream()
+                .map(e -> {
+                    RunningPlan r = running.get(e.getKey());
+                    return new PortalFlexiblePlanDto(r.transactionId(), r.transactionReference(), r.estateId(),
+                            r.estateName(), r.plotId(), r.plotLabel(), identityApi.emailOf(r.buyerUserId()).orElse(null),
+                            r.planName(), r.currency().name(), e.getValue().planTotal(), standings.get(e.getKey()));
+                })
+                .sorted(Comparator.comparing((PortalFlexiblePlanDto p) -> !p.standing().noticeAllowedNow())
+                        .thenComparing(p -> p.standing().notice() == null)
+                        .thenComparing(p -> p.standing().quietFrom()))
+                .toList();
+    }
+
     private List<RunningPlan> runningPlans() {
+        return checkoutApi.runningPlans(company());
+    }
+
+    private static UUID company() {
         TenantScope scope = TenantContext.get().orElseThrow();
         if (scope.tenantId() == null) {
             throw new PaymentException.CompanyScopeRequired();
         }
-        return checkoutApi.runningPlans(scope.tenantId());
+        return scope.tenantId();
     }
 
     private List<PortalPlanDto> dtos(List<RunningPlan> running) {

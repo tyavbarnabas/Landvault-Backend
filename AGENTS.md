@@ -6770,6 +6770,37 @@ can only be refunded; no reminders.
   verified contribution, the rest held and released at completion — never one full-price `SALE` tranche (asserted).
 - Buyer email on each verified contribution: what was paid, what's paid so far, what's left — no "next due".
 
+### Phase 4: leaving, and a quiet plan (changeset 113)
+
+Decided with the user (2026-10-27, all as recommended): reuse the revocation machinery with a reason; the inactivity
+clock runs from the last payment Paystack confirmed; a verified payment ends an inactivity notice; the developer
+sees flexible plans; leaving during a notice closes it; emails at each step, no reminders before.
+
+- **Leaving now** is the instalment withdrawal (`GET|POST /api/transactions/{id}/withdrawal`), opened to flexible
+  plans: `CheckoutApi.escrowOf` includes them, and the plan's own exit split is in `escrow_*`. Same escrow refund,
+  same "a payment awaiting finance counts" rule; the plot goes back on sale, the portfolio record and provisional
+  letter read withdrawn. A contribution still waiting when the buyer left is then verified (developer's share
+  payable) or rejected (refunded in full), exactly as for an instalment. The gain share is phase 5 — everything it
+  needs (agreed price, share) is already on the purchase.
+- **A quiet plan** (`FlexibleStandings`, the one reading): no `CONTRIBUTION` Paystack confirmed for the inactivity
+  period — confirmed, not verified, so finance's speed never counts against the buyer — or past `flexible_finish_by`
+  (the stronger reason). Never once paid in full.
+- **Notice** goes through the revocation routes (`/api/portal/plans/{id}/revocation`, `portal.plans.revoke`,
+  company-wide), which hand a flexible plan to `FlexibleNoticeService`. Same `plan_revocations` record with
+  `trigger` `INACTIVITY` | `FINISH_BY` (instalment notices are `ARREARS`; only they name an instalment);
+  `revocation_after_months` holds the inactivity period. Deadline = today + the plan's notice days.
+- **What ends it**: a contribution finance verifies ends an INACTIVITY notice; a FINISH_BY notice ends only when the
+  plan is paid in full (`RevocationNotices.clearOnContribution`, proven red by letting any payment end it); leaving
+  closes it. **Confirming** after the deadline needs the reason to still hold and no payment waiting for finance
+  (proven red without that check), then ends the plan exactly as leaving would: `revoked`, the plot back on sale,
+  the same refund.
+- **Seen by both sides**: `TransactionDto.flexibleStanding` (paid, left, last payment, `quietFrom`, `finishBy`,
+  `noticeReason`, the running notice) and `GET /api/portal/finance/flexible-plans` (`portal.payments.verify`) —
+  **a separate list** beside the instalment one, decided while building: that list's statuses and due dates mean
+  nothing for a flexible plan. `RevocationDto` gains `flexible` and each notice its `trigger`.
+- Emails (`SettlementAlertSender.quietPlan`): notice given (what was found, what to do by when, what ending would
+  return in naira, that leaving now is the same), withdrawn, ended by the buyer, plan ended.
+
 ## A buyer's address (changeset 097)
 
 Built 2026-10-21, decided with the user, so the allocation letter can name

@@ -3,6 +3,7 @@ package com.techcomfort.landvaultbackend.payments.internal.service;
 import com.techcomfort.landvaultbackend.audit.AuditApi;
 import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
 import com.techcomfort.landvaultbackend.checkout.CheckoutApi;
+import com.techcomfort.landvaultbackend.checkout.FlexiblePurchase;
 import com.techcomfort.landvaultbackend.checkout.PayableTransaction;
 import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
 import com.techcomfort.landvaultbackend.checkout.VerifiedSale;
@@ -217,7 +218,9 @@ public class WithdrawalService {
     /** After commit; a failed email never undoes the withdrawal. */
     private void tell(PayableTransaction purchase, Quote quote, String reason) {
         String planName = Optional.ofNullable(checkoutApi.schedulesOf(List.of(purchase.id())).get(purchase.id()))
-                .map(PlanSchedule::planName).orElse("instalment plan");
+                .map(PlanSchedule::planName)
+                .or(() -> Optional.ofNullable(purchase.flexible()).map(FlexiblePurchase::planName))
+                .orElse("instalment plan");
         String url = buyerNotifier.purchaseUrl(purchase.id());
         String awaiting = quote.awaitingFinanceShare().signum() > 0 ? quote.awaitingFinanceShare().toPlainString() : null;
         identityApi.emailOf(purchase.buyerUserId()).ifPresent(to -> buyerNotifier.afterCommit("plan withdrawn",

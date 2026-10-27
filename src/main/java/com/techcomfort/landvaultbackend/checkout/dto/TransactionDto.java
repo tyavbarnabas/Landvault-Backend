@@ -3,6 +3,7 @@ package com.techcomfort.landvaultbackend.checkout.dto;
 import com.techcomfort.landvaultbackend.checkout.PaymentSummary;
 import com.techcomfort.landvaultbackend.checkout.OfferSummary;
 import com.techcomfort.landvaultbackend.checkout.FlexiblePurchase;
+import com.techcomfort.landvaultbackend.checkout.FlexibleStanding;
 import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
 import com.techcomfort.landvaultbackend.checkout.PlanStanding;
 import com.techcomfort.landvaultbackend.common.PostalAddress;
@@ -94,6 +95,11 @@ public record TransactionDto(
                 + "the minimum to start, the exit split, the developer's gain share, the inactivity period, the "
                 + "notice and the date to finish by. No schedule. Null for every other plan.", nullable = true)
         FlexiblePurchase flexible,
+
+        @Schema(description = "A running flexible plan (`on_plan`): where it stands today — paid, left, the last "
+                + "payment, when it would count as quiet, the date to finish by, and any notice the developer has "
+                + "given. Null otherwise.", nullable = true)
+        FlexibleStanding flexibleStanding,
 
         @Schema(description = "Once the deposit is verified (`on_plan`, or `verified` when paid off): where the "
                 + "plan stands today — each instalment's status and any penalty, and `arrears` while one is late. "
