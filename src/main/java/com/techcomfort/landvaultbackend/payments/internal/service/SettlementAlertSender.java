@@ -70,6 +70,13 @@ public interface SettlementAlertSender {
 
     void instalmentVerified(InstalmentAlert alert);
 
+    /** Flexible contribution (3b): a later payment verified — what's paid so far and what's left. Amounts in naira. */
+    record ContributionAlert(String to, String plotLabel, String estateName, String amount, String paidSoFar,
+                             String remaining, String purchaseUrl) {
+    }
+
+    void contributionVerified(ContributionAlert alert);
+
     /**
      * AR-3, phase 4. {@code stage} is a {@code ReminderStage} name. Amounts are
      * plain naira strings; {@code penalty} is null when none applies yet, and

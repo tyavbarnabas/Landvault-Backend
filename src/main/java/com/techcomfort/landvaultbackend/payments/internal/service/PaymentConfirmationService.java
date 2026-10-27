@@ -98,11 +98,19 @@ public class PaymentConfirmationService {
                 events.publishEvent(new PaymentSucceeded(payment.getId()));
                 // 3b: an instalment or pay-off doesn't move the purchase — it stays on the plan, and
                 // finance verifies the payment itself. It only needs the plan to still be running.
-                boolean planPayment = payment.getPurpose() == PaymentPurpose.INSTALMENT
-                        || payment.getPurpose() == PaymentPurpose.BALANCE;
-                Optional<PayableTransaction> purchase = planPayment
+                // Flexible contribution: the first payment moves the purchase like a deposit; a later
+                // one (3b) is a plan payment, verified by finance on its own.
+                boolean contribution = payment.getPurpose() == PaymentPurpose.CONTRIBUTION;
+                Optional<PayableTransaction> purchase = payment.getPurpose() == PaymentPurpose.INSTALMENT
+                        || payment.getPurpose() == PaymentPurpose.BALANCE || contribution
                         ? checkoutApi.transactionForBuyer(payment.getTransactionId(), payment.getBuyerUserId())
                         : Optional.empty();
+                boolean planPayment = payment.getPurpose() == PaymentPurpose.INSTALMENT
+                        || payment.getPurpose() == PaymentPurpose.BALANCE
+                        || contribution && purchase.filter(PayableTransaction::isPendingPayment).isEmpty();
+                if (!planPayment) {
+                    purchase = Optional.empty();
+                }
                 boolean received = planPayment
                         ? purchase.filter(PayableTransaction::isOnPlan).isPresent()
                         : checkoutApi.recordPaymentReceived(payment.getTransactionId(), payment.getReference());
