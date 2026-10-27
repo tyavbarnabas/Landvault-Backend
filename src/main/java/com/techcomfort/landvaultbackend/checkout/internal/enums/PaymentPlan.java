@@ -23,7 +23,14 @@ public enum PaymentPlan {
      * property, which is not built either — see AGENTS.md on completed units
      * before off-plan.
      */
-    MILESTONE("milestone");
+    MILESTONE("milestone"),
+
+    /**
+     * Flexible contribution: a minimum to start, then any amount, any time —
+     * no schedule. Backend-added; the frontend's union needs it. See AGENTS.md,
+     * "Flexible contribution".
+     */
+    FLEXIBLE("flexible");
 
     private final String value;
 

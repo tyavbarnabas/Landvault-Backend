@@ -1,11 +1,14 @@
 package com.techcomfort.landvaultbackend.documents.internal.render;
 
+import com.techcomfort.landvaultbackend.checkout.FlexiblePurchase;
 import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
 import com.techcomfort.landvaultbackend.common.CommitmentCalculator;
 import com.techcomfort.landvaultbackend.common.Currency;
+import com.techcomfort.landvaultbackend.common.FlexiblePlanCalculator;
 import com.techcomfort.landvaultbackend.common.InstalmentPlanCalculator;
 import com.techcomfort.landvaultbackend.common.LatePaymentTerms;
 import com.techcomfort.landvaultbackend.common.PaymentFrequency;
+import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
 import com.techcomfort.landvaultbackend.inventory.EstateDocumentFacts;
 
 import java.math.BigDecimal;
@@ -108,20 +111,7 @@ public final class OfferClauses {
                 .map(PlanSchedule.Instalment::dueDate).toList(), PaymentFrequency.fromValue(schedule.frequency())) + ".");
 
         if (facts.fees() != null) {
-            CommitmentCalculator.TierCommitment commitment = CommitmentCalculator.forTier(schedule.planTotal(),
-                    currency.name(), null, facts.fees().items().stream().map(OfferClauses::declared).toList());
-            StringBuilder clause = new StringBuilder(commitment.oneOffFees().max().signum() == 0
-                    ? "That there are no other one-off charges, so your total commitment on this plan is "
-                    + DocumentFormats.money(schedule.planTotal(), currency) + "."
-                    : "That with the one-off charges set out below, your total commitment on this plan is "
-                    + amount(commitment.totalCommitment(), currency) + ".");
-            if (commitment.recurringFees().max().signum() > 0) {
-                clause.append(" Charges that recur, such as yearly fees, are in addition to this.");
-            }
-            if (!commitment.excludedCurrency().isEmpty()) {
-                clause.append(" Charges in another currency are not included in it.");
-            }
-            clauses.add(clause.toString());
+            clauses.add(planCommitment(schedule.planTotal(), currency, facts.fees()));
         }
 
         // Phase 4: the purchase's own late-payment terms, copied when it opened.
@@ -141,6 +131,112 @@ public final class OfferClauses {
                 ? ", and is refunded on the same terms as your other payments if you withdraw."
                 : ", and is not refunded if you withdraw."));
         return clauses;
+    }
+
+    /**
+     * Flexible contribution, phase 2: a flexible buyer's offer, in place of
+     * {@link #price}. The full price; the plan (total, premium, the minimum to
+     * start, any minimum contribution, the date to finish by); the total
+     * commitment on it; then both ways out in naira — leaving (refunded at
+     * once from escrow, two worked figures, then the gain share with its
+     * example) and asking HomeTrue to sell the plot — and when a quiet plan may
+     * be ended. Every figure comes from the terms copied onto the purchase.
+     * The last clause says these terms replace the estate's general
+     * withdrawal and revocation terms printed below, which are written for
+     * instalment plans.
+     */
+    public static List<String> flexible(FlexiblePurchase plan, BigDecimal basePrice, BigDecimal cornerPremiumPct,
+                                        BigDecimal totalPrice, Currency currency, String company,
+                                        EstateDocumentFacts facts) {
+        List<String> clauses = new ArrayList<>();
+        String full = DocumentFormats.money(totalPrice, currency) + " (" + AmountInWords.of(totalPrice, currency) + ")";
+        clauses.add(cornerPremiumPct == null
+                ? "That the price of the plot, paid in full, is " + full + "."
+                : "That the price of the plot, paid in full, is " + full + ": " + DocumentFormats.money(basePrice, currency)
+                + " for the plot and a corner premium of " + cornerPremiumPct.stripTrailingZeros().toPlainString() + "%.");
+
+        String price = DocumentFormats.money(totalPrice, currency);
+        StringBuilder chosen = new StringBuilder("That you have chosen the " + plan.planName() + ": "
+                + DocumentFormats.money(plan.planTotal(), currency) + " in all" + (plan.premium().signum() == 0 ? ""
+                : " (" + DocumentFormats.money(plan.premium(), currency) + " more than paying in full)")
+                + ", paid in any amounts, at any time, with no schedule and no due dates. Your first payment must "
+                + "be at least " + DocumentFormats.money(plan.minimumToStart(), currency) + "; the plot is held for "
+                + "you once it is confirmed and verified.");
+        if (plan.minimumContribution() != null) {
+            chosen.append(" Each later payment must be at least ")
+                    .append(DocumentFormats.money(plan.minimumContribution(), currency))
+                    .append(", except the one that finishes the plan.");
+        }
+        if (plan.finishBy() != null) {
+            chosen.append(" The plan must be finished by ").append(DocumentFormats.date(plan.finishBy())).append(".");
+        }
+        clauses.add(chosen.toString());
+
+        if (facts.fees() != null) {
+            clauses.add(planCommitment(plan.planTotal(), currency, facts.fees()));
+        }
+
+        List<FlexiblePlanCalculator.Exit> exits = FlexiblePlanCalculator.exits(plan.minimumToStart(), plan.planTotal(),
+                totalPrice, plan.exitDeductionPct(), plan.exitAppliesTo());
+        String deduction = plan.exitDeductionPct().stripTrailingZeros().toPlainString() + "%";
+        clauses.add("That you may leave the plan at any time, without anyone's approval, and are refunded at once "
+                + "from the money HomeTrue holds" + (plan.exitDeductionPct().signum() == 0
+                ? ", in full."
+                : ", less what " + company + " keeps: " + deduction + (plan.exitAppliesTo() == RefundAppliesTo.TOTAL_PRICE
+                ? " of " + price + ", taken from your first payments."
+                : " of what you have paid.")) + " For example, " + String.join(", and ", exits.stream()
+                .map(e -> "after paying " + DocumentFormats.money(e.paid(), currency) + " you get back "
+                        + DocumentFormats.money(e.youGetBack(), currency)).toList()) + ".");
+
+        FlexiblePlanCalculator.Gain gain = FlexiblePlanCalculator.gain(totalPrice, plan.developerGainSharePct());
+        String developerShare = gain.developerSharePct().stripTrailingZeros().toPlainString() + "%";
+        clauses.add(gain.buyerSharePct().signum() == 0
+                ? "That if, after you leave, HomeTrue completes a sale of the plot for more than " + price + ", "
+                + company + " keeps all of the difference; your refund is the same whatever it sells for."
+                : "That if, after you leave, HomeTrue completes a sale of the plot for more than " + price
+                + ", you receive " + gain.buyerSharePct().stripTrailingZeros().toPlainString() + "% of the difference "
+                + "and " + company + " keeps " + developerShare + ". For example, if it sold for "
+                + DocumentFormats.money(gain.example().soldFor(), currency) + ", you would receive "
+                + DocumentFormats.money(gain.example().youGet(), currency) + ". This is an example, not a forecast: "
+                + "a sale for no more than " + price + " pays nothing extra, and never reduces your refund.");
+
+        clauses.add("That instead of leaving, you may ask HomeTrue to sell the plot at a price you choose, not below "
+                + price + ", and change that price or stop the sale while no buyer holds the plot; nothing is due "
+                + "while it is offered for sale. When a buyer's payment is verified, the part of " + price
+                + " you have not yet paid goes to " + company + ", " + company + " keeps " + developerShare
+                + " of anything above " + price + ", and you receive what you have paid and the rest.");
+
+        String months = plan.inactivityMonths() + " month" + (plan.inactivityMonths() == 1 ? "" : "s");
+        StringBuilder quiet = new StringBuilder("That if no payment of yours is verified for " + months + ", "
+                + company + " may give you " + plan.noticeDays() + " days' notice and then end the plan on the "
+                + "terms for leaving, unless a payment is made within the notice.");
+        if (plan.finishBy() != null) {
+            quiet.append(" If the plan is not finished by ").append(DocumentFormats.date(plan.finishBy()))
+                    .append(", the same notice may be given, and only finishing the plan stops it.");
+        }
+        clauses.add(quiet.toString());
+
+        clauses.add("That these terms for leaving and for ending the plan take the place of the estate's general "
+                + "withdrawal and revocation terms set out below, which apply to instalment plans.");
+        return clauses;
+    }
+
+    /** The total commitment on a plan's total: one-off fees in; recurring and other-currency ones named outside. */
+    private static String planCommitment(BigDecimal planTotal, Currency currency, EstateDocumentFacts.Fees fees) {
+        CommitmentCalculator.TierCommitment commitment = CommitmentCalculator.forTier(planTotal,
+                currency.name(), null, fees.items().stream().map(OfferClauses::declared).toList());
+        StringBuilder clause = new StringBuilder(commitment.oneOffFees().max().signum() == 0
+                ? "That there are no other one-off charges, so your total commitment on this plan is "
+                + DocumentFormats.money(planTotal, currency) + "."
+                : "That with the one-off charges set out below, your total commitment on this plan is "
+                + amount(commitment.totalCommitment(), currency) + ".");
+        if (commitment.recurringFees().max().signum() > 0) {
+            clause.append(" Charges that recur, such as yearly fees, are in addition to this.");
+        }
+        if (!commitment.excludedCurrency().isEmpty()) {
+            clause.append(" Charges in another currency are not included in it.");
+        }
+        return clause.toString();
     }
 
     private static String amount(CommitmentCalculator.Money money, Currency currency) {

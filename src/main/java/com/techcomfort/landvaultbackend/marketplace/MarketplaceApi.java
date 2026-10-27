@@ -49,6 +49,13 @@ public interface MarketplaceApi {
     Optional<OfferedPlan> offeredPlan(UUID estateId, UUID planId);
 
     /**
+     * Flexible contribution, phase 2: one of the estate's current flexible
+     * plans, through the same projection. Empty when the estate isn't listed,
+     * or doesn't offer that flexible plan now.
+     */
+    Optional<OfferedFlexiblePlan> offeredFlexiblePlan(UUID estateId, UUID planId);
+
+    /**
      * 3c: the estate's current refund deduction, as published. Empty when the
      * estate isn't listed or has declared no refund terms.
      */

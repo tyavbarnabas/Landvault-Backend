@@ -1,5 +1,6 @@
 package com.techcomfort.landvaultbackend.checkout.internal.domain;
 
+import com.techcomfort.landvaultbackend.checkout.FlexiblePurchase;
 import com.techcomfort.landvaultbackend.checkout.internal.enums.PaymentPlan;
 import com.techcomfort.landvaultbackend.checkout.internal.enums.TransactionStatus;
 import com.techcomfort.landvaultbackend.common.AbstractEntity;
@@ -23,6 +24,7 @@ import org.hibernate.annotations.SQLRestriction;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -153,6 +155,33 @@ public class Transaction extends AbstractEntity {
     @Column(name = "penalties_refundable", updatable = false)
     private Boolean penaltiesRefundable;
 
+    /**
+     * Flexible contribution (changeset 111): the flexible plan's terms, copied
+     * when the purchase opened and never changed. The plan, its total and
+     * premium are in {@code plan_*}, the exit split in {@code escrow_*}. Null
+     * on every other purchase.
+     */
+    @Column(name = "flexible_minimum_to_start", updatable = false, precision = 19, scale = 4)
+    private BigDecimal flexibleMinimumToStart;
+
+    @Column(name = "flexible_minimum_contribution", updatable = false, precision = 19, scale = 4)
+    private BigDecimal flexibleMinimumContribution;
+
+    @Column(name = "flexible_gain_share_pct", updatable = false, precision = 5, scale = 2)
+    private BigDecimal flexibleGainSharePct;
+
+    @Column(name = "flexible_inactivity_months", updatable = false)
+    private Integer flexibleInactivityMonths;
+
+    @Column(name = "flexible_notice_days", updatable = false)
+    private Integer flexibleNoticeDays;
+
+    @Column(name = "flexible_max_months", updatable = false)
+    private Integer flexibleMaxMonths;
+
+    @Column(name = "flexible_finish_by", updatable = false)
+    private LocalDate flexibleFinishBy;
+
     /** Phase 5a: when the buyer withdrew from the plan (written by the once-only status change). */
     @Column(name = "withdrawn_at")
     private Instant withdrawnAt;
@@ -193,6 +222,16 @@ public class Transaction extends AbstractEntity {
     /** Phase 5b: the revocation terms copied onto this purchase, or null. */
     public RevocationTerms revocationTerms() {
         return revocationAfterMonths == null ? null : new RevocationTerms(revocationAfterMonths, revocationNoticeDays);
+    }
+
+    /** The flexible plan this purchase was opened on; empty for every other plan. */
+    public Optional<FlexiblePurchase> flexiblePlan() {
+        if (plan != PaymentPlan.FLEXIBLE) {
+            return Optional.empty();
+        }
+        return Optional.of(new FlexiblePurchase(planId, planName, planTotal, planPremium, flexibleMinimumToStart,
+                flexibleMinimumContribution, escrowDeductionPct, escrowAppliesTo, flexibleGainSharePct,
+                flexibleInactivityMonths, flexibleNoticeDays, flexibleMaxMonths, flexibleFinishBy));
     }
 
     /** Empty on purchases opened before addresses were collected. */

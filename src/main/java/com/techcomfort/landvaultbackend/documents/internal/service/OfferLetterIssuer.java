@@ -108,11 +108,7 @@ public class OfferLetterIssuer implements OfferLetters {
                 .plotLabel(plot.label())
                 .opening(OfferClauses.opening(DocumentFormats.date(purchase.reservedAt()),
                         AllocationLetterIssuer.plotPhrase(plot), setup.facts().name(), location, p.companyName()))
-                .priceClauses((purchase.schedule() == null
-                        ? OfferClauses.price(purchase.basePrice(), purchase.cornerPremiumPct(), purchase.totalPrice(),
-                        purchase.currency(), setup.facts().fees())
-                        : OfferClauses.plan(purchase.schedule(), purchase.basePrice(), purchase.cornerPremiumPct(),
-                        purchase.totalPrice(), purchase.currency(), setup.facts())).toArray(String[]::new))
+                .priceClauses(priceClauses(purchase, setup, p.companyName()).toArray(String[]::new))
                 // The same conditions, in the same order, as the allocation letter
                 // would print today — which copies these when the sale is allocated.
                 .clauses(LetterClauses.of(setup.template().standardClauses(),
@@ -140,6 +136,21 @@ public class OfferLetterIssuer implements OfferLetters {
                         + (v.fees() == null ? "none" : "v" + v.fees()) + ")."));
         log.info("Offer letter {} issued for transaction {}", offer.getNumber(), purchase.transactionId());
         return Optional.of(summary(offer, null));
+    }
+
+    /** Outright, instalment or flexible: HomeTrue's fixed wording for the plan the purchase was opened on. */
+    private static List<String> priceClauses(NewPurchase purchase, LetterApprovalService.IssuableLetter setup,
+                                             String company) {
+        if (purchase.schedule() != null) {
+            return OfferClauses.plan(purchase.schedule(), purchase.basePrice(), purchase.cornerPremiumPct(),
+                    purchase.totalPrice(), purchase.currency(), setup.facts());
+        }
+        if (purchase.flexible() != null) {
+            return OfferClauses.flexible(purchase.flexible(), purchase.basePrice(), purchase.cornerPremiumPct(),
+                    purchase.totalPrice(), purchase.currency(), company, setup.facts());
+        }
+        return OfferClauses.price(purchase.basePrice(), purchase.cornerPremiumPct(), purchase.totalPrice(),
+                purchase.currency(), setup.facts().fees());
     }
 
     @Override

@@ -100,15 +100,30 @@ public final class FlexiblePlanCalculator {
                 .setScale(KOBO, RoundingMode.HALF_UP);
         BigDecimal landPrice = price.setScale(KOBO, RoundingMode.HALF_UP);
         BigDecimal start = landPrice.multiply(terms.startPct()).divide(HUNDRED, KOBO, RoundingMode.HALF_UP);
-        BigDecimal half = planTotal.divide(BigDecimal.TWO, KOBO, RoundingMode.DOWN);
-        BigDecimal buyerShare = HUNDRED.subtract(terms.developerGainSharePct());
-        BigDecimal difference = pctOf(EXAMPLE_RISE_PCT, landPrice);
-        GainExample example = new GainExample(EXAMPLE_RISE_PCT, landPrice.add(difference), difference,
-                pctOf(buyerShare, difference));
         return new Quote(landPrice, planTotal, planTotal.subtract(landPrice), start, terms.minimumContribution(),
-                List.of(exit(start, landPrice, terms), exit(half, landPrice, terms)),
-                new Gain(terms.developerGainSharePct(), buyerShare, pctOf(buyerShare, MILLION), example),
+                exits(start, planTotal, landPrice, terms.exitDeductionPct(), terms.exitAppliesTo()),
+                gain(landPrice, terms.developerGainSharePct()),
                 terms.inactivityMonths(), terms.noticeDays(), terms.maxMonths());
+    }
+
+    /**
+     * The two exits quoted: after paying the minimum to start, and after
+     * paying half the plan total. Also what an offer letter prints, from the
+     * figures copied onto the purchase.
+     */
+    public static List<Exit> exits(BigDecimal minimumToStart, BigDecimal planTotal, BigDecimal landPrice,
+                                   BigDecimal deductionPct, RefundAppliesTo appliesTo) {
+        BigDecimal half = planTotal.divide(BigDecimal.TWO, KOBO, RoundingMode.DOWN);
+        return List.of(exit(minimumToStart, landPrice, deductionPct, appliesTo),
+                exit(half, landPrice, deductionPct, appliesTo));
+    }
+
+    /** The buyer's side of any gain above {@code landPrice}, with FC-8's worked example. */
+    public static Gain gain(BigDecimal landPrice, BigDecimal developerSharePct) {
+        BigDecimal buyerShare = HUNDRED.subtract(developerSharePct);
+        BigDecimal difference = pctOf(EXAMPLE_RISE_PCT, landPrice);
+        return new Gain(developerSharePct, buyerShare, pctOf(buyerShare, MILLION),
+                new GainExample(EXAMPLE_RISE_PCT, landPrice.add(difference), difference, pctOf(buyerShare, difference)));
     }
 
     /**
@@ -119,9 +134,13 @@ public final class FlexiblePlanCalculator {
      * less than escrow returns.
      */
     public static Exit exit(BigDecimal paid, BigDecimal landPrice, Terms terms) {
-        BigDecimal keeps = terms.exitAppliesTo() == RefundAppliesTo.TOTAL_PRICE
-                ? paid.min(pctOf(terms.exitDeductionPct(), landPrice))
-                : pctOf(terms.exitDeductionPct(), paid);
+        return exit(paid, landPrice, terms.exitDeductionPct(), terms.exitAppliesTo());
+    }
+
+    public static Exit exit(BigDecimal paid, BigDecimal landPrice, BigDecimal deductionPct, RefundAppliesTo appliesTo) {
+        BigDecimal keeps = appliesTo == RefundAppliesTo.TOTAL_PRICE
+                ? paid.min(pctOf(deductionPct, landPrice))
+                : pctOf(deductionPct, paid);
         return new Exit(paid, paid.subtract(keeps), keeps);
     }
 

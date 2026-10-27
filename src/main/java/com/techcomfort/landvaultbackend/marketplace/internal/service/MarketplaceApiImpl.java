@@ -6,6 +6,7 @@ import com.techcomfort.landvaultbackend.marketplace.EstateEligibility;
 import com.techcomfort.landvaultbackend.marketplace.MarketplaceApi;
 import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
 import com.techcomfort.landvaultbackend.common.RevocationTerms;
+import com.techcomfort.landvaultbackend.marketplace.OfferedFlexiblePlan;
 import com.techcomfort.landvaultbackend.marketplace.OfferedPlan;
 import com.techcomfort.landvaultbackend.marketplace.OfferedRefundTerms;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.PlotView;
@@ -52,10 +53,18 @@ public class MarketplaceApiImpl implements MarketplaceApi {
     @Override
     @Transactional(readOnly = true)
     public Optional<OfferedPlan> offeredPlan(UUID estateId, UUID planId) {
-        // Flexible plans can't be chosen yet (phase 2 of flexible contribution).
+        // Instalment plans only: a flexible plan has no schedule to work out.
         return paymentPlans.findByPlanIdAndEstateId(planId, estateId)
                 .filter(p -> p.getKind() == PlanKind.INSTALMENT)
                 .map(p -> new OfferedPlan(p.getPlanId(), p.getName(), p.terms()));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<OfferedFlexiblePlan> offeredFlexiblePlan(UUID estateId, UUID planId) {
+        return paymentPlans.findByPlanIdAndEstateId(planId, estateId)
+                .filter(p -> p.getKind() == PlanKind.FLEXIBLE)
+                .map(p -> new OfferedFlexiblePlan(p.getPlanId(), p.getName(), p.flexibleTerms()));
     }
 
     @Override

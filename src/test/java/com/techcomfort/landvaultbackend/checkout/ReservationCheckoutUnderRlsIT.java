@@ -20,6 +20,7 @@ import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
 import com.techcomfort.landvaultbackend.checkout.dto.TransactionDto;
 import com.techcomfort.landvaultbackend.checkout.internal.service.ReservationExpirySweeper;
 import com.techcomfort.landvaultbackend.common.Currency;
+import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
 import com.techcomfort.landvaultbackend.common.geojson.GeoJsonPolygonDto;
 import com.techcomfort.landvaultbackend.documents.internal.render.DisclosureClauses;
 import com.techcomfort.landvaultbackend.documents.internal.render.DocumentFormats;
@@ -92,6 +93,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Arrays;
 import java.util.List;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -3103,22 +3105,114 @@ class ReservationCheckoutUnderRlsIT {
                 .isEqualTo("0");
     }
 
-    /** Flexible contribution, phase 1: a flexible plan is published but can't be bought yet (phase 2). */
+    /**
+     * Flexible contribution, phase 2: a purchase names a plan of the kind it
+     * chooses — an instalment plan's id can't open a flexible purchase, nor
+     * the reverse — and the month count is never the buyer's.
+     */
     @Test
-    void aFlexiblePlanCantBeChosenYet() {
-        Matcher id = Pattern.compile("\"plans\":\\[\\{\"id\":\"([0-9a-f-]{36})\"").matcher(declarePlans("""
-                [{"name":"Pay as you can","kind":"flexible","depositPct":20,
-                  "flexible":{"exit":{"deductionPct":15,"appliesTo":"amount_paid"},"developerGainSharePct":40,
-                              "inactivityMonths":6,"noticeDays":30}}]
-                """));
-        assertThat(id.find()).isTrue();
+    void aFlexiblePurchaseMustNameAFlexiblePlanTheEstateOffersNow() {
+        Map<String, UUID> plans = planIds(declarePlans(FLEXIBLE_AND_INSTALMENT_PLANS));
         ReservationDto held = reserve(buyer, plotId);
 
-        ResponseEntity<String> flexible = openRaw(held.id(), "installment", null, UUID.fromString(id.group(1)));
-        assertThat(flexible.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
-        assertThat(flexible.getBody()).contains("PLAN_NOT_OFFERED");
+        assertThat(openRaw(held.id(), "flexible", null, null).getBody()).as("no plan named")
+                .contains("INVALID_PAYMENT_PLAN");
+        assertThat(openRaw(held.id(), "flexible", 12, plans.get("Pay as you can")).getBody())
+                .as("a month count from the buyer").contains("INVALID_PAYMENT_PLAN");
+        ResponseEntity<String> instalmentAsFlexible = openRaw(held.id(), "flexible", null, plans.get("12-month plan"));
+        assertThat(instalmentAsFlexible.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(instalmentAsFlexible.getBody()).contains("PLAN_NOT_OFFERED", "That is an instalment plan");
+        ResponseEntity<String> flexibleAsInstalment = openRaw(held.id(), "installment", null,
+                plans.get("Pay as you can"));
+        assertThat(flexibleAsInstalment.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(flexibleAsInstalment.getBody()).contains("PLAN_NOT_OFFERED", "That is a flexible plan");
+        assertThat(openRaw(held.id(), "flexible", null, UUID.randomUUID()).getBody()).contains("PLAN_NOT_OFFERED");
         assertThat(queryString("SELECT count(*) FROM transactions WHERE reservation_id = '" + held.id() + "'"))
                 .isEqualTo("0");
+    }
+
+    /**
+     * Flexible contribution, phase 2: the plan's terms are copied onto the
+     * purchase from the agreed price and fixed — redeclaring the estate's plans
+     * changes nothing — with no schedule and no instalment rows. The offer
+     * states the plan and both ways out in naira, and paying waits for phase 3.
+     */
+    @Test
+    void aFlexiblePurchaseFixesItsTermsAndTheOfferStatesBothWaysOut() {
+        UUID planId = planIds(declarePlans(FLEXIBLE_AND_INSTALMENT_PLANS)).get("Pay as you can");
+        ResponseEntity<String> opened = openRaw(reserve(buyer, plotId).id(), "flexible", null, planId);
+        assertThat(opened.getStatusCode()).as(opened.getBody()).isEqualTo(HttpStatus.CREATED);
+        TransactionDto purchase = objectMapper.readValue(opened.getBody(), TransactionDto.class);
+
+        assertThat(purchase.plan()).isEqualTo("flexible");
+        assertThat(purchase.installmentMonths()).isNull();
+        assertThat(purchase.schedule()).as("no schedule").isNull();
+        FlexiblePurchase flexible = purchase.flexible();
+        assertThat(flexible.planId()).isEqualTo(planId);
+        assertThat(flexible.planName()).isEqualTo("Pay as you can");
+        assertThat(flexible.planTotal()).as("₦20M + 10%").isEqualByComparingTo("22000000");
+        assertThat(flexible.premium()).isEqualByComparingTo("2000000");
+        assertThat(flexible.minimumToStart()).as("10% of the price, not of the total").isEqualByComparingTo("2000000");
+        assertThat(flexible.minimumContribution()).isEqualByComparingTo("100000");
+        assertThat(flexible.exitDeductionPct()).isEqualByComparingTo("20");
+        assertThat(flexible.exitAppliesTo()).isEqualTo(RefundAppliesTo.AMOUNT_PAID);
+        assertThat(flexible.developerGainSharePct()).isEqualByComparingTo("60");
+        assertThat(flexible.inactivityMonths()).isEqualTo(6);
+        assertThat(flexible.noticeDays()).isEqualTo(30);
+        assertThat(flexible.maxMonths()).isEqualTo(24);
+        LocalDate finishBy = LocalDate.now(ZoneId.of("Africa/Lagos")).plusMonths(24);
+        assertThat(flexible.finishBy()).as("from the offer date").isEqualTo(finishBy);
+        assertThat(queryString("SELECT count(*) FROM transaction_instalments WHERE transaction_id = '"
+                + purchase.id() + "'")).as("no instalment rows").isEqualTo("0");
+
+        declarePlans("[]");
+        assertThat(get("/api/checkout/transactions/" + purchase.id(), buyer.token(), TransactionDto.class).getBody()
+                .flexible()).as("redeclaring the estate's plans doesn't touch this purchase")
+                .usingRecursiveComparison().withComparatorForType(BigDecimal::compareTo, BigDecimal.class)
+                .isEqualTo(flexible);
+
+        String offer = "FROM offer_letters WHERE id = '" + purchase.offer().id() + "'";
+        assertThat(queryString("SELECT array_to_string(price_clauses, '|') " + offer))
+                .contains("That the price of the plot, paid in full, is ₦20,000,000.00",
+                        "That you have chosen the Pay as you can: ₦22,000,000.00 in all (₦2,000,000.00 more than "
+                                + "paying in full), paid in any amounts, at any time, with no schedule",
+                        "Your first payment must be at least ₦2,000,000.00",
+                        "Each later payment must be at least ₦100,000.00",
+                        "The plan must be finished by " + DocumentFormats.date(finishBy),
+                        "your total commitment on this plan is ₦22,000,000.00",
+                        "after paying ₦2,000,000.00 you get back ₦1,600,000.00, and after paying ₦11,000,000.00 you "
+                                + "get back ₦8,800,000.00",
+                        "you receive 40% of the difference",
+                        "if it sold for ₦24,000,000.00, you would receive ₦1,600,000.00. This is an example",
+                        "ask HomeTrue to sell the plot at a price you choose, not below ₦20,000,000.00",
+                        "if no payment of yours is verified for 6 months",
+                        "take the place of the estate's general withdrawal and revocation terms")
+                .doesNotContain("instalments fall due");
+
+        assertThat(acceptOffer(buyer, purchase.offer().id()).getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(pay(buyer, purchase.id()).getBody()).as("paying a flexible plan is phase 3")
+                .contains("PAYMENT_PLAN_NOT_SUPPORTED");
+        assertThat(queryString("SELECT count(*) FROM payments WHERE transaction_id = '" + purchase.id() + "'"))
+                .isEqualTo("0");
+    }
+
+    /** A flexible plan (10% to start on ₦20M, 10% premium) beside the 12-month plan. */
+    private static final String FLEXIBLE_AND_INSTALMENT_PLANS = """
+            [{"name":"Pay as you can","kind":"flexible","depositPct":10,"premiumPct":10,
+              "flexible":{"minimumContribution":100000,"exit":{"deductionPct":20,"appliesTo":"amount_paid"},
+                          "developerGainSharePct":60,"inactivityMonths":6,"noticeDays":30,"maxMonths":24}},
+             {"name":"12-month plan","depositPct":30,"instalmentCount":12,"frequency":"monthly","premiumPct":10}]
+            """;
+
+    /** Each declared plan's id, by name, from the declaration's response. */
+    private static Map<String, UUID> planIds(String declared) {
+        Matcher m = Pattern.compile("\\{\"id\":\"([0-9a-f-]{36})\",\"name\":\"([^\"]+)\"").matcher(declared);
+        Map<String, UUID> ids = new HashMap<>();
+        while (m.find()) {
+            ids.put(m.group(2), UUID.fromString(m.group(1)));
+        }
+        assertThat(ids).as(declared).hasSize(2);
+        return ids;
     }
 
     /**
