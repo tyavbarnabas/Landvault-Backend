@@ -510,4 +510,30 @@ public abstract class PaymentException extends RuntimeException {
                     + "). Waive at most that.");
         }
     }
+
+    /** Phase 5 of flexible contribution: not this buyer's gain claim (or none). */
+    public static class GainShareNotFound extends PaymentException {
+        public GainShareNotFound() {
+            super("No such gain share.");
+        }
+    }
+
+    public static class GainShareNotOwed extends PaymentException {
+        public GainShareNotOwed(String status) {
+            super("Nothing is owed on this gain share yet (it is " + status + "), so there's nowhere to send.");
+        }
+    }
+
+    public static class GainShareAlreadySending extends PaymentException {
+        public GainShareAlreadySending() {
+            super("HomeTrue has already started sending this gain share, so the account can't be changed now.");
+        }
+    }
+
+    /** A GAIN tranche is next, and the buyer it's owed to hasn't given an account yet. */
+    public static class BuyerAccountNeeded extends PaymentException {
+        public BuyerAccountNeeded() {
+            super("The earlier buyer this gain share is owed to hasn't given a bank account yet. They've been emailed.");
+        }
+    }
 }

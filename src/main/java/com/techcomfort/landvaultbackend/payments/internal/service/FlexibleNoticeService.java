@@ -57,6 +57,7 @@ public class FlexibleNoticeService {
     private final IdentityApi identityApi;
     private final SettlementAlertSender alerts;
     private final BuyerNotifier buyerNotifier;
+    private final GainShareService gainShares;
 
     /** The purchase is this company's flexible plan (any status), visible to the caller. */
     boolean handles(UUID transactionId, TenantScope scope) {
@@ -147,6 +148,8 @@ public class FlexibleNoticeService {
         }
         withdrawals.flagRefunds(purchase, quote, scope.userId(), Instant.now(), "Your plan was ended",
                 "the developer ended the quiet plan");
+        // Phase 5: ended on the terms for leaving — so the gain claim too.
+        gainShares.open(purchase, scope.userId());
         notices.close(notice, RevocationStatus.REVOKED, scope.userId(), null);
         log.info("Quiet flexible plan {} ended by {}: refund {}, developer keeps {}", transactionId, scope.userId(),
                 quote.refund(), quote.developerKeeps());

@@ -4,6 +4,7 @@ import com.techcomfort.landvaultbackend.common.ErrorResponse;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.AdminPayoutController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.AdminRefundController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.AdminSettlementAccountController;
+import com.techcomfort.landvaultbackend.payments.internal.controllers.GainShareController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PaymentController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PaystackWebhookController;
 import com.techcomfort.landvaultbackend.payments.internal.controllers.PortalFinanceController;
@@ -35,13 +36,18 @@ import java.util.stream.Collectors;
         AdminPayoutController.class, PortalPayoutController.class, AdminRefundController.class,
         PortalLatePaymentController.class, PortalPlanController.class, WithdrawalController.class,
         PortalRevocationController.class, RestructureController.class, PortalRestructureController.class,
-        PortalPenaltyWaiverController.class, PortalFlexiblePlanController.class})
+        PortalPenaltyWaiverController.class, PortalFlexiblePlanController.class,
+        GainShareController.class})
 public class PaymentExceptionHandler {
 
     @ExceptionHandler(PaymentException.class)
     public ResponseEntity<ErrorResponse> handle(PaymentException ex) {
         return switch (ex) {
             case PaymentException.TransactionNotFound e -> body(HttpStatus.NOT_FOUND, e, "TRANSACTION_NOT_FOUND");
+            case PaymentException.GainShareNotFound e -> body(HttpStatus.NOT_FOUND, e, "GAIN_SHARE_NOT_FOUND");
+            case PaymentException.GainShareNotOwed e -> body(HttpStatus.CONFLICT, e, "GAIN_SHARE_NOT_OWED");
+            case PaymentException.GainShareAlreadySending e -> body(HttpStatus.CONFLICT, e, "GAIN_SHARE_ALREADY_SENDING");
+            case PaymentException.BuyerAccountNeeded e -> body(HttpStatus.CONFLICT, e, "BUYER_ACCOUNT_NEEDED");
             case PaymentException.PaymentNotFound e -> body(HttpStatus.NOT_FOUND, e, "PAYMENT_NOT_FOUND");
             case PaymentException.WebhookSignatureInvalid e -> body(HttpStatus.UNAUTHORIZED, e, "WEBHOOK_SIGNATURE_INVALID");
             case PaymentException.CompanyScopeRequired e -> body(HttpStatus.FORBIDDEN, e, "COMPANY_SCOPE_REQUIRED");

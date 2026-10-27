@@ -328,6 +328,56 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
         log.info("Quiet-plan {} delivered to a buyer", alert.stage().name().toLowerCase(Locale.ROOT));
     }
 
+    /** Flexible contribution, phase 5: the figures, plainly, and the one thing to do. */
+    @Override
+    public void gainShareOwed(GainShareOwedAlert alert) {
+        sendGainShare(alert.to(), "Good news: a share of the sale of " + alert.plotLabel() + " is yours", """
+                Hello,
+
+                %s at %s, which you left, has been sold again through HomeTrue for NGN %s — NGN %s more than your \
+                agreed price of NGN %s. Your share of that is %s%%: NGN %s.%s
+
+                Tell us which bank account to send it to, in your HomeTrue account:
+
+                    %s
+                """.formatted(alert.plotLabel(), alert.estateName(), alert.salePrice(), alert.gain(),
+                alert.agreedPrice(), alert.buyerSharePct(), alert.amount(), alert.capped()
+                        ? " (This is all the developer's payout from the sale could cover.)" : "", alert.url()));
+    }
+
+    @Override
+    public void gainShareDeduction(GainShareDeductionAlert alert) {
+        sendGainShare(alert.to(), "Payout note: " + alert.plotLabel() + " at " + alert.estateName(), """
+                Hello,
+
+                %s at %s (purchase %s) has sold for NGN %s. An earlier buyer of the plot left a flexible plan with \
+                a share of any later gain, as your declared terms set out, so NGN %s is paid to them out of this \
+                sale before your payout.
+                """.formatted(alert.plotLabel(), alert.estateName(), alert.purchaseReference(), alert.salePrice(),
+                alert.amount()));
+    }
+
+    @Override
+    public void gainSharePaid(GainSharePaidAlert alert) {
+        sendGainShare(alert.to(), "Your gain share is on its way", """
+                Hello,
+
+                HomeTrue has sent NGN %s of your gain share to %s ending %s. Banks can take a little while to show it.
+
+                    %s
+                """.formatted(alert.amount(), alert.bankName(), alert.accountLast4(), alert.url()));
+    }
+
+    private void sendGainShare(String to, String subject, String text) {
+        SimpleMailMessage message = new SimpleMailMessage();
+        message.setFrom(fromAddress);
+        message.setTo(to);
+        message.setSubject(subject);
+        message.setText(text);
+        mailSender.send(message);
+        log.info("Gain share email delivered");
+    }
+
     /** Phase 5a. Factual: what was paid, what comes back, what the developer keeps, and what happens next. */
     @Override
     public void planWithdrawn(WithdrawalAlert alert) {

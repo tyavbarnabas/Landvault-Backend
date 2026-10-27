@@ -58,6 +58,21 @@ public class LoggingSettlementAlertSender implements SettlementAlertSender {
     }
 
     @Override
+    public void gainShareOwed(GainShareOwedAlert alert) {
+        log.info("[TEST-ONLY gain share owed] to={} amount={} capped={}", alert.to(), alert.amount(), alert.capped());
+    }
+
+    @Override
+    public void gainShareDeduction(GainShareDeductionAlert alert) {
+        log.info("[TEST-ONLY gain share deduction] to={} amount={}", alert.to(), alert.amount());
+    }
+
+    @Override
+    public void gainSharePaid(GainSharePaidAlert alert) {
+        log.info("[TEST-ONLY gain share paid] to={} amount={}", alert.to(), alert.amount());
+    }
+
+    @Override
     public void planWithdrawn(WithdrawalAlert alert) {
         log.info("[TEST-ONLY plan withdrawn] to={} developer={} purchase={} refund={} developerKeeps={}", alert.to(),
                 alert.toDeveloper(), alert.purchaseReference(), alert.refund(), alert.developerKeeps());

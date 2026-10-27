@@ -3451,6 +3451,102 @@ class ReservationCheckoutUnderRlsIT {
                 .as("finishing the plan ends it").isEqualTo("CLEARED");
     }
 
+    /**
+     * Flexible contribution, phase 5: the buyer who left keeps a claim. The
+     * plot's next sale through HomeTrue — here outright at ₦25M, fully paid
+     * and verified — is ₦5M above their ₦20M agreed price, so they get their
+     * 40%: ₦2M, taken off the developer's ₦25M before the developer is paid,
+     * and sent to the account the buyer gives (never before they give one).
+     */
+    @Test
+    void aBuyerWhoLeftIsPaidTheirShareOfTheNextSaleAboveTheirPrice() {
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        TransactionDto first = flexibleHeldOnPlan("5000000", officer);
+        assertThat(restTemplate.exchange("/api/transactions/" + first.id() + "/withdrawal", HttpMethod.POST,
+                entity(buyer.token(), "{\"refund\":4000000}"), String.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+        String claim = "FROM gain_share_claims WHERE claim_transaction_id = '" + first.id() + "'";
+        assertThat(queryString("SELECT status || '/' || agreed_price || '/' || developer_share_pct " + claim))
+                .isEqualTo("OPEN/20000000.0000/60.00");
+
+        TransactionDto resale = soldOutright(verifiedBuyerAt("25000000"), officer, 2_500_000_000L);
+        assertThat(queryString("SELECT status || '/' || gain || '/' || buyer_amount || '/' || sale_transaction_id "
+                + claim)).isEqualTo("OWED/5000000.00/2000000.00/" + resale.id());
+        verify(alerts, atLeastOnce()).gainShareOwed(argThat(a -> "2000000.00".equals(a.amount()) && !a.capped()));
+        JsonNode mine = objectMapper.readTree(get("/api/gain-shares", buyer.token(), String.class).getBody()).get(0);
+        assertThat(mine.path("status").asString()).isEqualTo("owed");
+        assertThat(mine.path("amount").decimalValue()).isEqualByComparingTo("2000000");
+        assertThat(mine.path("accountNeeded").asBoolean()).isTrue();
+
+        approvedPayoutAccount(seller.id(), "RCP_seller");
+        String admin = payoutAdmin(true);
+        JsonNode owed = objectMapper.readTree(readyFor(admin, resale));
+        assertThat(owed.path("tranche").asString()).as("the developer first").isEqualTo("sale");
+        assertThat(owed.path("trancheAmount").decimalValue()).as("₦25M less the ₦2M").isEqualByComparingTo("23000000");
+        assertThat(owed.path("amountOwed").decimalValue()).as("everything still owed").isEqualByComparingTo("25000000");
+        payPart(admin, resale.id(), "TRF_sale1");
+        payPart(admin, resale.id(), "TRF_sale2");
+        payPart(admin, resale.id(), "TRF_sale3");
+
+        JsonNode gainNext = objectMapper.readTree(readyFor(admin, resale));
+        assertThat(gainNext.path("tranche").asString()).isEqualTo("gain");
+        assertThat(gainNext.path("blockers").toString()).contains("BUYER_ACCOUNT_NEEDED");
+        assertThat(sendPayout(admin, resale.id()).getBody()).contains("BUYER_ACCOUNT_NEEDED");
+
+        when(paystack.listBanks()).thenReturn(List.of(new PaystackClient.Bank("058", "Guaranty Trust Bank", "9")));
+        when(paystack.resolveAccountName("0123456789", "058")).thenReturn(Optional.of("BUYER ADA CHIOMA"));
+        when(paystack.createRecipient(eq("BUYER ADA CHIOMA"), eq("0123456789"), eq("058"), anyString()))
+                .thenReturn("RCP_buyer");
+        ResponseEntity<String> given = restTemplate.exchange("/api/gain-shares/" + mine.path("id").asString()
+                + "/account", HttpMethod.PUT, entity(buyer.token(),
+                "{\"bankCode\":\"058\",\"accountNumber\":\"0123456789\"}"), String.class);
+        assertThat(given.getStatusCode()).as(given.getBody()).isEqualTo(HttpStatus.OK);
+        assertThat(restTemplate.exchange("/api/gain-shares/" + mine.path("id").asString() + "/account", HttpMethod.PUT,
+                entity(verifiedBuyer().token(), "{\"bankCode\":\"058\",\"accountNumber\":\"0123456789\"}"),
+                String.class).getStatusCode()).as("only the buyer's own").isEqualTo(HttpStatus.NOT_FOUND);
+
+        payPart(admin, resale.id(), "TRF_gain");
+        verify(paystack).initiateTransfer(eq(200_000_000L), eq("RCP_buyer"), anyString(), any());
+        assertThat(queryString("SELECT count(*) FROM payouts WHERE transaction_id = '" + resale.id()
+                + "' AND tranche LIKE 'GAIN:%' AND settlement_account_id IS NULL AND gain_claim_id IS NOT NULL"))
+                .as("to the buyer, not the company").isEqualTo("1");
+        assertThat(get("/api/admin/payouts/ready", admin, String.class).getBody()).doesNotContain(resale.id().toString());
+    }
+
+    /** Phase 5: a next sale for no more than the agreed price owes nothing, and the developer is paid in full. */
+    @Test
+    void aNextSaleAtNoMoreThanTheAgreedPriceOwesNothing() {
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        TransactionDto first = flexibleHeldOnPlan("5000000", officer);
+        restTemplate.exchange("/api/transactions/" + first.id() + "/withdrawal", HttpMethod.POST,
+                entity(buyer.token(), "{\"refund\":4000000}"), String.class);
+
+        TransactionDto resale = soldOutright(verifiedBuyer(), officer, 2_000_000_000L);
+        assertThat(queryString("SELECT status || '/' || gain FROM gain_share_claims WHERE claim_transaction_id = '"
+                + first.id() + "'")).isEqualTo("NO_GAIN/0.00");
+        approvedPayoutAccount(seller.id(), "RCP_seller");
+        JsonNode owed = objectMapper.readTree(readyFor(payoutAdmin(true), resale));
+        assertThat(owed.path("amountOwed").decimalValue()).isEqualByComparingTo("20000000");
+    }
+
+    /** A new verified buyer, with the plot's tier repriced to {@code price} first. */
+    private Buyer verifiedBuyerAt(String price) {
+        execute("UPDATE price_tiers SET price = " + price + " WHERE id = '" + tierId + "'");
+        return verifiedBuyer();
+    }
+
+    /** {@code who} buys the plot outright, Paystack confirms {@code kobo}, and finance verifies it. */
+    private TransactionDto soldOutright(Buyer who, String officer, long kobo) {
+        TransactionDto sale = createTransaction(who, reserve(who, plotId).id(), "outright", null);
+        paystackReturnsALink();
+        assertThat(pay(who, sale.id()).getStatusCode().is2xxSuccessful()).isTrue();
+        String reference = queryString("SELECT reference FROM payments WHERE transaction_id = '" + sale.id() + "'");
+        paystackSays(reference, "success", kobo, "NGN", "Approved");
+        assertThat(confirm(who, reference).getBody()).contains("\"status\":\"succeeded\"");
+        ResponseEntity<String> verified = financeAction(officer, sale.id(), "verify", null);
+        assertThat(verified.getBody()).as(verified.getBody()).contains("\"status\":\"verified\"");
+        return sale;
+    }
+
     /** Flexible 3b: a first payment of the whole plan total finishes the plan at once. */
     @Test
     void aFlexibleFirstPaymentOfTheWholeTotalCompletesThePlanAtOnce() {

@@ -27,8 +27,16 @@ public record VerifiedSale(
         BigDecimal totalPrice,
         Currency currency,
         Instant verifiedAt,
-        Escrow escrow
+        Escrow escrow,
+        /** The plot sold — phase 5 of flexible contribution settles earlier buyers' gain claims on it. */
+        UUID plotId
 ) {
+
+    public VerifiedSale(UUID transactionId, String transactionReference, UUID sellerTenantId, String estateName,
+                        String plotLabel, BigDecimal totalPrice, Currency currency, Instant verifiedAt, Escrow escrow) {
+        this(transactionId, transactionReference, sellerTenantId, estateName, plotLabel, totalPrice, currency,
+                verifiedAt, escrow, null);
+    }
 
     /**
      * An instalment purchase's escrow terms, copied when it opened.

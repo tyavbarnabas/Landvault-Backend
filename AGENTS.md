@@ -6659,8 +6659,9 @@ user, beside "leave now":
 - **No exit deduction on a sale**: the developer is paid in full from the proceeds. The deduction belongs to "leave
   now" only.
 - **The buyer may change the asking price or take the plot off sale** while no new buyer holds it.
-- **The sale is complete when finance verifies the new buyer's payment**: outright, the full payment; on a plan,
-  the deposit — the split is then paid from that deposit and the payments that follow.
+- **The new buyer always pays all at once** (decided with the user, 2026-10-27 — superseding "on a plan, the
+  deposit"): a resale is never bought on an instalment or flexible plan, so the first buyer is paid out in one go and
+  nobody's ownership depends on a second plan. The sale is complete when finance verifies that payment.
 - After it: the first buyer's plan ends as sold, their portfolio record closes and their letter reads as
   transferred; the new buyer gets their own documents.
 
@@ -6800,6 +6801,36 @@ sees flexible plans; leaving during a notice closes it; emails at each step, no 
   nothing for a flexible plan. `RevocationDto` gains `flexible` and each notice its `trigger`.
 - Emails (`SettlementAlertSender.quietPlan`): notice given (what was found, what to do by when, what ending would
   return in naira, that leaving now is the same), withdrawn, ended by the buyer, plan ended.
+
+### Phase 5: the gain share (changeset 114)
+
+Decided with the user (2026-10-27, all as recommended): the next sale counts once fully paid and verified; agreed
+price to agreed price; no time limit; the buyer gives an account and a Super Admin sends it, taken off the developer's
+payout first; several claims oldest first, never more than the developer is owed; emails to the buyer and the
+Executive Directors. Built first because "sell my plot" needs the same thing: paying a buyer out of a later sale.
+
+- **A claim opens** when a flexible buyer leaves or their quiet plan is ended (`GainShareService.open`, in that
+  transaction): `gain_share_claims` with the purchase's agreed price and the developer's gain share, both copied from
+  the purchase. None when the developer keeps every gain (100%).
+- **It settles on the plot's next completed sale** — any purchase that reaches `verified` through finance: outright,
+  late money, an instalment or flexible plan finishing (`settleOn`, called after each). Gain = that sale's agreed
+  price − the claim's, kobo rounded down; the buyer gets (100 − developer share)% of it. Claims settle oldest first,
+  capped together at the developer's whole-price tranche (outright) or release (a plan) —
+  `PayoutTranches.developerRemainder`; shares already paid out during a plan are never clawed back. `OWED` or
+  `NO_GAIN`; never reopened.
+- **Paid as a payout tranche** `GAIN:<claim id>` on the sale: taken off the `SALE`/`RELEASE` tranche and paid after
+  the developer's, to the buyer's own Paystack recipient (`payouts.gain_claim_id`, `settlement_account_id` null — a
+  CHECK keeps the two payees apart). Everything else is the existing payout machinery: Super Admin with 2FA,
+  Paystack's code, lost replies, the split under the transfer cap, outcomes, the stuck sweep. A gain tranche isn't held
+  by the company's account or status; it is held (`BUYER_ACCOUNT_NEEDED`) until the buyer gives an account. Proven
+  red by not deducting it, and by not settling on verification.
+- **The buyer**: `GET /api/gain-shares`, `PUT /api/gain-shares/{id}/account` `{ bankCode, accountNumber }`
+  (`client.checkout.reserve`, own only — another's is 404). The bank supplies the name; the Paystack recipient is
+  created then; replaceable until a transfer of it starts. Emails: owed (the figures, and that the developer's payout
+  couldn't cover more when capped), and paid (on Paystack's confirmed `success`, `PayoutOutcomeService`).
+- **The developer** is told the deduction, never the buyer's name.
+- Not tested end to end: the deduction email (the IT company has no active Executive Director) and the paid email
+  (it fires on the webhook/sweep outcome, which these tests don't drive).
 
 ## A buyer's address (changeset 097)
 

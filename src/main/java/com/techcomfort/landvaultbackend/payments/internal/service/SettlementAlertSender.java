@@ -121,6 +121,30 @@ public interface SettlementAlertSender {
     void quietPlan(QuietPlanAlert alert);
 
     /**
+     * Flexible contribution, phase 5: to the buyer who left, when the plot's
+     * next sale was above their agreed price. Amounts in naira; {@code capped}
+     * when the developer's payout from that sale couldn't cover the full share.
+     */
+    record GainShareOwedAlert(String to, String plotLabel, String estateName, String agreedPrice, String salePrice,
+                              String gain, String buyerSharePct, String amount, boolean capped, String url) {
+    }
+
+    void gainShareOwed(GainShareOwedAlert alert);
+
+    /** Phase 5: to each Executive Director, when a sale's payout carries an earlier buyer's share. No buyer named. */
+    record GainShareDeductionAlert(String to, String purchaseReference, String plotLabel, String estateName,
+                                   String salePrice, String amount) {
+    }
+
+    void gainShareDeduction(GainShareDeductionAlert alert);
+
+    /** Phase 5: to the buyer, when Paystack confirms a transfer of their gain share. */
+    record GainSharePaidAlert(String to, String amount, String bankName, String accountLast4, String url) {
+    }
+
+    void gainSharePaid(GainSharePaidAlert alert);
+
+    /**
      * Phase 5b: to the buyer, at each step of a revocation. Amounts are plain
      * naira strings. {@code totalDue}: what is overdue with its penalties, for
      * a notice; {@code refund}/{@code developerKeeps}: what a revocation returns

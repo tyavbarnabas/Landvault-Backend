@@ -10,6 +10,7 @@ import com.techcomfort.landvaultbackend.common.TenantScope;
 import com.techcomfort.landvaultbackend.identity.IdentityApi;
 import com.techcomfort.landvaultbackend.payments.dto.PayoutDto;
 import com.techcomfort.landvaultbackend.payments.dto.ReadyPayoutDto;
+import com.techcomfort.landvaultbackend.payments.internal.domain.GainShareClaim;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payment;
 import com.techcomfort.landvaultbackend.payments.internal.domain.Payout;
 import com.techcomfort.landvaultbackend.payments.internal.domain.SettlementAccount;
@@ -18,6 +19,7 @@ import com.techcomfort.landvaultbackend.payments.internal.enums.SettlementAccoun
 import com.techcomfort.landvaultbackend.payments.internal.exceptions.PaymentException;
 import com.techcomfort.landvaultbackend.payments.internal.paystack.PaystackAmounts;
 import com.techcomfort.landvaultbackend.payments.internal.paystack.PaystackClient;
+import com.techcomfort.landvaultbackend.payments.internal.repository.GainShareClaimRepository;
 import com.techcomfort.landvaultbackend.payments.internal.repository.PaymentRepository;
 import com.techcomfort.landvaultbackend.payments.internal.repository.PayoutRepository;
 import com.techcomfort.landvaultbackend.payments.internal.repository.SettlementAccountRepository;
@@ -32,6 +34,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -52,6 +55,7 @@ public class PayoutService {
     private static final String NO_APPROVED_ACCOUNT = "NO_APPROVED_PAYOUT_ACCOUNT";
     private static final String COMPANY_NOT_ACTIVE = "COMPANY_NOT_ACTIVE";
     private static final String CURRENCY_NOT_SUPPORTED = "CURRENCY_NOT_SUPPORTED";
+    private static final String BUYER_ACCOUNT_NEEDED = "BUYER_ACCOUNT_NEEDED";
 
     private final PayoutRecorder recorder;
     private final PayoutRepository payouts;
@@ -62,6 +66,8 @@ public class PayoutService {
     private final TenancyApi tenancyApi;
     private final IdentityApi identityApi;
     private final AuditApi auditApi;
+    private final GainShareService gainShares;
+    private final GainShareClaimRepository gainClaims;
 
     /**
      * Sales with money owed and nothing in flight, each with what is left, the
@@ -84,6 +90,11 @@ public class PayoutService {
         Map<UUID, List<Payment>> paymentsBySale = salePayments.findAllByTransactionIdIn(sales.stream()
                         .filter(s -> s.escrow() != null).map(VerifiedSale::transactionId).toList()).stream()
                 .collect(Collectors.groupingBy(Payment::getTransactionId));
+        // Phase 5: earlier buyers' gain shares owed out of these sales.
+        Map<UUID, List<GainShareClaim>> gainsBySale = gainShares.owedOn(sales.stream()
+                .map(VerifiedSale::transactionId).toList());
+        Map<UUID, GainShareClaim> gainsById = gainsBySale.values().stream().flatMap(List::stream)
+                .collect(Collectors.toMap(GainShareClaim::getId, Function.identity()));
 
         List<ReadyPayoutDto> ready = new ArrayList<>();
         for (VerifiedSale sale : sales) {
@@ -100,7 +111,8 @@ public class PayoutService {
             PayoutRecorder.Plan plan = null;
             BigDecimal amountOwed = null;
             if (sale.currency() == Currency.NGN) {
-                PayoutRecorder.Owing owing = recorder.owing(sale, attempts, salePaymentsOf);
+                PayoutRecorder.Owing owing = recorder.owing(sale, attempts, salePaymentsOf,
+                        gainsBySale.getOrDefault(sale.transactionId(), List.of()));
                 if (owing.next() == null) {
                     continue;
                 }
@@ -109,23 +121,32 @@ public class PayoutService {
                 plan = owing.nextPlan();
                 amountOwed = owing.amountOwed();
             } else {
-                owed = PayoutTranches.of(sale, salePaymentsOf);
+                owed = PayoutTranches.of(sale, salePaymentsOf, gainsBySale.getOrDefault(sale.transactionId(), List.of()));
                 next = owed.tranches().isEmpty() ? null : owed.tranches().getFirst();
                 if (next == null) {
                     continue;
                 }
                 blockers.add(CURRENCY_NOT_SUPPORTED);
             }
-            Optional<SettlementAccount> account = accounts.findByTenantIdAndStatus(sale.sellerTenantId(),
-                    SettlementAccountStatus.APPROVED);
-            if (account.isEmpty()) {
-                blockers.add(NO_APPROVED_ACCOUNT);
-            }
-            if (!tenancyApi.isTenantActive(sale.sellerTenantId())) {
-                blockers.add(COMPANY_NOT_ACTIVE);
+            GainShareClaim gain = gainsById.get(PayoutTranches.gainClaimId(next.key()));
+            Optional<SettlementAccount> account = gain != null ? Optional.empty()
+                    : accounts.findByTenantIdAndStatus(sale.sellerTenantId(), SettlementAccountStatus.APPROVED);
+            if (gain != null) {
+                // It goes to the earlier buyer, so the company's account and status don't hold it up.
+                if (gain.getRecipientCode() == null) {
+                    blockers.add(BUYER_ACCOUNT_NEEDED);
+                }
+            } else {
+                if (account.isEmpty()) {
+                    blockers.add(NO_APPROVED_ACCOUNT);
+                }
+                if (!tenancyApi.isTenantActive(sale.sellerTenantId())) {
+                    blockers.add(COMPANY_NOT_ACTIVE);
+                }
             }
             PayoutDto lastAttempt = attempts.stream().findFirst()
-                    .map(p -> toDto(p, byId.get(p.getSettlementAccountId()), names.get(p.getTenantId())))
+                    .map(p -> toDto(p, byId.get(p.getSettlementAccountId()), gainsById.get(p.getGainClaimId()),
+                            names.get(p.getTenantId())))
                     .orElse(null);
             ready.add(new ReadyPayoutDto(sale.transactionId(), sale.transactionReference(), sale.sellerTenantId(),
                     names.get(sale.sellerTenantId()), sale.estateName(), sale.plotLabel(), sale.totalPrice(),
@@ -134,7 +155,7 @@ public class PayoutService {
                     plan == null ? null : plan.partCount(), plan == null ? null : plan.paidParts().size(),
                     plan == null ? null : plan.nextPart(),
                     plan == null ? null : PaystackAmounts.fromKobo(plan.nextPartKobo()), sale.verifiedAt(),
-                    account.map(a -> new ReadyPayoutDto.PayoutAccount(a.getBankName(),
+                    gain != null ? gainAccount(gain) : account.map(a -> new ReadyPayoutDto.PayoutAccount(a.getBankName(),
                             PayoutRecorder.last4(a.getAccountNumber()), a.getAccountName())).orElse(null),
                     blockers, lastAttempt));
         }
@@ -269,30 +290,44 @@ public class PayoutService {
     }
 
     private PayoutDto dto(Payout payout) {
-        return toDto(payout, accounts.findById(payout.getSettlementAccountId()).orElse(null),
+        return toDto(payout, payout.getSettlementAccountId() == null ? null
+                        : accounts.findById(payout.getSettlementAccountId()).orElse(null),
+                payout.getGainClaimId() == null ? null : gainClaims.findById(payout.getGainClaimId()).orElse(null),
                 tenancyApi.organizationNamesFor(Set.of(payout.getTenantId())).get(payout.getTenantId()));
+    }
+
+    private static ReadyPayoutDto.PayoutAccount gainAccount(GainShareClaim gain) {
+        return gain.getAccountNumber() == null ? null : new ReadyPayoutDto.PayoutAccount(gain.getAccountBankName(),
+                PayoutRecorder.last4(gain.getAccountNumber()), gain.getAccountName());
     }
 
     /** Accounts and company names for the whole list in one query each, never one per row. */
     private List<PayoutDto> toDtos(List<Payout> rows) {
         Map<UUID, SettlementAccount> byId = accountsById(rows);
+        Map<UUID, GainShareClaim> gains = gainClaims.findAllById(rows.stream().map(Payout::getGainClaimId)
+                .filter(Objects::nonNull).collect(Collectors.toSet())).stream()
+                .collect(Collectors.toMap(GainShareClaim::getId, Function.identity()));
         Map<UUID, String> names = tenancyApi.organizationNamesFor(
                 rows.stream().map(Payout::getTenantId).collect(Collectors.toSet()));
         return rows.stream()
-                .map(p -> toDto(p, byId.get(p.getSettlementAccountId()), names.get(p.getTenantId())))
+                .map(p -> toDto(p, p.getSettlementAccountId() == null ? null : byId.get(p.getSettlementAccountId()),
+                        p.getGainClaimId() == null ? null : gains.get(p.getGainClaimId()), names.get(p.getTenantId())))
                 .toList();
     }
 
     private Map<UUID, SettlementAccount> accountsById(List<Payout> rows) {
-        Set<UUID> ids = rows.stream().map(Payout::getSettlementAccountId).collect(Collectors.toSet());
+        Set<UUID> ids = rows.stream().map(Payout::getSettlementAccountId).filter(Objects::nonNull)
+                .collect(Collectors.toSet());
         return accounts.findAllById(ids).stream().collect(Collectors.toMap(SettlementAccount::getId, Function.identity()));
     }
 
-    private static PayoutDto toDto(Payout p, SettlementAccount account, String companyName) {
+    /** A GAIN tranche shows the earlier buyer's bank, never the company's. */
+    private static PayoutDto toDto(Payout p, SettlementAccount account, GainShareClaim gain, String companyName) {
+        String bank = gain != null ? gain.getAccountBankName() : account == null ? null : account.getBankName();
+        String number = gain != null ? gain.getAccountNumber() : account == null ? null : account.getAccountNumber();
         return new PayoutDto(p.getId(), p.getTransactionId(), p.getTenantId(), companyName, p.getAmount(), p.getCurrency().name(),
                 PayoutTranches.kind(p.getTranche()), PayoutTranches.sharePaymentId(p.getTranche()), p.getPartNumber(), p.getPartCount(), p.getStatus().wire(), p.getReference(), p.getGatewayMessage(),
-                account == null ? null : account.getBankName(),
-                account == null ? null : PayoutRecorder.last4(account.getAccountNumber()),
+                bank, number == null ? null : PayoutRecorder.last4(number),
                 p.getCreatedAt(), p.getTransferredAt(), p.getReviewReason());
     }
 

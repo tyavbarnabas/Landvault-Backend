@@ -432,7 +432,12 @@ offer letter; phase 3a is the first payment (below). Later payments, payouts and
   `GET /api/portal/finance/flexible-plans` (`portal.payments.verify`, notice-able plans first) and gives notice
   through the revocation routes (`portal.plans.revoke`); `PlanRevocation` then carries `flexible` and each notice a
   `trigger`. A verified payment ends an inactivity notice; only finishing ends a finish-by one.
-- Not yet: "sell my plot" and the gain share.
+- **The gain share (phase 5)**: after leaving (or being ended), `GET /api/gain-shares` lists the buyer's claims —
+  `status` `open` | `owed` | `no_gain`, `agreedPrice`, `yourSharePct`, and once settled `salePrice`, `gain`, `amount`,
+  `paid`, `accountNeeded`, `account`. `PUT /api/gain-shares/{id}/account` `{ bankCode, accountNumber }` gives the
+  account (409 `GAIN_SHARE_NOT_OWED` / `GAIN_SHARE_ALREADY_SENDING`). Admin payouts gain a tranche kind `gain`
+  (blocker `BUYER_ACCOUNT_NEEDED`), paid after the developer's.
+- Not yet: "sell my plot".
 
 - **Declared in the same set as instalment plans** (`PUT /api/portal/estates/{id}/payment-plans`). Each plan gains an
   optional **`kind`**: `installment` (when left out — existing calls are unchanged) or `flexible`. A flexible plan:
