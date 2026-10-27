@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Flexible contribution, phase 2 (decided with the user, 2026-10-26): a
+        buyer chooses a flexible plan at Proceed to buy, and its terms are
+        copied onto the purchase like the price — a later redeclaration reaches
+        new buyers only. See AGENTS.md, "Flexible contribution".
+
+        Shared with instalment purchases: plan_id, plan_name, plan_total and
+        plan_premium (the plan and its total), and escrow_deduction_pct /
+        escrow_applies_to (what the developer keeps if the buyer leaves — on a
+        flexible plan, the plan's own exit split, not the estate's refund
+        terms). Flexible only, in their own columns: the minimum to start, the
+        minimum contribution, the developer's gain share, the inactivity
+        period, the notice, and the maximum time to finish with the date it
+        falls on. A flexible purchase has no frequency, no deposit and no
+        instalment rows: there is no schedule.
+    -->
+    <changeSet id="111-flexible-purchases" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE transactions
+                ADD COLUMN flexible_minimum_to_start     numeric(19, 4),
+                ADD COLUMN flexible_minimum_contribution numeric(19, 4),
+                ADD COLUMN flexible_gain_share_pct       numeric(5, 2),
+                ADD COLUMN flexible_inactivity_months    integer,
+                ADD COLUMN flexible_notice_days          integer,
+                ADD COLUMN flexible_max_months           integer,
+                ADD COLUMN flexible_finish_by            date,
+                DROP CONSTRAINT chk_transactions_plan_only_for_instalments,
+                DROP CONSTRAINT chk_transactions_plan_whole,
+                ADD CONSTRAINT chk_transactions_plan_only_for_plans
+                    CHECK (plan_id IS NULL OR plan IN ('INSTALLMENT', 'FLEXIBLE')),
+                ADD CONSTRAINT chk_transactions_plan_whole
+                    CHECK ((plan_id IS NULL) = (plan_name IS NULL)
+                       AND (plan_id IS NULL) = (plan_total IS NULL)
+                       AND (plan_id IS NULL) = (plan_premium IS NULL)
+                       AND (CASE WHEN plan = 'FLEXIBLE'
+                                 THEN plan_frequency IS NULL AND deposit_amount IS NULL
+                                 ELSE (plan_id IS NULL) = (plan_frequency IS NULL)
+                                  AND (plan_id IS NULL) = (deposit_amount IS NULL) END)),
+                ADD CONSTRAINT chk_transactions_flexible_terms
+                    CHECK (CASE WHEN plan = 'FLEXIBLE'
+                                THEN plan_id IS NOT NULL
+                                 AND flexible_minimum_to_start > 0
+                                 AND (flexible_minimum_contribution IS NULL OR flexible_minimum_contribution > 0)
+                                 AND flexible_gain_share_pct BETWEEN 0 AND 100
+                                 AND flexible_inactivity_months >= 6
+                                 AND flexible_notice_days >= 30
+                                 AND (flexible_max_months IS NULL) = (flexible_finish_by IS NULL)
+                                 AND (flexible_max_months IS NULL OR flexible_max_months >= 12)
+                                 AND escrow_deduction_pct IS NOT NULL
+                                ELSE flexible_minimum_to_start IS NULL AND flexible_minimum_contribution IS NULL
+                                 AND flexible_gain_share_pct IS NULL AND flexible_inactivity_months IS NULL
+                                 AND flexible_notice_days IS NULL AND flexible_max_months IS NULL
+                                 AND flexible_finish_by IS NULL END);
+
+            COMMENT ON COLUMN transactions.flexible_minimum_to_start IS
+                'Flexible: the first payment''s minimum, a share of the agreed price, copied when the purchase opened.';
+            COMMENT ON COLUMN transactions.flexible_gain_share_pct IS
+                'Flexible: the share of any gain the developer keeps, on leaving or on a buyer-requested sale, copied when the purchase opened.';
+            COMMENT ON COLUMN transactions.flexible_finish_by IS
+                'Flexible: the offer date plus the maximum time to finish, in Lagos. Null when the plan declared none.';
+        ]]></sql>
+        <rollback><![CDATA[
+            DELETE FROM transactions WHERE plan = 'FLEXIBLE';
+            ALTER TABLE transactions
+                DROP CONSTRAINT chk_transactions_flexible_terms,
+                DROP CONSTRAINT chk_transactions_plan_whole,
+                DROP CONSTRAINT chk_transactions_plan_only_for_plans,
+                ADD CONSTRAINT chk_transactions_plan_only_for_instalments
+                    CHECK (plan_id IS NULL OR plan = 'INSTALLMENT'),
+                ADD CONSTRAINT chk_transactions_plan_whole
+                    CHECK ((plan_id IS NULL) = (plan_name IS NULL)
+                       AND (plan_id IS NULL) = (plan_frequency IS NULL)
+                       AND (plan_id IS NULL) = (plan_total IS NULL)
+                       AND (plan_id IS NULL) = (plan_premium IS NULL)
+                       AND (plan_id IS NULL) = (deposit_amount IS NULL)),
+                DROP COLUMN flexible_finish_by, DROP COLUMN flexible_max_months, DROP COLUMN flexible_notice_days,
+                DROP COLUMN flexible_inactivity_months, DROP COLUMN flexible_gain_share_pct,
+                DROP COLUMN flexible_minimum_contribution, DROP COLUMN flexible_minimum_to_start;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

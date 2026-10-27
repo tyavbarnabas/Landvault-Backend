@@ -23,6 +23,7 @@ import com.techcomfort.landvaultbackend.checkout.internal.repository.Reservation
 import com.techcomfort.landvaultbackend.checkout.internal.repository.TransactionInstalmentRepository;
 import com.techcomfort.landvaultbackend.checkout.internal.repository.TransactionPenaltyStepRepository;
 import com.techcomfort.landvaultbackend.checkout.internal.repository.TransactionRepository;
+import com.techcomfort.landvaultbackend.common.FlexiblePlanCalculator;
 import com.techcomfort.landvaultbackend.common.InstalmentPlanCalculator;
 import com.techcomfort.landvaultbackend.common.LatePaymentTerms;
 import com.techcomfort.landvaultbackend.common.PageResponse;
@@ -32,6 +33,7 @@ import com.techcomfort.landvaultbackend.common.PostalAddress;
 import com.techcomfort.landvaultbackend.common.RevocationTerms;
 import com.techcomfort.landvaultbackend.identity.IdentityApi;
 import com.techcomfort.landvaultbackend.marketplace.MarketplaceApi;
+import com.techcomfort.landvaultbackend.marketplace.OfferedFlexiblePlan;
 import com.techcomfort.landvaultbackend.marketplace.OfferedPlan;
 import com.techcomfort.landvaultbackend.marketplace.OfferedRefundTerms;
 import lombok.RequiredArgsConstructor;
@@ -126,6 +128,11 @@ public class TransactionService {
         // worked out now from the agreed price, with due dates counted from the
         // offer date (today, in Lagos) — fixed here and never recomputed.
         Optional<ChosenPlan> chosen = choosePlan(plan, request, reservation);
+        // Flexible contribution, phase 2: no schedule, the plan's terms copied
+        // as offered now — a later redeclaration reaches new buyers only.
+        Optional<ChosenFlexible> flexible = plan == PaymentPlan.FLEXIBLE
+                ? Optional.of(chooseFlexible(request, reservation)) : Optional.empty();
+        Optional<FlexiblePlanCalculator.Terms> flexTerms = flexible.map(f -> f.offered().terms());
 
         Transaction transaction = transactionRepository.save(Transaction.builder()
                 .reference(generateReference())
@@ -144,18 +151,33 @@ public class TransactionService {
                 .intent(intent)
                 .plan(plan)
                 .installmentMonths(chosen.map(c -> c.quote().instalmentCount()).orElse(null))
-                .planId(chosen.map(c -> c.offered().planId()).orElse(null))
-                .planName(chosen.map(c -> c.offered().name()).orElse(null))
+                .planId(chosen.map(c -> c.offered().planId())
+                        .or(() -> flexible.map(f -> f.offered().planId())).orElse(null))
+                .planName(chosen.map(c -> c.offered().name()).or(() -> flexible.map(f -> f.offered().name()))
+                        .orElse(null))
                 .planFrequency(chosen.map(c -> c.quote().frequency()).orElse(null))
-                .planTotal(chosen.map(c -> c.quote().planTotal()).orElse(null))
-                .planPremium(chosen.map(c -> c.quote().premium()).orElse(null))
+                .planTotal(chosen.map(c -> c.quote().planTotal()).or(() -> flexible.map(f -> f.quote().planTotal()))
+                        .orElse(null))
+                .planPremium(chosen.map(c -> c.quote().premium()).or(() -> flexible.map(f -> f.quote().premium()))
+                        .orElse(null))
                 .depositAmount(chosen.map(c -> c.quote().deposit()).orElse(null))
                 // 3c: the withdrawal deduction the buyer is offered now decides
                 // the developer's share of each payment; fixed like the price.
+                // A flexible plan declares its own exit split, used the same way.
                 .escrowDeductionPct(chosen.flatMap(ChosenPlan::refundTerms).map(OfferedRefundTerms::deductionPct)
-                        .orElse(null))
+                        .or(() -> flexTerms.map(FlexiblePlanCalculator.Terms::exitDeductionPct)).orElse(null))
                 .escrowAppliesTo(chosen.flatMap(ChosenPlan::refundTerms).map(OfferedRefundTerms::appliesTo)
+                        .or(() -> flexTerms.map(FlexiblePlanCalculator.Terms::exitAppliesTo)).orElse(null))
+                .flexibleMinimumToStart(flexible.map(f -> f.quote().minimumToStart()).orElse(null))
+                .flexibleMinimumContribution(flexTerms.map(FlexiblePlanCalculator.Terms::minimumContribution)
                         .orElse(null))
+                .flexibleGainSharePct(flexTerms.map(FlexiblePlanCalculator.Terms::developerGainSharePct).orElse(null))
+                .flexibleInactivityMonths(flexTerms.map(FlexiblePlanCalculator.Terms::inactivityMonths).orElse(null))
+                .flexibleNoticeDays(flexTerms.map(FlexiblePlanCalculator.Terms::noticeDays).orElse(null))
+                .flexibleMaxMonths(flexTerms.map(FlexiblePlanCalculator.Terms::maxMonths).orElse(null))
+                // Counted from the offer date, like an instalment plan's due dates.
+                .flexibleFinishBy(flexTerms.map(FlexiblePlanCalculator.Terms::maxMonths)
+                        .map(months -> LocalDate.now(LAGOS).plusMonths(months)).orElse(null))
                 // Phase 4: whether penalties are refunded, fixed like the price.
                 .penaltiesRefundable(chosen.map(c -> c.lateTerms().penaltiesRefundable()).orElse(null))
                 // Phase 5b: when the plan may be revoked, and the notice, fixed like the price.
@@ -183,7 +205,8 @@ public class TransactionService {
         OfferSummary offer = offerLetters.issue(new NewPurchase(transaction.getId(), buyerUserId,
                         transaction.getPlotId(), transaction.getEstateId(), transaction.getSellerTenantId(),
                         transaction.getBasePrice(), transaction.getCornerPremiumPct(), transaction.getTotalPrice(),
-                        transaction.getCurrency(), reservation.getCreatedAt(), address, schedule.orElse(null)))
+                        transaction.getCurrency(), reservation.getCreatedAt(), address, schedule.orElse(null),
+                        transaction.flexiblePlan().orElse(null)))
                 .orElseThrow(CheckoutException.LetterNotApproved::new);
 
         log.info("Transaction {} opened by buyer {} against reservation {}",
@@ -242,10 +265,15 @@ public class TransactionService {
                               Optional<OfferedRefundTerms> refundTerms, LatePaymentTerms lateTerms) {
     }
 
+    /** The flexible plan chosen at Proceed to buy, as published, and its figures at the agreed price. */
+    private record ChosenFlexible(OfferedFlexiblePlan offered, FlexiblePlanCalculator.Quote quote) {
+    }
+
     /**
      * IC-1. Outright and milestone carry no plan; an instalment purchase must
      * name one the estate offers now, at this plot's agreed price. The month
-     * count comes from the plan, never the buyer.
+     * count comes from the plan, never the buyer. A flexible purchase is
+     * {@link #chooseFlexible}'s; here it only passes the shared checks.
      */
     private Optional<ChosenPlan> choosePlan(PaymentPlan plan, CreateTransactionRequest request,
                                             Reservation reservation) {
@@ -253,9 +281,13 @@ public class TransactionService {
             throw new CheckoutException.InvalidPaymentPlan(
                     "installmentMonths comes from the plan you choose; leave it out and send planId.");
         }
+        if (plan == PaymentPlan.FLEXIBLE) {
+            return Optional.empty();
+        }
         if (plan != PaymentPlan.INSTALLMENT) {
             if (request.planId() != null) {
-                throw new CheckoutException.InvalidPaymentPlan("planId applies only to an installment plan.");
+                throw new CheckoutException.InvalidPaymentPlan(
+                        "planId applies only to an installment or flexible plan.");
             }
             return Optional.empty();
         }
@@ -265,13 +297,29 @@ public class TransactionService {
         }
         OfferedPlan offered = marketplaceApi.offeredPlan(reservation.getEstateId(), request.planId())
                 .orElseThrow(() -> new CheckoutException.PlanNotOffered(
-                        "This estate doesn't offer that plan now. Choose one of its current plans."));
+                        marketplaceApi.offeredFlexiblePlan(reservation.getEstateId(), request.planId()).isPresent()
+                                ? "That is a flexible plan: send plan \"flexible\" to choose it."
+                                : "This estate doesn't offer that plan now. Choose one of its current plans."));
         InstalmentPlanCalculator.Quote quote = InstalmentPlanCalculator.quote(reservation.getTotalPrice(),
                         offered.terms())
                 .orElseThrow(() -> new CheckoutException.PlanNotOffered(
                         "That plan isn't available at this plot's price."));
         return Optional.of(new ChosenPlan(offered, quote, marketplaceApi.refundTermsOf(reservation.getEstateId()),
                 marketplaceApi.latePaymentTermsOf(reservation.getEstateId()).orElse(LatePaymentTerms.NONE)));
+    }
+
+    /** Flexible contribution, phase 2: one of the estate's current flexible plans, at the agreed price. */
+    private ChosenFlexible chooseFlexible(CreateTransactionRequest request, Reservation reservation) {
+        if (request.planId() == null) {
+            throw new CheckoutException.InvalidPaymentPlan("Choose one of the estate's flexible plans (planId).");
+        }
+        OfferedFlexiblePlan offered = marketplaceApi.offeredFlexiblePlan(reservation.getEstateId(), request.planId())
+                .orElseThrow(() -> new CheckoutException.PlanNotOffered(
+                        marketplaceApi.offeredPlan(reservation.getEstateId(), request.planId()).isPresent()
+                                ? "That is an instalment plan: send plan \"installment\" to choose it."
+                                : "This estate doesn't offer that plan now. Choose one of its current plans."));
+        // The agreed price, corner premium included — the same figure an instalment plan is worked out from.
+        return new ChosenFlexible(offered, FlexiblePlanCalculator.quote(reservation.getTotalPrice(), offered.terms()));
     }
 
     /** The schedule, with due dates counted from today in Lagos — the offer's date. */
@@ -302,7 +350,9 @@ public class TransactionService {
 
     /** Plan and schedule for each instalment purchase in {@code transactions}, in one query. */
     Map<UUID, PlanSchedule> schedulesOf(List<Transaction> transactions) {
-        List<UUID> ids = transactions.stream().filter(t -> t.getPlanId() != null).map(Transaction::getId).toList();
+        // Instalment purchases only: a flexible plan has a plan id but no schedule.
+        List<UUID> ids = transactions.stream().filter(t -> t.getPlan() == PaymentPlan.INSTALLMENT
+                && t.getPlanId() != null).map(Transaction::getId).toList();
         Map<UUID, List<TransactionInstalment>> instalments = instalmentsFor(ids);
         Map<UUID, List<LatePaymentTerms.Step>> steps = stepsFor(ids);
         Map<UUID, PlanSchedule> out = new HashMap<>();
@@ -328,7 +378,7 @@ public class TransactionService {
 
     private static Optional<PlanSchedule> schedule(Transaction t, List<TransactionInstalment> instalments,
                                                    List<LatePaymentTerms.Step> steps) {
-        if (t.getPlanId() == null) {
+        if (t.getPlan() != PaymentPlan.INSTALLMENT || t.getPlanId() == null) {
             return Optional.empty();
         }
         return Optional.of(new PlanSchedule(t.getPlanId(), t.getPlanName(), t.getPlanFrequency().getValue(),
@@ -369,6 +419,7 @@ public class TransactionService {
                 transaction.buyerAddress().orElse(null),
                 offer,
                 schedule.orElse(null),
+                transaction.flexiblePlan().orElse(null),
                 standing,
                 transaction.getWithdrawnAt(),
                 transaction.getRevokedAt());

@@ -1,10 +1,12 @@
 package com.techcomfort.landvaultbackend.documents.internal.render;
 
+import com.techcomfort.landvaultbackend.checkout.FlexiblePurchase;
 import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
 import com.techcomfort.landvaultbackend.common.Currency;
 import com.techcomfort.landvaultbackend.common.DueTrigger;
 import com.techcomfort.landvaultbackend.common.FeeType;
 import com.techcomfort.landvaultbackend.common.LatePaymentTerms;
+import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
 import com.techcomfort.landvaultbackend.common.RevocationTerms;
 import com.techcomfort.landvaultbackend.inventory.EstateDocumentFacts;
 import org.junit.jupiter.api.Test;
@@ -113,5 +115,31 @@ class OfferClausesTest {
                 new BigDecimal("15000000"), Currency.NGN, facts).getLast())
                 .isEqualTo("That an instalment unpaid 7 days after its due date is in arrears; no late-payment penalty "
                         + "is declared for this estate.");
+    }
+
+    /**
+     * Flexible contribution, phase 2: a fixed exit sum on the price, no
+     * maximum time and a developer who keeps every gain — each said plainly,
+     * never an example promising the buyer something.
+     */
+    @Test
+    void aFlexibleOfferStatesAFixedExitSumAndThatTheDeveloperKeepsAnyGain() {
+        FlexiblePurchase plan = new FlexiblePurchase(UUID.randomUUID(), "Flexible", new BigDecimal("4000000"),
+                BigDecimal.ZERO, new BigDecimal("400000"), null, new BigDecimal("5"), RefundAppliesTo.TOTAL_PRICE,
+                new BigDecimal("100"), 6, 30, null, null);
+        EstateDocumentFacts facts = new EstateDocumentFacts(UUID.randomUUID(), UUID.randomUUID(), null, "Lugbe",
+                null, null, null, null, null, null);
+
+        List<String> clauses = OfferClauses.flexible(plan, new BigDecimal("4000000"), null, new BigDecimal("4000000"),
+                Currency.NGN, "Estintin Group", facts);
+
+        assertThat(String.join("|", clauses))
+                .contains("₦4,000,000.00 in all, paid in any amounts",
+                        "less what Estintin Group keeps: 5% of ₦4,000,000.00, taken from your first payments. For "
+                                + "example, after paying ₦400,000.00 you get back ₦200,000.00, and after paying "
+                                + "₦2,000,000.00 you get back ₦1,800,000.00.",
+                        "Estintin Group keeps all of the difference; your refund is the same whatever it sells for.",
+                        "Estintin Group keeps 100% of anything above ₦4,000,000.00")
+                .doesNotContain("finished by", "Each later payment", "This is an example", "total commitment");
     }
 }

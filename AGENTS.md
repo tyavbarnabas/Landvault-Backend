@@ -6682,10 +6682,43 @@ user, beside "leave now":
   still a share of the plan total — the two differ on purpose. No migration: the database check (`deposit_pct >= 10`)
   doesn't depend on the base.
 - Every reader of plan rows must check the kind: `PaymentPlanView.terms()` is instalment-only, the exit costs'
-  penalty basis is the first **instalment** plan, and `MarketplaceApi.offeredPlan` returns instalment plans only until
-  phase 2 — so checkout can't open a flexible purchase on instalment logic (`PLAN_NOT_OFFERED`).
+  penalty basis is the first **instalment** plan, and `MarketplaceApi.offeredPlan` returns instalment plans only — so
+  checkout can't open a flexible purchase on instalment logic (`PLAN_NOT_OFFERED`).
 
 Proven red: the checkout guard (a flexible plan was offered) and the penalty basis (priced on the flexible plan).
+
+### Phase 2: choosing the plan, and the offer letter (changeset 111)
+
+Decided with the user (2026-10-26): the terms in their own columns, no instalment rows, two exit examples in naira on
+the offer, and the first payment at least the minimum to start and at most the plan total (enforced in phase 3).
+
+- **`plan: "flexible"` with `planId`** at Proceed to buy (`PaymentPlan.FLEXIBLE`, backend-added — the frontend's
+  union needs it). The plan must be a flexible plan the estate offers now (`MarketplaceApi.offeredFlexiblePlan`,
+  the public projection); an instalment plan's id with `flexible`, or a flexible one with `installment`, is 409
+  `PLAN_NOT_OFFERED` saying which plan it is. `installmentMonths` is refused as before.
+- **Copied onto the purchase like the price**, from the agreed price (corner premium included):
+  `plan_id/plan_name/plan_total/plan_premium` (shared with instalment purchases), the exit split in
+  `escrow_deduction_pct/escrow_applies_to` (the plan's own, not the estate's refund terms — it's what escrow will
+  use), and in `transactions.flexible_*` the minimum to start, the minimum contribution, the gain share, the
+  inactivity period, the notice, the maximum time and **the date to finish by** (offer date + maximum, Lagos).
+  `chk_transactions_flexible_terms` keeps them whole and null on every other purchase. Redeclaring the estate's plans
+  reaches new buyers only (tested). `TransactionDto.flexible` (`FlexiblePurchase`, from `Transaction.flexiblePlan()`).
+- **No schedule**: no frequency, no deposit, no `transaction_instalments` rows. **Every schedule reader filters on
+  `plan = INSTALLMENT`**, not on `plan_id` — a flexible purchase has a plan id and no schedule (proven red: the
+  schedule reader picking it up broke the purchase read).
+- **The offer letter's flexible section** (`OfferClauses.flexible`, HomeTrue's fixed wording, in place of the price
+  clauses): the full price; the plan (total, premium, "paid in any amounts, at any time", the minimum to start, any
+  minimum contribution, the date to finish by); the total commitment with one-off fees; **leaving** — refunded at
+  once from escrow less the developer's share, with two naira examples (`FlexiblePlanCalculator.exits`: after the
+  minimum to start, and after half the total); **the gain share** with the 20% worked example (or, at 100%, that the
+  developer keeps any gain); **"sell my plot"** — a price the buyer chooses, not below the agreed price, nothing due
+  while listed, and the split; **a quiet plan** — the inactivity notice, and past the finish date only finishing
+  stops it; and that these terms **replace the estate's general withdrawal and revocation terms** printed below
+  (those are written for instalment plans). Proven red by issuing the outright clauses instead.
+- **Not payable yet**: `PayableTransaction.amountDue` is null and payments refuses it (`PAYMENT_PLAN_NOT_SUPPORTED`)
+  until phase 3. Meanwhile an opened flexible purchase is abandoned by the payment sweep like any unpaid one.
+- **For phase 3**: the allocation letter copies the offer's conditions, which include the estate's withdrawal and
+  revocation clauses — a flexible buyer's letter must carry the replacement clause too, or leave those out.
 
 ## A buyer's address (changeset 097)
 

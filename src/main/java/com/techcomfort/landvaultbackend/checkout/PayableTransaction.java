@@ -25,7 +25,8 @@ public record PayableTransaction(
         /**
          * What the next payment must be: the full price outright, the deposit
          * on an instalment plan. Null for an instalment purchase opened before
-         * plans were declared (it has no deposit to charge).
+         * plans were declared (it has no deposit to charge), and for a flexible
+         * purchase until paying one is built (phase 3).
          */
         BigDecimal amountDue
 ) {

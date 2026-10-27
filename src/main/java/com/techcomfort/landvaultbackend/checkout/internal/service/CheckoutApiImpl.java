@@ -479,6 +479,8 @@ public class CheckoutApiImpl implements CheckoutApi {
         return new PayableTransaction(t.getId(), t.getReference(), t.getBuyerUserId(), t.getReservationId(),
                 t.getPlotId(), t.getEstateId(), t.getSellerTenantId(), t.getTotalPrice(), t.getCurrency(),
                 t.getPlan() == null ? null : t.getPlan().getValue(), t.getStatus().getValue(),
-                t.getPlan() == PaymentPlan.INSTALLMENT ? t.getDepositAmount() : t.getTotalPrice());
+                // Flexible: nothing payable until phase 3 builds it — payments refuses the plan.
+                t.getPlan() == PaymentPlan.INSTALLMENT ? t.getDepositAmount()
+                        : t.getPlan() == PaymentPlan.FLEXIBLE ? null : t.getTotalPrice());
     }
 }

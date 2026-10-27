@@ -403,11 +403,11 @@ gets it without a new call.
   `penaltyWaived` saying how much was waived; the portfolio's `arrears.penaltyAmount` and the next payment are net
   too. If the instalment reaches a higher step later, only the difference is owed. The buyer is emailed.
 
-### Flexible contribution plans — **phase 1 built** (changeset 110)
+### Flexible contribution plans — **phases 1–2 built** (changesets 110, 111)
 
 A third way to buy: a minimum to start, then any amount at any time until finished — no schedule, no due dates, no
-penalties. Phase 1 is declaring and publishing; **a flexible plan can't be bought yet** (choosing one at Proceed to
-buy is 409 `PLAN_NOT_OFFERED` until phase 2). Stories: `~/Documents/hometrue-flexible-contribution-user-stories.md`.
+penalties. Phase 1 is declaring and publishing; phase 2 is choosing one at Proceed to buy (see Checkout) and the
+offer letter. **A flexible purchase can't be paid yet** (`PAYMENT_PLAN_NOT_SUPPORTED` until phase 3).
 
 - **Declared in the same set as instalment plans** (`PUT /api/portal/estates/{id}/payment-plans`). Each plan gains an
   optional **`kind`**: `installment` (when left out — existing calls are unchanged) or `flexible`. A flexible plan:
@@ -551,6 +551,15 @@ planTotal, premium, deposit, instalments: [{ sequence, dueDate, amount }] }`, wo
 **fixed** — due dates count from today (Lagos), and the developer redeclaring plans later changes nothing. The offer
 letter states the whole plan, every due date, the total commitment on the plan (one-off fees included) and the
 late-payment rule. Paying it charges the deposit first (see "Instalment plans" above).
+
+**Flexible purchases name a declared flexible plan**: `{ reservationId, intent, plan: "flexible", planId }` — a new
+`plan` value. The plan's `kind` on the listing must be `flexible`; naming an instalment plan's id (or a flexible one
+with `installment`) is 409 `PLAN_NOT_OFFERED`, and the message says which kind it is. The response's **`flexible`**
+is `{ planId, planName, planTotal, premium, minimumToStart, minimumContribution, exitDeductionPct, exitAppliesTo,
+developerGainSharePct, inactivityMonths, noticeDays, maxMonths, finishBy }`, copied from the agreed price and
+**fixed**; `schedule` is null (no due dates). The offer letter states the plan, both ways out in naira (leaving now,
+and asking HomeTrue to sell the plot), and when a quiet plan may be ended. Paying it is refused
+(`PAYMENT_PLAN_NOT_SUPPORTED`) until phase 3.
 
 **Opening a purchase issues the offer letter** (see Documents): the response's **`offer`** is `{ id, number, issuedAt, acceptedAt }`. Show it and let the buyer accept it (`POST /api/documents/offer-letters/{offer.id}/accept`) before the Pay button; paying is refused with 409 `OFFER_NOT_ACCEPTED` until then. If the estate's letter isn't approved and current, nothing is opened: 409 `LETTER_NOT_APPROVED` (the hold stays). `offer` is null on purchases opened before offer letters.
 

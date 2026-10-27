@@ -2,6 +2,7 @@ package com.techcomfort.landvaultbackend.checkout.dto;
 
 import com.techcomfort.landvaultbackend.checkout.PaymentSummary;
 import com.techcomfort.landvaultbackend.checkout.OfferSummary;
+import com.techcomfort.landvaultbackend.checkout.FlexiblePurchase;
 import com.techcomfort.landvaultbackend.checkout.PlanSchedule;
 import com.techcomfort.landvaultbackend.checkout.PlanStanding;
 import com.techcomfort.landvaultbackend.common.PostalAddress;
@@ -60,7 +61,7 @@ public record TransactionDto(
         @Schema(description = "`development` or `investment`.", example = "development")
         String intent,
 
-        @Schema(description = "`outright`, `installment` or `milestone`.", example = "outright")
+        @Schema(description = "`outright`, `installment`, `flexible` or `milestone`.", example = "outright")
         String plan,
 
         @Schema(nullable = true) Integer installmentMonths,
@@ -88,6 +89,11 @@ public record TransactionDto(
                 + "deposit, instalments: [{ sequence, dueDate, amount }] }`. Due dates count from the offer date. "
                 + "Null for outright and milestone purchases.", nullable = true)
         PlanSchedule schedule,
+
+        @Schema(description = "A flexible purchase's plan, copied when it was opened and never changed: the total, "
+                + "the minimum to start, the exit split, the developer's gain share, the inactivity period, the "
+                + "notice and the date to finish by. No schedule. Null for every other plan.", nullable = true)
+        FlexiblePurchase flexible,
 
         @Schema(description = "Once the deposit is verified (`on_plan`, or `verified` when paid off): where the "
                 + "plan stands today — each instalment's status and any penalty, and `arrears` while one is late. "

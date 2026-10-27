@@ -39,8 +39,9 @@ public record CreateTransactionRequest(
                 example = "development", requiredMode = Schema.RequiredMode.REQUIRED)
         @NotBlank String intent,
 
-        @Schema(description = "`outright`, `installment` or `milestone`. For `installment`, name the "
-                + "estate's declared plan in `planId`; the schedule is worked out from it.",
+        @Schema(description = "`outright`, `installment`, `flexible` or `milestone`. For `installment` or "
+                + "`flexible`, name one of the estate's declared plans of that kind in `planId`; its terms are "
+                + "copied onto the purchase.",
                 example = "outright", requiredMode = Schema.RequiredMode.REQUIRED)
         @NotBlank String plan,
 
@@ -48,8 +49,9 @@ public record CreateTransactionRequest(
                 nullable = true, deprecated = true)
         Integer installmentMonths,
 
-        @Schema(description = "Required for `installment`: one of the plans the estate currently offers "
-                + "(`priceTiers[].paymentPlans[].planId` on the listing). Rejected for any other plan.",
+        @Schema(description = "Required for `installment` and `flexible`: one of the plans of that kind the "
+                + "estate currently offers (`priceTiers[].paymentPlans[].planId` on the listing, whose `kind` "
+                + "must match). Rejected for any other plan.",
                 nullable = true)
         UUID planId
 ) {
