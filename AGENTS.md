@@ -6829,8 +6829,29 @@ Executive Directors. Built first because "sell my plot" needs the same thing: pa
   created then; replaceable until a transfer of it starts. Emails: owed (the figures, and that the developer's payout
   couldn't cover more when capped), and paid (on Paystack's confirmed `success`, `PayoutOutcomeService`).
 - **The developer** is told the deduction, never the buyer's name.
-- Not tested end to end: the deduction email (the IT company has no active Executive Director) and the paid email
-  (it fires on the webhook/sweep outcome, which these tests don't drive).
+- Not tested end to end by the ITs: the deduction email (the IT company has no active Executive Director) and the
+  paid email (it fires on the webhook/sweep outcome, which these tests don't drive).
+- **The buyer's side reads payouts through `landvault_buyer_gain_payouts(buyer)`** (changeset 115, the tenth
+  `SECURITY DEFINER` escape): `payouts` is policied to platform staff and the selling company, so a repository read
+  in the buyer's session returned nothing — `paid` was always 0 and the "replaceable until a transfer starts" guard
+  never fired. Found in the walkthrough; the ITs read claims back only before a payout. It returns claim,
+  status and amount only. Preparing a payout now locks the sale's owed claims, so a transfer starting and the buyer
+  changing the account take turns. Proven red as `SECURITY INVOKER`.
+
+### Fixes from the flexible-plan walkthrough (2026-10-27)
+
+- **Plan names in sentences** go through `common.PlanNames.phrase`: "the 12-month plan", but
+  `the "Pay as you can" plan` — letters and emails used to read "you have chosen the Pay as you can".
+- **Emails print amounts as ₦6,500,000.00**: every amount reaches `EmailSettlementAlertSender` as a plain string
+  and goes through its `naira(...)`; never `NGN` and a raw number.
+- **The offer's "sell my plot" clause is gone** until resale exists (the letter promised an unbuilt feature), and
+  the quiet-plan clause says "if you make no payment for", matching the rule (Paystack-confirmed, not verified).
+- Flexible wording elsewhere: the awaiting-verification refusal says "pay again" (no "next one"); a plan's last
+  payment emails "paid in full" with the plan total; withdrawal emails name the plan (never "instalment plan"),
+  tell the buyer their gain share, and point the developer at Finance > Flexible plans; an inactivity notice states
+  the least a payment may be.
+- A purchase's `payment` is its **newest** successful payment (it took any one, which on a plan is arbitrary); the
+  payout ready list's `verifiedAt` is the first finance verification on the sale, not the purchase's last change.
 
 ## A buyer's address (changeset 097)
 
@@ -7130,3 +7151,17 @@ Director only) **and** a company-wide view (`ROLES_REQUIRE_COMPANY_WIDE_SCOPE`);
   (`CreateRoleRequest.MAX_PERMISSIONS`, 100) is a bound, not a limit:
   `CompanyRolesUnderRlsIT` fails if the catalogue outgrows it. Audit: `role.created`, `role.updated` (field by field),
   `role.deleted`; a no-op edit writes nothing.
+
+## Building and testing in small phases, walked in Swagger
+
+Decided with the user (2026-10-28): **every implementation is split into small phases, and each phase is walked
+by hand in Swagger against the running dev app before the next one starts** — real HTTP, the real database,
+MailDev, Paystack's test mode, and a person reading the letters and emails as a buyer would. A scripted
+walkthrough (a Python harness with a fake Paystack, 2026-10-27) was built and then removed at the user's request:
+it stood in for Paystack, skipped KYC and role flows with SQL, and only checked what it had been told to look for.
+
+- A phase is small enough to walk in one sitting; the walkthrough finds what tests can't (wording, figures as a
+  person reads them, Paystack's real behaviour) and is fixed in that phase, not saved for later.
+- The integration tests remain the proof of the rules under RLS (restricted role, stand-in Paystack); the
+  Swagger walkthrough is the proof the feature works as a person uses it. Neither replaces the other.
+- When the walkthrough finds a bug the tests missed, the fix ships with a test that fails without it.

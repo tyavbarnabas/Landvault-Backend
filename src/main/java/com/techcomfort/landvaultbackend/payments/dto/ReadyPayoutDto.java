@@ -21,7 +21,9 @@ import java.util.UUID;
  * {@code nextPartAmount}. {@code blockers} is empty when it can be paid now
  * (otherwise NO_APPROVED_PAYOUT_ACCOUNT, COMPANY_NOT_ACTIVE,
  * CURRENCY_NOT_SUPPORTED). {@code lastAttempt} is the sale's most recent
- * attempt, e.g. a failed one.
+ * attempt, e.g. a failed one. {@code verifiedAt} is when the developer's
+ * finance first verified a payment on the sale: the sale itself, or a plan's
+ * first payment.
  */
 public record ReadyPayoutDto(UUID transactionId, String transactionReference, UUID tenantId, String companyName,
                              String estateName, String plotLabel, BigDecimal amount, String currency,

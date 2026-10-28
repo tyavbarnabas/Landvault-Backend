@@ -48,6 +48,8 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class WithdrawalService {
 
+    private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
+
     private final CheckoutApi checkoutApi;
     private final PaymentRepository payments;
     private final RefundRepository refunds;
@@ -237,9 +239,13 @@ public class WithdrawalService {
     private static SettlementAlertSender.WithdrawalAlert alert(String to, boolean developer, PayableTransaction purchase,
                                                                String planName, Quote quote, String awaiting,
                                                                String reason, String url) {
+        FlexiblePurchase flexible = purchase.flexible();
+        BigDecimal buyerGainShare = flexible == null ? null : HUNDRED.subtract(flexible.developerGainSharePct());
         return new SettlementAlertSender.WithdrawalAlert(to, developer, purchase.reference(), planName,
                 quote.paid().toPlainString(), quote.refund().toPlainString(), quote.developerKeeps().toPlainString(),
-                awaiting, reason, url);
+                awaiting, reason, url, flexible != null, purchase.totalPrice().toPlainString(),
+                buyerGainShare == null || buyerGainShare.signum() == 0 ? null
+                        : buyerGainShare.stripTrailingZeros().toPlainString());
     }
 
     // --- helpers ---

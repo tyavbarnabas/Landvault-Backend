@@ -162,7 +162,7 @@ public class PaymentService {
         // Through PlanStandings, so the penalty charged is net of any waiver — the same figure the buyer sees.
         PlanProgress progress = planStandings.progressOf(Map.of(transaction.id(), schedule)).get(transaction.id());
         if (progress.awaitingFinance().isPresent()) {
-            throw new PaymentException.InstalmentAwaitingVerification();
+            throw new PaymentException.InstalmentAwaitingVerification(false);
         }
         if (progress.complete()) {
             throw new PaymentException.TransactionNotPayable("paid in full");
@@ -205,7 +205,7 @@ public class PaymentService {
         FlexibleProgress progress = FlexibleProgress.of(transaction.flexible(),
                 payments.findAllByTransactionIdOrderByCreatedAtAsc(transaction.id()));
         if (progress.awaitingFinance().isPresent()) {
-            throw new PaymentException.InstalmentAwaitingVerification();
+            throw new PaymentException.InstalmentAwaitingVerification(true);
         }
         if (progress.complete()) {
             throw new PaymentException.TransactionNotPayable("paid in full");

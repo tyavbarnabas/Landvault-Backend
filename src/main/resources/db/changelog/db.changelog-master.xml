@@ -120,6 +120,7 @@
     <include file="changes/112-flexible-contributions.xml" relativeToChangelogFile="true"/>
     <include file="changes/113-flexible-notices.xml" relativeToChangelogFile="true"/>
     <include file="changes/114-gain-share-claims.xml" relativeToChangelogFile="true"/>
+    <include file="changes/115-buyer-gain-payouts.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

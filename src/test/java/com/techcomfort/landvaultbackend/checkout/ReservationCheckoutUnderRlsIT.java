@@ -3176,7 +3176,7 @@ class ReservationCheckoutUnderRlsIT {
         String offer = "FROM offer_letters WHERE id = '" + purchase.offer().id() + "'";
         assertThat(queryString("SELECT array_to_string(price_clauses, '|') " + offer))
                 .contains("That the price of the plot, paid in full, is ₦20,000,000.00",
-                        "That you have chosen the Pay as you can: ₦22,000,000.00 in all (₦2,000,000.00 more than "
+                        "That you have chosen the \"Pay as you can\" plan: ₦22,000,000.00 in all (₦2,000,000.00 more than "
                                 + "paying in full), paid in any amounts, at any time, with no schedule",
                         "Your first payment must be at least ₦2,000,000.00",
                         "Each later payment must be at least ₦100,000.00",
@@ -3186,10 +3186,10 @@ class ReservationCheckoutUnderRlsIT {
                                 + "get back ₦8,800,000.00",
                         "you receive 40% of the difference",
                         "if it sold for ₦24,000,000.00, you would receive ₦1,600,000.00. This is an example",
-                        "ask HomeTrue to sell the plot at a price you choose, not below ₦20,000,000.00",
-                        "if no payment of yours is verified for 6 months",
+                        "if you make no payment for 6 months",
                         "take the place of the estate's general withdrawal and revocation terms")
-                .doesNotContain("instalments fall due");
+                .as("no schedule; no \"sell my plot\" until resale exists; the quiet clock counts payments made")
+                .doesNotContain("instalments fall due", "ask HomeTrue to sell", "is verified for");
 
     }
 
@@ -3242,7 +3242,7 @@ class ReservationCheckoutUnderRlsIT {
         assertThat(queryString("SELECT kind " + letters)).isEqualTo("PROVISIONAL");
         assertThat(queryString("SELECT array_to_string(clauses, '|') " + letters))
                 .as("the flexible terms, then the conditions, then the provisional line")
-                .contains("That you have chosen the Pay as you can", "ask HomeTrue to sell the plot",
+                .contains("That you have chosen the \"Pay as you can\" plan", "you receive 40% of the difference",
                         "take the place of the estate's general withdrawal and revocation terms")
                 .endsWith("If you leave the plan, or it is ended, the allocation ends on the terms of that offer.");
 
@@ -3320,7 +3320,7 @@ class ReservationCheckoutUnderRlsIT {
         assertThat(queryString("SELECT string_agg(kind, ',' ORDER BY issued_at) " + letters))
                 .isEqualTo("PROVISIONAL,ALLOCATION");
         assertThat(queryString("SELECT array_to_string(clauses, '|') " + letters + " AND kind = 'ALLOCATION'"))
-                .as("nothing left to leave or sell").doesNotContain("ask HomeTrue to sell the plot", "That this allocation is provisional");
+                .as("nothing left to leave").doesNotContain("leave the plan at any time", "That this allocation is provisional");
         assertThat(payAmount(buyer, purchase.id(), "1").getBody()).contains("TRANSACTION_NOT_PAYABLE");
         JsonNode owed = objectMapper.readTree(readyFor(admin, purchase));
         assertThat(owed.path("tranche").asString()).as("from escrow, never one full-price sale").isEqualTo("share");
@@ -3510,6 +3510,17 @@ class ReservationCheckoutUnderRlsIT {
                 + "' AND tranche LIKE 'GAIN:%' AND settlement_account_id IS NULL AND gain_claim_id IS NOT NULL"))
                 .as("to the buyer, not the company").isEqualTo("1");
         assertThat(get("/api/admin/payouts/ready", admin, String.class).getBody()).doesNotContain(resale.id().toString());
+
+        // Changeset 115, found in the flexible-plan walkthrough: the buyer's session can't read payouts, so both of
+        // these read them through landvault_buyer_gain_payouts. Without it, paid stayed 0 and the account could
+        // be replaced after the transfer had gone.
+        JsonNode paid = objectMapper.readTree(get("/api/gain-shares", buyer.token(), String.class).getBody()).get(0);
+        assertThat(paid.path("paid").decimalValue()).as("what reached the buyer").isEqualByComparingTo("2000000");
+        ResponseEntity<String> replaced = restTemplate.exchange("/api/gain-shares/" + mine.path("id").asString()
+                + "/account", HttpMethod.PUT, entity(buyer.token(),
+                "{\"bankCode\":\"058\",\"accountNumber\":\"0123456789\"}"), String.class);
+        assertThat(replaced.getStatusCode()).as(replaced.getBody()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(replaced.getBody()).contains("GAIN_SHARE_ALREADY_SENDING");
     }
 
     /** Phase 5: a next sale for no more than the agreed price owes nothing, and the developer is paid in full. */

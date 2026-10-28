@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Found in the flexible-plan walkthrough (2026-10-27): a buyer's own view of
+        their gain-share claims read `payouts` in the buyer's session, and
+        payouts is policied to platform staff and the selling company (076), so
+        it returned no rows. `paid` was always 0, and the rule "the account may
+        be replaced until a transfer of it has started" never fired.
+
+        landvault_buyer_gain_payouts: the tenth SECURITY DEFINER escape,
+        hardened like 054 and 106. It returns only the claim, status and amount
+        of payouts made on that buyer's own gain claims — never the account,
+        the recipient, the company or anything about the developer's tranches.
+    -->
+    <changeSet id="115-buyer-gain-payouts" author="landvault">
+        <sql splitStatements="false"><![CDATA[
+            CREATE FUNCTION landvault_buyer_gain_payouts(p_buyer_user_id uuid)
+            RETURNS TABLE (gain_claim_id uuid, status varchar, amount numeric)
+            LANGUAGE sql
+            STABLE
+            SECURITY DEFINER
+            SET search_path = public, pg_temp
+            AS $$
+                SELECT p.gain_claim_id, p.status, p.amount
+                  FROM payouts p
+                  JOIN gain_share_claims c ON c.id = p.gain_claim_id
+                 WHERE c.buyer_user_id = p_buyer_user_id
+                   AND p.deleted = false
+                 ORDER BY p.created_at
+            $$;
+
+            REVOKE ALL ON FUNCTION landvault_buyer_gain_payouts(uuid) FROM PUBLIC;
+            GRANT EXECUTE ON FUNCTION landvault_buyer_gain_payouts(uuid) TO ${appDbUsername};
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP FUNCTION landvault_buyer_gain_payouts(uuid);
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

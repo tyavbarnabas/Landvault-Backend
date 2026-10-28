@@ -94,7 +94,7 @@ public class RevocationNotices {
                                     SettlementAlertSender.RevocationStage.CLEARED, reference, planName, plot,
                                     notice.getTrigger().wire(), notice.getRevocationAfterMonths(), null, null, null,
                                     RevocationService.DATE.format(notice.getDeadline()), null, null, why,
-                                    buyerNotifier.purchaseUrl(transactionId)))));
+                                    buyerNotifier.purchaseUrl(transactionId), null))));
                 });
     }
 

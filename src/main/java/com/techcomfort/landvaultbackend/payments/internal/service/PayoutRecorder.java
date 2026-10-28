@@ -153,8 +153,8 @@ public class PayoutRecorder {
         if (sale.currency() != Currency.NGN) {
             throw new PaymentException.SaleNotPayable();
         }
-        List<GainShareClaim> gains = claims.findBySaleTransactionIdInAndStatus(List.of(transactionId),
-                GainShareStatus.OWED);
+        // Locked, so the buyer can't replace a gain claim's account while its transfer is being started.
+        List<GainShareClaim> gains = claims.findLockedBySaleTransactionIdAndStatus(transactionId, GainShareStatus.OWED);
         Owing owing = owing(sale, attempts, paymentsFor(sale), gains);
         if (owing.next() == null) {
             // 5a/5b: on a withdrawn or revoked plan, nothing more comes to the developer

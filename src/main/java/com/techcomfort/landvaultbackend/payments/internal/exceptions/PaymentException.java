@@ -67,11 +67,14 @@ public abstract class PaymentException extends RuntimeException {
         }
     }
 
-    /** 3b, decision 7: the next instalment only once the current one is verified. */
+    /**
+     * 3b, decision 7: the next instalment only once the current one is verified.
+     * A flexible plan has no "next one", so it says pay again instead.
+     */
     public static class InstalmentAwaitingVerification extends PaymentException {
-        public InstalmentAwaitingVerification() {
-            super("Your last payment is waiting for the developer's finance team to verify it. You can pay the next "
-                    + "one once it's verified.");
+        public InstalmentAwaitingVerification(boolean flexible) {
+            super("Your last payment is waiting for the developer's finance team to verify it. " + (flexible
+                    ? "You can pay again once it's verified." : "You can pay the next one once it's verified."));
         }
     }
 

@@ -403,11 +403,11 @@ gets it without a new call.
   `penaltyWaived` saying how much was waived; the portfolio's `arrears.penaltyAmount` and the next payment are net
   too. If the instalment reaches a higher step later, only the difference is owed. The buyer is emailed.
 
-### Flexible contribution plans — **phases 1–2 built** (changesets 110, 111)
+### Flexible contribution plans — **phases 1–5 built** (changesets 110–115)
 
 A third way to buy: a minimum to start, then any amount at any time until finished — no schedule, no due dates, no
 penalties. Phase 1 is declaring and publishing; phase 2 is choosing one at Proceed to buy (see Checkout) and the
-offer letter; phase 3a is the first payment (below). Later payments, payouts and finishing are 3b.
+offer letter; phase 3 is paying and finishing; phase 4 leaving and quiet plans; phase 5 the gain share (all below).
 
 - **The first payment is the buyer's figure**: `POST /api/transactions/{id}/payments?amount=5000000` — at least
   `flexible.minimumToStart`, at most `flexible.planTotal`, whole kobo; `INVALID_AMOUNT` otherwise (the message names
@@ -434,10 +434,12 @@ offer letter; phase 3a is the first payment (below). Later payments, payouts and
   `trigger`. A verified payment ends an inactivity notice; only finishing ends a finish-by one.
 - **The gain share (phase 5)**: after leaving (or being ended), `GET /api/gain-shares` lists the buyer's claims —
   `status` `open` | `owed` | `no_gain`, `agreedPrice`, `yourSharePct`, and once settled `salePrice`, `gain`, `amount`,
-  `paid`, `accountNeeded`, `account`. `PUT /api/gain-shares/{id}/account` `{ bankCode, accountNumber }` gives the
-  account (409 `GAIN_SHARE_NOT_OWED` / `GAIN_SHARE_ALREADY_SENDING`). Admin payouts gain a tranche kind `gain`
+  `paid`, `accountNeeded`, `account`. `paid` is what has reached the buyer (fixed in changeset 115: it read 0
+  before). `PUT /api/gain-shares/{id}/account` `{ bankCode, accountNumber }` gives the account, replaceable until
+  a transfer of it starts (409 `GAIN_SHARE_NOT_OWED` / `GAIN_SHARE_ALREADY_SENDING`). Admin payouts gain a tranche kind `gain`
   (blocker `BUYER_ACCOUNT_NEEDED`), paid after the developer's.
-- Not yet: "sell my plot".
+- Not yet: "sell my plot" — it belongs to the resale module. The offer letter no longer mentions it; don't offer
+  it in the UI.
 
 - **Declared in the same set as instalment plans** (`PUT /api/portal/estates/{id}/payment-plans`). Each plan gains an
   optional **`kind`**: `installment` (when left out — existing calls are unchanged) or `flexible`. A flexible plan:
@@ -587,9 +589,8 @@ late-payment rule. Paying it charges the deposit first (see "Instalment plans" a
 with `installment`) is 409 `PLAN_NOT_OFFERED`, and the message says which kind it is. The response's **`flexible`**
 is `{ planId, planName, planTotal, premium, minimumToStart, minimumContribution, exitDeductionPct, exitAppliesTo,
 developerGainSharePct, inactivityMonths, noticeDays, maxMonths, finishBy }`, copied from the agreed price and
-**fixed**; `schedule` is null (no due dates). The offer letter states the plan, both ways out in naira (leaving now,
-and asking HomeTrue to sell the plot), and when a quiet plan may be ended. Paying it is refused
-(`PAYMENT_PLAN_NOT_SUPPORTED`) until phase 3.
+**fixed**; `schedule` is null (no due dates). The offer letter states the plan, leaving in naira (with the gain
+share), and when a quiet plan may be ended. Paying it: see "Flexible contribution plans" above.
 
 **Opening a purchase issues the offer letter** (see Documents): the response's **`offer`** is `{ id, number, issuedAt, acceptedAt }`. Show it and let the buyer accept it (`POST /api/documents/offer-letters/{offer.id}/accept`) before the Pay button; paying is refused with 409 `OFFER_NOT_ACCEPTED` until then. If the estate's letter isn't approved and current, nothing is opened: 409 `LETTER_NOT_APPROVED` (the hold stays). `offer` is null on purchases opened before offer letters.
 
