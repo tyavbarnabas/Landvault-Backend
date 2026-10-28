@@ -26,7 +26,8 @@ public record FlexibleStanding(
         @Schema(nullable = true, description = "The date to finish by; null when the plan has none.")
         LocalDate finishBy,
         @Schema(nullable = true, description = "Why notice may be given today: `inactivity` or `finish_by` (past "
-                + "the date to finish by). Null when it may not.") String noticeReason,
+                + "the date to finish by). Null when it may not, and while a notice is already running (its reason is then "
+                + "`notice.trigger`).") String noticeReason,
         @Schema(nullable = true, description = "The notice running, if one has been given.") Notice notice
 ) {
 

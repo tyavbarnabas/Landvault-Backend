@@ -124,8 +124,9 @@ class BuyerEmailsTest {
                 "inactivity", 6, "27 March 2026", null, "14000000.00", "26 November 2026", "1200000.00",
                 "300000.00", "No payment in 7 months.", URL, "100000.00"));
 
-        assertThat(sent().getText()).contains("make a payment of at least ₦100,000.00 by 26 November 2026")
-                .doesNotContain("any amount");
+        assertThat(sent().getText()).contains("make a payment of at least ₦100,000.00 by 26 November 2026",
+                        "given notice on the \"Pay as you can\" plan for Block C, Plot 6")
+                .doesNotContain("any amount", "your Pay as you can");
     }
 
     @Test

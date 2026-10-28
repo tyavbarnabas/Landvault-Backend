@@ -3229,7 +3229,8 @@ class ReservationCheckoutUnderRlsIT {
         String officer = staffWithRole(seller.id(), "finance_officer", null);
         assertThat(get("/api/portal/finance/transactions", officer, String.class).getBody())
                 .contains("\"paymentFor\":\"contribution\"", "\"planName\":\"Pay as you can\"",
-                        "\"expectedAmount\":5000000", "\"amountsMatch\":true", "\"remainingAfter\":17000000");
+                        "\"expectedAmount\":5000000", "\"amountsMatch\":true", "\"remainingAfter\":17000000",
+                        "\"contributionSequence\":1");
         ResponseEntity<String> verified = financeAction(officer, purchase.id(), "verify", null);
         assertThat(verified.getStatusCode()).as(verified.getBody()).isEqualTo(HttpStatus.OK);
         assertThat(verified.getBody()).contains("\"status\":\"on_plan\"")
@@ -3298,7 +3299,7 @@ class ReservationCheckoutUnderRlsIT {
         contribute(purchase, "7000000", 700_000_000L);
         assertThat(get("/api/portal/finance/transactions", officer, String.class).getBody())
                 .contains("\"paymentFor\":\"contribution\"", "\"expectedAmount\":7000000", "\"amountsMatch\":true",
-                        "\"remainingAfter\":10000000");
+                        "\"remainingAfter\":10000000", "\"contributionSequence\":2");
         assertThat(financeAction(officer, purchase.id(), "verify", null).getBody()).contains("\"status\":\"on_plan\"");
         assertThat(portfolio(buyer).items().getFirst().paidAmount()).isEqualByComparingTo("12000000");
         assertThat(readyFor(admin, purchase)).contains("\"amountOwed\":2400000", "\"heldInEscrow\":9600000");
@@ -3351,6 +3352,12 @@ class ReservationCheckoutUnderRlsIT {
         ResponseEntity<String> left = restTemplate.exchange("/api/transactions/" + purchase.id() + "/withdrawal",
                 HttpMethod.POST, entity(buyer.token(), "{\"refund\":6400000}"), String.class);
         assertThat(left.getStatusCode()).as(left.getBody()).isEqualTo(HttpStatus.OK);
+        JsonNode ended = objectMapper.readTree(get("/api/portal/plans/" + purchase.id() + "/revocation",
+                seller.token(), String.class).getBody());
+        assertThat(ended.path("kind").asString()).as("an ended plan still says what it was").isEqualTo("flexible");
+        assertThat(ended.path("status").asString()).isEqualTo("withdrawn");
+        assertThat(ended.path("history").isEmpty()).isTrue();
+        assertThat(ended.path("settlement").path("refund").decimalValue()).isEqualByComparingTo("6400000");
 
         assertThat(queryString("SELECT status FROM transactions WHERE id = '" + purchase.id() + "'"))
                 .isEqualTo("WITHDRAWN");
@@ -3398,9 +3405,18 @@ class ReservationCheckoutUnderRlsIT {
         assertThat(given.getStatusCode()).as(given.getBody()).isEqualTo(HttpStatus.OK);
         assertThat(given.getBody()).contains("\"status\":\"notice\"", "\"trigger\":\"inactivity\"",
                 "\"deadline\":\"" + today.plusDays(30) + "\"");
+        JsonNode running = objectMapper.readTree(given.getBody());
+        assertThat(running.path("kind").asString()).isEqualTo("flexible");
+        assertThat(running.path("revocableNow").asBoolean()).as("a notice is already running").isFalse();
+        assertThat(running.path("flexible").path("noticeReason").isNull()).isTrue();
+        assertThat(revocation(director, purchase, "", "{\"reason\":\"Again\"}").getBody())
+                .contains("REVOCATION_ALREADY_NOTIFIED");
+        assertThat(get("/api/portal/finance/flexible-plans", officer, String.class).getBody())
+                .contains(purchase.id().toString()).doesNotContain("\"noticeReason\":\"inactivity\"");
         FlexibleStanding told = get("/api/checkout/transactions/" + purchase.id(), buyer.token(), TransactionDto.class)
                 .getBody().flexibleStanding();
         assertThat(told.notice().trigger()).isEqualTo("inactivity");
+        assertThat(told.noticeReason()).as("the reason is the notice's now").isNull();
         assertThat(told.notice().confirmableFrom()).isEqualTo(today.plusDays(31));
         verify(alerts, atLeastOnce()).quietPlan(argThat(a -> a.stage() == SettlementAlertSender.RevocationStage.NOTICE
                 && "4000000.00".equals(a.refund())));
@@ -3412,7 +3428,8 @@ class ReservationCheckoutUnderRlsIT {
         assertThat(financeAction(officer, purchase.id(), "verify", null).getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(queryString("SELECT status FROM plan_revocations WHERE transaction_id = '" + purchase.id() + "'"))
                 .as("a verified payment ends an inactivity notice").isEqualTo("CLEARED");
-        verify(alerts, atLeastOnce()).quietPlan(argThat(a -> a.stage() == SettlementAlertSender.RevocationStage.CLEARED));
+        verify(alerts, atLeastOnce()).quietPlan(argThat(a -> a.stage() == SettlementAlertSender.RevocationStage.CLEARED
+                && a.note().startsWith("Your payment was verified")));
 
         execute(paid);
         assertThat(revocation(director, purchase, "", "{\"reason\":\"Quiet again.\"}").getStatusCode())
@@ -3438,17 +3455,22 @@ class ReservationCheckoutUnderRlsIT {
 
         ResponseEntity<String> given = revocation(seller.token(), purchase, "", "{\"reason\":\"Past the date.\"}");
         assertThat(given.getBody()).as(given.getBody()).contains("\"trigger\":\"finish_by\"");
+        assertThat(revocation(seller.token(), purchase, "/cancel", "{\"note\":\"Talked to them\"}").getBody())
+                .as("withdrawing the notice makes it possible again").contains("\"revocableNow\":true",
+                        "\"noticeReason\":\"finish_by\"");
+        given = revocation(seller.token(), purchase, "", "{\"reason\":\"Past the date.\"}");
+        assertThat(given.getBody()).as(given.getBody()).contains("\"revocableNow\":false", "\"noticeReason\":null");
         contribute(purchase, "1000000", 100_000_000L);
         financeAction(officer, purchase.id(), "verify", null);
-        assertThat(queryString("SELECT status FROM plan_revocations WHERE transaction_id = '" + purchase.id() + "'"))
-                .as("a payment isn't finishing").isEqualTo("NOTICE");
+        assertThat(queryString("SELECT status FROM plan_revocations WHERE transaction_id = '" + purchase.id()
+                + "' AND status <> 'CANCELLED'")).as("a payment isn't finishing").isEqualTo("NOTICE");
 
         String last = startPaymentRaw(purchase.id(), "?balance=true");
         paystackSays(last, "success", 1_600_000_000L, "NGN", "Approved");
         confirm(buyer, last);
         assertThat(financeAction(officer, purchase.id(), "verify", null).getBody()).contains("\"status\":\"verified\"");
-        assertThat(queryString("SELECT status FROM plan_revocations WHERE transaction_id = '" + purchase.id() + "'"))
-                .as("finishing the plan ends it").isEqualTo("CLEARED");
+        assertThat(queryString("SELECT status FROM plan_revocations WHERE transaction_id = '" + purchase.id()
+                + "' AND status <> 'CANCELLED'")).as("finishing the plan ends it").isEqualTo("CLEARED");
     }
 
     /**

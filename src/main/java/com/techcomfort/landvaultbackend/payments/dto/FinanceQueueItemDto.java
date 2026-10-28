@@ -68,7 +68,12 @@ public record FinanceQueueItemDto(
 
         @Schema(description = "A `contribution` on a flexible plan: what is left of the plan total once this "
                 + "payment is verified. Null otherwise.", nullable = true)
-        BigDecimal remainingAfter
+        BigDecimal remainingAfter,
+
+        @Schema(description = "A `contribution` on a flexible plan: which payment on the plan this is, counting "
+                + "those finance has verified — 1 is the first, whose verification holds the plot on the plan and "
+                + "issues the provisional letter. Null otherwise.", nullable = true, example = "1")
+        Integer contributionSequence
 ) {
 
     /** A penalty charged on one instalment: the step reached and its amount. */

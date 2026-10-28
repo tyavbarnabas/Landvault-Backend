@@ -6853,6 +6853,22 @@ Executive Directors. Built first because "sell my plot" needs the same thing: pa
 - A purchase's `payment` is its **newest** successful payment (it took any one, which on a plan is arbitrary); the
   payout ready list's `verifiedAt` is the first finance verification on the sale, not the purchase's last change.
 
+### Follow-ups raised by the frontend (2026-10-28)
+
+- **`PlanRevocation.kind`** (`installment` | `flexible`), always set: a flexible plan left without a notice looked
+  exactly like an ended instalment plan. `settlement` is now filled for a withdrawn plan too (it was revoked only);
+  `flexible` stays null once a flexible plan ends.
+- **No "notice may be given" while a notice runs**: `FlexibleStanding.noticeReason` is null and
+  `PlanRevocation.revocableNow` false while one is open (instalment plans too); the trigger stays on the notice.
+  The flexible-plans list therefore sorts plans with a running notice after those notice may be given on.
+  `FlexibleNoticeService.confirm` checks `FlexibleStandings.trigger` directly, so it is unaffected.
+- **`FinanceQueueItemDto.contributionSequence`**: which payment on a flexible plan this is (1 = the first, whose
+  verification holds the plot), counting those finance verified — a rejected one doesn't count.
+- Found in that walk: the quiet-plan emails now name the plan through `PlanNames.phrase` ("on the \"Pay as you
+  can\" plan", not "your Pay as you can"), the "notice ended" email tells the buyer "Your payment was verified…"
+  instead of the developer-facing close note, and `REVOCATION_ALREADY_NOTIFIED` reads "has already been given
+  notice, and has until 26 November 2026" (no "of revocation" on a flexible plan).
+
 ## A buyer's address (changeset 097)
 
 Built 2026-10-21, decided with the user, so the allocation letter can name
