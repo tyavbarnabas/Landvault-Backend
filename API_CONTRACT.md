@@ -413,7 +413,8 @@ offer letter; phase 3 is paying and finishing; phase 4 leaving and quiet plans; 
   `flexible.minimumToStart`, at most `flexible.planTotal`, whole kobo; `INVALID_AMOUNT` otherwise (the message names
   both limits) or when `amount` is left out. `amount` is refused on every other plan. Accept the offer first.
 - **Finance's queue** shows it as `paymentFor: "contribution"`, `expectedAmount` = what was paid, `amountsMatch` =
-  within the limits, and `remainingAfter`. Verifying holds the plot on the plan (`status: "on_plan"`) and issues the
+  within the limits, `remainingAfter`, and `contributionSequence` (1 = the first payment on the plan, counting
+  those finance verified; null on other plans). Verifying the first holds the plot on the plan (`status: "on_plan"`) and issues the
   provisional letter (`HT-PAL-`), which carries the flexible terms.
 - **Portfolio**: `plan: "flexible"`, `status: "installment_active"`, `totalPrice` = plan total, `paidAmount` = what
   finance verified, payments typed `contribution`, `planName`; `nextDueDate`, `installmentMonths` and `arrears` stay
@@ -428,10 +429,12 @@ offer letter; phase 3 is paying and finishing; phase 4 leaving and quiet plans; 
   then confirm naming its `refund`. Refunded from escrow less the developer's declared share.
 - **A quiet plan (phase 4)**: `transaction.flexibleStanding` — `paid`, `remaining`, `awaitingFinance`,
   `lastPaymentOn`, `quietFrom`, `finishBy`, `noticeReason` (`inactivity` | `finish_by` | null) and `notice`
-  (`trigger`, `reason`, `givenAt`, `deadline`, `confirmableFrom`). The developer reads
-  `GET /api/portal/finance/flexible-plans` (`portal.payments.verify`, notice-able plans first) and gives notice
-  through the revocation routes (`portal.plans.revoke`); `PlanRevocation` then carries `flexible` and each notice a
-  `trigger`. A verified payment ends an inactivity notice; only finishing ends a finish-by one.
+  (`trigger`, `reason`, `givenAt`, `deadline`, `confirmableFrom`). **`noticeReason` is null while a notice is
+  running** (its reason is `notice.trigger`), and comes back if the notice is withdrawn. The developer reads
+  `GET /api/portal/finance/flexible-plans` (`portal.payments.verify`: plans notice may be given on first, then those
+  with a notice running, then the rest) and gives notice through the revocation routes (`portal.plans.revoke`;
+  409 `REVOCATION_ALREADY_NOTIFIED` while one runs); `PlanRevocation` then carries `kind: "flexible"`, `flexible`
+  (the standing, while the plan runs) and each notice a `trigger`. A verified payment ends an inactivity notice; only finishing ends a finish-by one.
 - **The gain share (phase 5)**: after leaving (or being ended), `GET /api/gain-shares` lists the buyer's claims —
   `status` `open` | `owed` | `no_gain`, `agreedPrice`, `yourSharePct`, and once settled `salePrice`, `gain`, `amount`,
   `paid`, `accountNeeded`, `account`. `paid` is what has reached the buyer (fixed in changeset 115: it read 0
@@ -1144,11 +1147,14 @@ on the first new instalment.
 **Revoking a plan (phase 5b)**: new permission `portal.plans.revoke` (Executive Director; company-wide view only —
 otherwise 403 `REVOCATION_REQUIRES_COMPANY_WIDE_SCOPE`); add it to the frontend's list. All under
 `/api/portal/plans/{transactionId}/revocation`, each answering the same `PlanRevocation`:
-`{ transactionId, transactionReference, status, afterMonthsUnpaid, noticeDays, revocableFrom, revocableNow,
+`{ transactionId, transactionReference, kind, status, afterMonthsUnpaid, noticeDays, revocableFrom, revocableNow,
 overdueToday, notice, settlement: { paid, refund, developerKeeps, currency }, history: [notice] }` where a notice is
 `{ id, status (notice | cancelled | cleared | withdrawn | revoked), reason, givenAt, deadline, confirmableFrom,
-instalmentSequence, closedAt, closeNote }`. `settlement` is what revoking now would return (exactly a withdrawal),
-or what was settled once revoked.
+instalmentSequence, trigger, closedAt, closeNote }`. `kind` is `installment` or `flexible`, always set whatever
+the status — an ended plan (even one left without any notice) can still be told apart. `revocableNow` is false
+while a notice is running. `settlement` is what revoking now would return (exactly a withdrawal), or what was
+settled once revoked or withdrawn. `flexible` (the flexible standing) is null on an instalment plan and once a
+flexible plan has ended.
 - `GET` — the standing above.
 - `POST { reason }` — give notice. Only once an instalment is unpaid `afterMonthsUnpaid` months past due (a payment
   awaiting finance counts as paid): otherwise 409 `REVOCATION_NOT_DUE`, whose message says when it would be.

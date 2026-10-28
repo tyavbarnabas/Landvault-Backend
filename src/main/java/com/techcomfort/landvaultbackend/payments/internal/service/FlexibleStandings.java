@@ -65,7 +65,8 @@ public class FlexibleStandings {
         LocalDate quietFrom = last.plusMonths(plan.inactivityMonths());
         return new FlexibleStanding(progress.verified(), progress.remaining(),
                 progress.awaitingFinance().map(Payment::getAmount).orElse(null), last, quietFrom, plan.finishBy(),
-                trigger(plan, progress, last, today).map(NoticeTrigger::wire).orElse(null),
+                // While a notice runs there is nothing to give: its trigger stays on the notice.
+                open != null ? null : trigger(plan, progress, last, today).map(NoticeTrigger::wire).orElse(null),
                 open == null ? null : new FlexibleStanding.Notice(open.getTrigger().wire(), open.getReason(),
                         open.getNoticeGivenAt(), open.getDeadline(), open.getDeadline().plusDays(1)));
     }

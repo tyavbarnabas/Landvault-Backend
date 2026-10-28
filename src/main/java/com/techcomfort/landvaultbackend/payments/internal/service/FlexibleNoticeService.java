@@ -76,7 +76,7 @@ public class FlexibleNoticeService {
         payments.findLockedByTransactionIdAndStatus(transactionId, PaymentStatus.SUCCEEDED);
         Optional<PlanRevocation> open = revocations.findOpenLocked(transactionId);
         if (open.isPresent()) {
-            throw new PaymentException.RevocationAlreadyNotified(open.get().getDeadline());
+            throw new PaymentException.RevocationAlreadyNotified(open.get().getDeadline(), true);
         }
         LocalDate today = PlanStandings.today();
         List<Payment> all = payments.findAllByTransactionIdOrderByCreatedAtAsc(transactionId);
@@ -183,12 +183,13 @@ public class FlexibleNoticeService {
                     history.stream().filter(PlanRevocation::isOpen).findFirst().orElse(null), PlanStandings.today());
             WithdrawalService.Quote q = withdrawals.preview(purchase);
             settlement = new RevocationDto.Settlement(q.paid(), q.refund(), q.developerKeeps(), q.currency());
-        } else if (purchase.isRevoked()) {
+        } else if (purchase.isRevoked() || purchase.isWithdrawn()) {
             WithdrawalDto settled = withdrawals.settledRecord(purchase);
             settlement = new RevocationDto.Settlement(settled.paid(), settled.refund(), settled.developerKeeps(),
                     settled.currency());
         }
-        return new RevocationDto(purchase.id(), purchase.reference(), purchase.status(), plan.inactivityMonths(),
+        return new RevocationDto(purchase.id(), purchase.reference(), "flexible", purchase.status(),
+                plan.inactivityMonths(),
                 plan.noticeDays(), standing == null ? null : noticeFrom(standing), standing != null
                 && standing.noticeAllowedNow(), BigDecimal.ZERO,
                 history.stream().filter(PlanRevocation::isOpen).findFirst().map(RevocationService::notice).orElse(null),

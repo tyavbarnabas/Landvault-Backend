@@ -2,6 +2,8 @@ package com.techcomfort.landvaultbackend.payments.internal.exceptions;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.Locale;
 
 /** Payment refusals. Never carries a secret key or card detail. */
 public abstract class PaymentException extends RuntimeException {
@@ -412,8 +414,9 @@ public abstract class PaymentException extends RuntimeException {
 
     /** 5b: one open notice per plan. */
     public static class RevocationAlreadyNotified extends PaymentException {
-        public RevocationAlreadyNotified(LocalDate deadline) {
-            super("The buyer already has notice of revocation, with until " + deadline + " to act on it.");
+        public RevocationAlreadyNotified(LocalDate deadline, boolean flexible) {
+            super("The buyer has already been given notice" + (flexible ? "" : " of revocation") + ", and has until "
+                    + DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.UK).format(deadline) + " to act on it.");
         }
     }
 

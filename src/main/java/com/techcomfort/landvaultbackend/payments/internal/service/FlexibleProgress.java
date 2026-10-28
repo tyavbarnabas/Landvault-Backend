@@ -16,8 +16,10 @@ import java.util.Optional;
  *
  * @param verified        what finance has verified so far
  * @param awaitingFinance a contribution Paystack confirmed that finance hasn't verified yet, if any
+ * @param verifiedCount   how many contributions finance has verified
  */
-record FlexibleProgress(FlexiblePurchase plan, BigDecimal verified, Optional<Payment> awaitingFinance) {
+record FlexibleProgress(FlexiblePurchase plan, BigDecimal verified, Optional<Payment> awaitingFinance,
+                        int verifiedCount) {
 
     static FlexibleProgress of(FlexiblePurchase plan, List<Payment> payments) {
         List<Payment> counted = payments.stream()
@@ -26,7 +28,8 @@ record FlexibleProgress(FlexiblePurchase plan, BigDecimal verified, Optional<Pay
                 .toList();
         return new FlexibleProgress(plan, counted.stream().filter(p -> p.getFinanceVerifiedAt() != null)
                 .map(Payment::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add),
-                counted.stream().filter(p -> p.getFinanceVerifiedAt() == null).findFirst());
+                counted.stream().filter(p -> p.getFinanceVerifiedAt() == null).findFirst(),
+                (int) counted.stream().filter(p -> p.getFinanceVerifiedAt() != null).count());
     }
 
     /** What is left of the plan total. */

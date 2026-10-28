@@ -299,14 +299,15 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
     @Override
     public void quietPlan(QuietPlanAlert alert) {
         boolean finishBy = "finish_by".equals(alert.trigger());
-        String plan = alert.planName() + " for " + alert.plotLabel() + " (purchase " + alert.purchaseReference() + ")";
+        String plan = PlanNames.phrase(alert.planName()) + " for " + alert.plotLabel() + " (purchase "
+                + alert.purchaseReference() + ")";
         String subject;
         String body;
         switch (alert.stage()) {
             case NOTICE -> {
                 subject = "Notice on your plan for " + alert.plotLabel();
                 body = """
-                        The developer has given notice on your %s: %s
+                        The developer has given notice on %s: %s
 
                         %s If not, from the day after, the developer may end the plan on the terms for leaving: you \
                         would get back %s, and the developer keeps %s. You can also leave now on those same \
@@ -326,18 +327,18 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
             }
             case CANCELLED -> {
                 subject = "Notice withdrawn: your plan for " + alert.plotLabel();
-                body = "The developer has withdrawn the notice on your " + plan + ". Nothing changes; you can carry "
+                body = "The developer has withdrawn the notice on " + plan + ". Nothing changes; you can carry "
                         + "on paying any amount, at any time." + (alert.note() == null ? "" : "\n\nTheir note: "
                         + alert.note()) + "\n";
             }
             case CLEARED -> {
                 subject = "Notice ended: your plan for " + alert.plotLabel();
-                body = "The notice on your " + plan + " has ended. " + alert.note() + "\n";
+                body = "The notice on " + plan + " has ended. " + alert.note() + "\n";
             }
             default -> {
                 subject = "Your plan for " + alert.plotLabel() + " has ended";
                 body = """
-                        The developer has ended your %s after the notice ran out, on the terms for leaving. You will \
+                        The developer has ended %s after the notice ran out, on the terms for leaving. You will \
                         get back %s; the developer keeps %s. HomeTrue sends the refund to you.
                         """.formatted(plan, naira(alert.refund()), naira(alert.developerKeeps()));
             }

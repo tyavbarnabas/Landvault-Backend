@@ -20,6 +20,10 @@ public record RevocationDto(
         UUID transactionId,
         String transactionReference,
 
+        @Schema(description = "`installment` or `flexible` — always set, whatever the purchase's status, so an "
+                + "ended plan can still be told apart.", allowableValues = {"installment", "flexible"})
+        String kind,
+
         @Schema(description = "The purchase's status: `on_plan`, or `revoked` once confirmed (also `withdrawn`, "
                 + "`verified` for a plan that ended another way).")
         String status,
@@ -35,8 +39,9 @@ public record RevocationDto(
                 + "while nothing is late.", nullable = true)
         LocalDate revocableFrom,
 
-        @Schema(description = "Notice can be given today: an instalment is unpaid long enough. A payment waiting "
-                + "for your finance to verify counts as paid.")
+        @Schema(description = "Notice can be given today: an instalment is unpaid long enough (on a flexible plan, "
+                + "it has gone quiet). A payment waiting for your finance to verify counts as paid. False while a "
+                + "notice is already running.")
         boolean revocableNow,
 
         @Schema(description = "What is overdue today, penalties included; zero when nothing is.")
@@ -46,7 +51,7 @@ public record RevocationDto(
         Notice notice,
 
         @Schema(description = "While the plan runs: what revoking it now would return to the buyer and what you "
-                + "keep — exactly a withdrawal's figures. Once revoked: what was settled. Null otherwise.",
+                + "keep — exactly a withdrawal's figures. Once revoked or withdrawn: what was settled. Null otherwise.",
                 nullable = true)
         Settlement settlement,
 
@@ -56,7 +61,8 @@ public record RevocationDto(
         @Schema(description = "A flexible plan (phase 4): where it stands — `noticeReason` says why notice may be "
                 + "given today. `afterMonthsUnpaid` is then the plan's inactivity period, `revocableFrom` the day it "
                 + "would count as quiet (or the day after its date to finish by), and `overdueToday` zero: nothing on "
-                + "a flexible plan is ever overdue. Null on an instalment plan.", nullable = true)
+                + "a flexible plan is ever overdue. Null on an instalment plan, and once a flexible plan has ended (`kind` "
+                + "still says `flexible`; `settlement` says what was paid and returned).", nullable = true)
         FlexibleStanding flexible
 ) {
 

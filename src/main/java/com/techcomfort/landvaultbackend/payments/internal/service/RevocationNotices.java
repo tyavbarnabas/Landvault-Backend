@@ -93,7 +93,9 @@ public class RevocationNotices {
                             "quiet plan cleared", () -> alerts.quietPlan(new SettlementAlertSender.QuietPlanAlert(to,
                                     SettlementAlertSender.RevocationStage.CLEARED, reference, planName, plot,
                                     notice.getTrigger().wire(), notice.getRevocationAfterMonths(), null, null, null,
-                                    RevocationService.DATE.format(notice.getDeadline()), null, null, why,
+                                    RevocationService.DATE.format(notice.getDeadline()), null, null, finished
+                                    ? "Your plan is paid in full." : "Your payment was verified, so the plan carries "
+                                    + "on: you can pay any amount, at any time, until it's finished.",
                                     buyerNotifier.purchaseUrl(transactionId), null))));
                 });
     }

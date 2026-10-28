@@ -89,7 +89,7 @@ public class RevocationService {
         payments.findLockedByTransactionIdAndStatus(transactionId, PaymentStatus.SUCCEEDED);
         Optional<PlanRevocation> open = revocations.findOpenLocked(transactionId);
         if (open.isPresent()) {
-            throw new PaymentException.RevocationAlreadyNotified(open.get().getDeadline());
+            throw new PaymentException.RevocationAlreadyNotified(open.get().getDeadline(), false);
         }
         LocalDate today = PlanStandings.today();
         PlanProgress progress = progress(plan);
@@ -216,19 +216,20 @@ public class RevocationService {
         if (running) {
             WithdrawalService.Quote q = withdrawals.preview(purchase);
             settlement = new RevocationDto.Settlement(q.paid(), q.refund(), q.developerKeeps(), q.currency());
-        } else if (purchase.isRevoked()) {
+        } else if (purchase.isRevoked() || purchase.isWithdrawn()) {
             WithdrawalDto settled = withdrawals.settledRecord(purchase);
             settlement = new RevocationDto.Settlement(settled.paid(), settled.refund(), settled.developerKeeps(),
                     settled.currency());
         }
-        return new RevocationDto(purchase.id(), purchase.reference(), purchase.status(),
+        PlanRevocation open = all.stream().filter(PlanRevocation::isOpen).findFirst().orElse(null);
+        return new RevocationDto(purchase.id(), purchase.reference(), "installment", purchase.status(),
                 terms == null ? 0 : terms.afterMonths(), terms == null ? 0 : terms.noticeDays(),
                 running && terms != null ? progress.oldestLate(today)
                         .map(s -> terms.revocableFrom(s.instalment().dueDate())).orElse(null) : null,
-                running && progress.revocationTrigger(today).isPresent(),
+                running && open == null && progress.revocationTrigger(today).isPresent(),
                 arrears == null ? BigDecimal.ZERO : arrears.totalDue(),
-                all.stream().filter(PlanRevocation::isOpen).findFirst().map(RevocationService::notice).orElse(null),
-                settlement, all.stream().map(RevocationService::notice).toList(), null);
+                open == null ? null : notice(open), settlement, all.stream().map(RevocationService::notice).toList(),
+                null);
     }
 
     static RevocationDto.Notice notice(PlanRevocation r) {
