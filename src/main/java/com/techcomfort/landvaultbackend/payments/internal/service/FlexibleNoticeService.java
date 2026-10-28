@@ -227,7 +227,12 @@ public class FlexibleNoticeService {
                                 plan.finishBy() == null ? null : RevocationService.DATE.format(plan.finishBy()),
                                 naira(progress.remaining()), RevocationService.DATE.format(notice.getDeadline()),
                                 naira(refund), naira(developerKeeps), note,
-                                buyerNotifier.purchaseUrl(purchase.id())))));
+                                buyerNotifier.purchaseUrl(purchase.id()), naira(minimumPayment(plan, progress))))));
+    }
+
+    /** The least a payment may be now: the declared minimum, or what's left when that is less; null for any amount. */
+    private static BigDecimal minimumPayment(FlexiblePurchase plan, FlexibleProgress progress) {
+        return plan.minimumContribution() == null ? null : plan.minimumContribution().min(progress.remaining());
     }
 
     private static String naira(BigDecimal amount) {

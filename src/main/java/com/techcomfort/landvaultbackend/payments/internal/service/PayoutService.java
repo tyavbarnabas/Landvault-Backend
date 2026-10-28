@@ -30,7 +30,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -154,12 +156,22 @@ public class PayoutService {
                     PayoutTranches.sharePaymentId(next.key()), next.amount(), owed.heldInEscrow(),
                     plan == null ? null : plan.partCount(), plan == null ? null : plan.paidParts().size(),
                     plan == null ? null : plan.nextPart(),
-                    plan == null ? null : PaystackAmounts.fromKobo(plan.nextPartKobo()), sale.verifiedAt(),
+                    plan == null ? null : PaystackAmounts.fromKobo(plan.nextPartKobo()),
+                    firstFinanceVerification(salePaymentsOf).orElse(sale.verifiedAt()),
                     gain != null ? gainAccount(gain) : account.map(a -> new ReadyPayoutDto.PayoutAccount(a.getBankName(),
                             PayoutRecorder.last4(a.getAccountNumber()), a.getAccountName())).orElse(null),
                     blockers, lastAttempt));
         }
         return ready;
+    }
+
+    /**
+     * When the developer's finance first verified a payment on the sale: the sale itself, or a plan's first
+     * payment. Not the purchase's last change, which moves on a withdrawal or completion.
+     */
+    private static Optional<Instant> firstFinanceVerification(List<Payment> salePayments) {
+        return salePayments.stream().map(Payment::getFinanceVerifiedAt).filter(Objects::nonNull)
+                .min(Comparator.naturalOrder());
     }
 
     /**

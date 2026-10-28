@@ -19,7 +19,6 @@ import com.techcomfort.landvaultbackend.payments.internal.paystack.PaystackBankD
 import com.techcomfort.landvaultbackend.payments.internal.paystack.PaystackClient;
 import com.techcomfort.landvaultbackend.payments.internal.repository.GainShareClaimRepository;
 import com.techcomfort.landvaultbackend.payments.internal.repository.PaymentRepository;
-import com.techcomfort.landvaultbackend.payments.internal.repository.PayoutRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -30,7 +29,6 @@ import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -54,7 +52,6 @@ public class GainShareService {
 
     private final GainShareClaimRepository claims;
     private final PaymentRepository payments;
-    private final PayoutRepository payouts;
     private final CheckoutApi checkoutApi;
     private final PaystackBankDirectory bankDirectory;
     private final PaystackClient paystack;
@@ -174,12 +171,9 @@ public class GainShareService {
     public List<GainShareDto> mine() {
         UUID buyer = currentScope().userId();
         List<GainShareClaim> own = claims.findByBuyerUserIdOrderByOpenedAtDesc(buyer);
-        Map<UUID, List<Payout>> bySale = own.stream().anyMatch(c -> c.getSaleTransactionId() != null)
-                ? payouts.findAllByTransactionIdInOrderByCreatedAtDesc(own.stream()
-                        .map(GainShareClaim::getSaleTransactionId).filter(Objects::nonNull).toList()).stream()
-                .collect(Collectors.groupingBy(Payout::getTransactionId))
-                : Map.of();
-        return own.stream().map(c -> toDto(c, bySale.getOrDefault(c.getSaleTransactionId(), List.of()))).toList();
+        Map<UUID, List<GainPayout>> byClaim = gainPayouts(buyer).stream()
+                .collect(Collectors.groupingBy(GainPayout::claimId));
+        return own.stream().map(c -> toDto(c, byClaim.getOrDefault(c.getId(), List.of()))).toList();
     }
 
     /**
@@ -194,10 +188,11 @@ public class GainShareService {
         if (claim.getStatus() != GainShareStatus.OWED) {
             throw new PaymentException.GainShareNotOwed(claim.getStatus().wire());
         }
-        List<Payout> attempts = payouts.findAllLockedByTransactionId(claim.getSaleTransactionId()).stream()
-                .filter(p -> claim.getId().equals(p.getGainClaimId())).toList();
-        if (attempts.stream().anyMatch(p -> p.getStatus() != PayoutStatus.FAILED && p.getStatus() != PayoutStatus.CANCELLED
-                && p.getStatus() != PayoutStatus.REVERSED)) {
+        // Read through the definer function: the buyer's session can't see payouts (changeset 115). The claim's
+        // lock, also taken when a payout is prepared, keeps this check and a transfer starting in turn.
+        List<GainPayout> attempts = gainPayouts(buyer).stream().filter(p -> claim.getId().equals(p.claimId())).toList();
+        if (attempts.stream().anyMatch(p -> p.status() != PayoutStatus.FAILED && p.status() != PayoutStatus.CANCELLED
+                && p.status() != PayoutStatus.REVERSED)) {
             throw new PaymentException.GainShareAlreadySending();
         }
         PaystackClient.Bank bank = bankDirectory.find(bankCode.trim()).orElseThrow(PaymentException.UnknownBank::new);
@@ -218,9 +213,19 @@ public class GainShareService {
         return toDto(claim, attempts);
     }
 
-    private static GainShareDto toDto(GainShareClaim c, List<Payout> salePayouts) {
-        BigDecimal paid = salePayouts.stream().filter(p -> c.getId().equals(p.getGainClaimId()))
-                .filter(p -> p.getStatus() == PayoutStatus.SUCCESS).map(Payout::getAmount)
+    /** A payout made on one of the buyer's claims: only what the buyer may see of it. */
+    private record GainPayout(UUID claimId, PayoutStatus status, BigDecimal amount) {
+    }
+
+    private List<GainPayout> gainPayouts(UUID buyer) {
+        return claims.findPayoutsOnBuyersClaims(buyer).stream()
+                .map(r -> new GainPayout((UUID) r[0], PayoutStatus.valueOf((String) r[1]), (BigDecimal) r[2]))
+                .toList();
+    }
+
+    private static GainShareDto toDto(GainShareClaim c, List<GainPayout> claimPayouts) {
+        BigDecimal paid = claimPayouts.stream().filter(p -> c.getId().equals(p.claimId()))
+                .filter(p -> p.status() == PayoutStatus.SUCCESS).map(GainPayout::amount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         return new GainShareDto(c.getId(), c.getClaimTransactionId(), c.getStatus().wire(), c.getAgreedPrice(),
                 c.getCurrency().name(), HUNDRED.subtract(c.getDeveloperSharePct()), c.getOpenedAt(), c.getSalePrice(),

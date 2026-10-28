@@ -39,17 +39,18 @@ public interface SettlementAlertSender {
      */
     /**
      * {@code planName}: set when the payment verified was a plan's deposit, null otherwise;
-     * {@code flexible}: that plan is a flexible one, and the payment its first.
+     * {@code flexible}: that plan is a flexible one, and the payment its first;
+     * {@code paidInFull}: the plan total, when this payment completed a plan (null otherwise).
      */
     record PurchaseDecisionAlert(String to, String plotLabel, String estateName, String amount, boolean verified,
                                  String reason, String purchaseUrl, String letterNumber, String letterUrl,
-                                 String planName, boolean flexible) {
+                                 String planName, boolean flexible, String paidInFull) {
 
         PurchaseDecisionAlert(String to, String plotLabel, String estateName, String amount, boolean verified,
                               String reason, String purchaseUrl, String letterNumber, String letterUrl,
                               String planName) {
             this(to, plotLabel, estateName, amount, verified, reason, purchaseUrl, letterNumber, letterUrl, planName,
-                    false);
+                    false, null);
         }
     }
 
@@ -95,10 +96,13 @@ public interface SettlementAlertSender {
      * are plain naira strings. {@code awaitingFinance}: the developer's share of
      * a payment their finance hasn't verified yet, held until they do; null
      * when there is none. {@code reason}: the buyer's own words, or null.
+     * {@code flexible}: a flexible plan (its own exit terms); {@code agreedPrice}
+     * and {@code buyerGainSharePct} then say what a later sale above that price
+     * pays the buyer — the share is null when the developer keeps every gain.
      */
     record WithdrawalAlert(String to, boolean toDeveloper, String purchaseReference, String planName, String paid,
                            String refund, String developerKeeps, String awaitingFinance, String reason,
-                           String purchaseUrl) {
+                           String purchaseUrl, boolean flexible, String agreedPrice, String buyerGainSharePct) {
     }
 
     void planWithdrawn(WithdrawalAlert alert);
@@ -110,12 +114,13 @@ public interface SettlementAlertSender {
      * Flexible contribution, phase 4: to the buyer, at each step of a notice on
      * a quiet plan. {@code trigger} is `inactivity` or `finish_by`; amounts are
      * plain naira strings; {@code refund}/{@code developerKeeps} only on NOTICE
-     * and REVOKED; {@code note} the developer's reason or cancellation note.
+     * and REVOKED; {@code note} the developer's reason or cancellation note;
+     * {@code minimumPayment} the least a payment may be (null when any amount will do).
      */
     record QuietPlanAlert(String to, RevocationStage stage, String purchaseReference, String planName,
                           String plotLabel, String trigger, int inactivityMonths, String lastPaymentOn,
                           String finishBy, String remaining, String deadline, String refund, String developerKeeps,
-                          String note, String purchaseUrl) {
+                          String note, String purchaseUrl, String minimumPayment) {
     }
 
     void quietPlan(QuietPlanAlert alert);

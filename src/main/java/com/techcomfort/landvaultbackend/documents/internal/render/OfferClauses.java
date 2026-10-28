@@ -8,6 +8,7 @@ import com.techcomfort.landvaultbackend.common.FlexiblePlanCalculator;
 import com.techcomfort.landvaultbackend.common.InstalmentPlanCalculator;
 import com.techcomfort.landvaultbackend.common.LatePaymentTerms;
 import com.techcomfort.landvaultbackend.common.PaymentFrequency;
+import com.techcomfort.landvaultbackend.common.PlanNames;
 import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
 import com.techcomfort.landvaultbackend.inventory.EstateDocumentFacts;
 
@@ -100,7 +101,7 @@ public final class OfferClauses {
         List<PlanSchedule.Instalment> instalments = schedule.instalments();
         BigDecimal regular = instalments.getFirst().amount();
         BigDecimal last = instalments.getLast().amount();
-        clauses.add("That you have chosen the " + schedule.planName() + ": " + DocumentFormats.money(schedule.planTotal(),
+        clauses.add("That you have chosen " + PlanNames.phrase(schedule.planName()) + ": " + DocumentFormats.money(schedule.planTotal(),
                 currency) + " in all" + (schedule.premium().signum() == 0 ? ""
                 : " (" + DocumentFormats.money(schedule.premium(), currency) + " more than paying in full)")
                 + ", made up of a deposit of " + DocumentFormats.money(schedule.deposit(), currency)
@@ -139,8 +140,8 @@ public final class OfferClauses {
      * start, any minimum contribution, the date to finish by); the total
      * commitment on it; then both ways out in naira — leaving (refunded at
      * once from escrow, two worked figures, then the gain share with its
-     * example) and asking HomeTrue to sell the plot — and when a quiet plan may
-     * be ended. Every figure comes from the terms copied onto the purchase.
+     * example) — and when a quiet plan may be ended. "Sell my plot" is not
+     * offered until resale exists (found in the flexible-plan walkthrough). Every figure comes from the terms copied onto the purchase.
      * The last clause says these terms replace the estate's general
      * withdrawal and revocation terms printed below, which are written for
      * instalment plans.
@@ -156,7 +157,7 @@ public final class OfferClauses {
                 + " for the plot and a corner premium of " + cornerPremiumPct.stripTrailingZeros().toPlainString() + "%.");
 
         String price = DocumentFormats.money(totalPrice, currency);
-        StringBuilder chosen = new StringBuilder("That you have chosen the " + plan.planName() + ": "
+        StringBuilder chosen = new StringBuilder("That you have chosen " + PlanNames.phrase(plan.planName()) + ": "
                 + DocumentFormats.money(plan.planTotal(), currency) + " in all" + (plan.premium().signum() == 0 ? ""
                 : " (" + DocumentFormats.money(plan.premium(), currency) + " more than paying in full)")
                 + ", paid in any amounts, at any time, with no schedule and no due dates. Your first payment must "
@@ -200,16 +201,10 @@ public final class OfferClauses {
                 + DocumentFormats.money(gain.example().youGet(), currency) + ". This is an example, not a forecast: "
                 + "a sale for no more than " + price + " pays nothing extra, and never reduces your refund.");
 
-        clauses.add("That instead of leaving, you may ask HomeTrue to sell the plot at a price you choose, not below "
-                + price + ", and change that price or stop the sale while no buyer holds the plot; nothing is due "
-                + "while it is offered for sale. When a buyer's payment is verified, the part of " + price
-                + " you have not yet paid goes to " + company + ", " + company + " keeps " + developerShare
-                + " of anything above " + price + ", and you receive what you have paid and the rest.");
-
         String months = plan.inactivityMonths() + " month" + (plan.inactivityMonths() == 1 ? "" : "s");
-        StringBuilder quiet = new StringBuilder("That if no payment of yours is verified for " + months + ", "
+        StringBuilder quiet = new StringBuilder("That if you make no payment for " + months + ", "
                 + company + " may give you " + plan.noticeDays() + " days' notice and then end the plan on the "
-                + "terms for leaving, unless a payment is made within the notice.");
+                + "terms for leaving, unless you make a payment within the notice.");
         if (plan.finishBy() != null) {
             quiet.append(" If the plan is not finished by ").append(DocumentFormats.date(plan.finishBy()))
                     .append(", the same notice may be given, and only finishing the plan stops it.");

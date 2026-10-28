@@ -138,8 +138,9 @@ class OfferClausesTest {
                         "less what Estintin Group keeps: 5% of ₦4,000,000.00, taken from your first payments. For "
                                 + "example, after paying ₦400,000.00 you get back ₦200,000.00, and after paying "
                                 + "₦2,000,000.00 you get back ₦1,800,000.00.",
-                        "Estintin Group keeps all of the difference; your refund is the same whatever it sells for.",
-                        "Estintin Group keeps 100% of anything above ₦4,000,000.00")
-                .doesNotContain("finished by", "Each later payment", "This is an example", "total commitment");
+                        "Estintin Group keeps all of the difference; your refund is the same whatever it sells for.")
+                .as("no \"sell my plot\" clause until resale exists")
+                .doesNotContain("finished by", "Each later payment", "This is an example", "total commitment",
+                        "ask HomeTrue to sell");
     }
 }

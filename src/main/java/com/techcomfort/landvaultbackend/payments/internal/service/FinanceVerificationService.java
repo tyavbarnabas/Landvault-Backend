@@ -147,7 +147,7 @@ public class FinanceVerificationService {
         }
         log.info("Transaction {} verified by finance user {}; plot allocated", transactionId, scope.userId());
         Optional<AllocationLetterLookup.LetterRef> letter = letterLookup.letterFor(transactionId);
-        tellBuyer(row, payment.get().getAmount(), true, null, letter, onPlan);
+        tellBuyer(row, payment.get().getAmount(), true, null, letter, onPlan, finished ? row.flexiblePlanTotal() : null);
         return onPlan ? FinanceDecisionDto.depositVerified(transactionId, letter)
                 : FinanceDecisionDto.verified(transactionId, letter);
     }
@@ -186,14 +186,17 @@ public class FinanceVerificationService {
         }
         // Only money that actually arrived is promised back.
         if (row.isPresent() && returned.signum() > 0) {
-            tellBuyer(row.get(), returned, false, reason.trim(), Optional.empty(), false);
+            tellBuyer(row.get(), returned, false, reason.trim(), Optional.empty(), false, null);
         }
         return FinanceDecisionDto.of(transactionId, "rejected");
     }
 
-    /** Sent after this decision commits; a failed email leaves the decision standing. */
+    /**
+     * Sent after this decision commits; a failed email leaves the decision standing.
+     * {@code paidInFull}: the plan total when this payment completed a plan, else null.
+     */
     private void tellBuyer(FinanceQueueRow row, BigDecimal amount, boolean verified, String reason,
-                           Optional<AllocationLetterLookup.LetterRef> letter, boolean deposit) {
+                           Optional<AllocationLetterLookup.LetterRef> letter, boolean deposit, BigDecimal paidInFull) {
         identityApi.emailOf(row.buyerUserId()).ifPresent(to -> buyerNotifier.afterCommit(
                 verified ? "purchase verified" : "purchase rejected",
                 () -> alerts.purchaseDecided(new SettlementAlertSender.PurchaseDecisionAlert(to, row.plotLabel(),
@@ -201,7 +204,8 @@ public class FinanceVerificationService {
                         buyerNotifier.purchaseUrl(row.transactionId()),
                         letter.map(AllocationLetterLookup.LetterRef::number).orElse(null),
                         letter.map(l -> buyerNotifier.letterUrl(l.id())).orElse(null),
-                        verified && deposit ? row.planName() : null, verified && deposit && row.isFlexible()))));
+                        verified && deposit ? row.planName() : null, verified && deposit && row.isFlexible(),
+                        paidInFull == null ? null : paidInFull.toPlainString()))));
     }
 
     private FinanceQueueItemDto toItem(FinanceQueueRow row) {
@@ -285,7 +289,7 @@ public class FinanceVerificationService {
         gainShares.settleOn(payment.getTransactionId(), actor);
         log.info("Plan for transaction {} paid in full; verified by finance user {}", payment.getTransactionId(), actor);
         Optional<AllocationLetterLookup.LetterRef> letter = letterLookup.letterFor(payment.getTransactionId());
-        tellBuyer(pp.row(), payment.getAmount(), true, null, letter, false);
+        tellBuyer(pp.row(), payment.getAmount(), true, null, letter, false, pp.schedule().planTotal());
         return FinanceDecisionDto.verified(payment.getTransactionId(), letter);
     }
 
@@ -306,7 +310,7 @@ public class FinanceVerificationService {
                 describe(payment, pp.schedule()) + " " + payment.getReference()
                         + (pp.row().planEnded() ? " rejected by finance after the plan ended; flagged for a "
                         + "full refund." : " rejected by finance and flagged for refund; the plan continues.")));
-        tellBuyer(pp.row(), payment.getAmount(), false, reason, Optional.empty(), false);
+        tellBuyer(pp.row(), payment.getAmount(), false, reason, Optional.empty(), false, null);
         return FinanceDecisionDto.of(payment.getTransactionId(), pp.row().planStatus());
     }
 
@@ -382,7 +386,7 @@ public class FinanceVerificationService {
         log.info("Flexible plan for transaction {} paid in full; verified by finance user {}",
                 payment.getTransactionId(), actor);
         Optional<AllocationLetterLookup.LetterRef> letter = letterLookup.letterFor(payment.getTransactionId());
-        tellBuyer(c.row(), payment.getAmount(), true, null, letter, false);
+        tellBuyer(c.row(), payment.getAmount(), true, null, letter, false, c.progress().plan().planTotal());
         return FinanceDecisionDto.verified(payment.getTransactionId(), letter);
     }
 
@@ -402,7 +406,7 @@ public class FinanceVerificationService {
         auditApi.record(AuditEntryRequest.of(actor, "payment.refund_due", "payment", payment.getId(), tenantId,
                 "Contribution " + payment.getReference() + " rejected by finance and flagged for refund; the plan "
                         + "continues."));
-        tellBuyer(c.row(), payment.getAmount(), false, reason, Optional.empty(), false);
+        tellBuyer(c.row(), payment.getAmount(), false, reason, Optional.empty(), false, null);
         return FinanceDecisionDto.of(payment.getTransactionId(), c.row().planStatus());
     }
 

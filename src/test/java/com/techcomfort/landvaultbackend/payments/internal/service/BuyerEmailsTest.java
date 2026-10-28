@@ -46,7 +46,7 @@ class BuyerEmailsTest {
 
         SimpleMailMessage message = sent();
         assertThat(message.getSubject()).isEqualTo("Good news: Block A, Plot 7 at Double King is yours");
-        assertThat(message.getText()).contains("NGN 15000000.00").contains("verified").contains(URL)
+        assertThat(message.getText()).contains("₦15,000,000.00").contains("verified").contains(URL)
                 .contains("Your allocation letter, HT-ALC-2026-000012, is ready").contains(LETTER_URL);
     }
 
@@ -58,10 +58,74 @@ class BuyerEmailsTest {
 
         SimpleMailMessage message = sent();
         assertThat(message.getSubject()).isEqualTo("Deposit verified: Block A, Plot 7 at Double King is held for you");
-        assertThat(message.getText()).contains("deposit of NGN 4950000.00 on the 12-month plan")
+        assertThat(message.getText()).contains("deposit of ₦4,950,000.00 on the 12-month plan")
                 .contains("becomes yours when every instalment is paid and verified")
                 .contains("Your provisional allocation letter, HT-PAL-2026-000001, is ready").contains(LETTER_URL)
                 .doesNotContain("is yours");
+    }
+
+    /** A plan name that isn't "… plan" is quoted, and amounts at any scale print as naira. */
+    @Test
+    void aFlexibleFirstPaymentNamesThePlanAsAPlan() {
+        sender.purchaseDecided(new SettlementAlertSender.PurchaseDecisionAlert("b@example.com", "Block A, Plot 7",
+                "Double King", "5000000.0000", true, null, URL, "HT-PAL-2026-000002", LETTER_URL, "Pay as you can",
+                true, null));
+
+        assertThat(sent().getText()).contains("first payment of ₦5,000,000.00 on the \"Pay as you can\" plan")
+                .doesNotContain("NGN");
+    }
+
+    /** Found in the flexible-plan walkthrough: a plan's last payment says the plan is paid in full, with its total. */
+    @Test
+    void aCompletedPlanSaysItIsPaidInFull() {
+        sender.purchaseDecided(new SettlementAlertSender.PurchaseDecisionAlert("b@example.com", "Block A, Plot 7",
+                "Double King", "6500000.00", true, null, URL, "HT-ALC-2026-000014", LETTER_URL, null, false,
+                "16500000.00"));
+
+        SimpleMailMessage message = sent();
+        assertThat(message.getSubject()).isEqualTo("Good news: Block A, Plot 7 at Double King is yours");
+        assertThat(message.getText()).contains("your plan is now paid in full (₦16,500,000.00)")
+                .contains("payment of ₦6,500,000.00");
+    }
+
+    /** Flexible withdrawal: the plan's own terms, the gain share still to come, and the developer's own list. */
+    @Test
+    void aFlexibleWithdrawalNamesThePlanTheGainShareAndTheFlexiblePlansList() {
+        sender.planWithdrawn(new SettlementAlertSender.WithdrawalAlert("b@example.com", false, "LV-1", "Pay as you can",
+                "2000000.00", "1600000.00", "400000.00", null, null, URL, true, "15000000.00", "40"));
+        sender.planWithdrawn(new SettlementAlertSender.WithdrawalAlert("ed@example.com", true, "LV-1", "Pay as you can",
+                "2000000.00", "1600000.00", "400000.00", null, null, null, true, "15000000.00", "40"));
+
+        ArgumentCaptor<SimpleMailMessage> captor = ArgumentCaptor.forClass(SimpleMailMessage.class);
+        verify(mail, times(2)).send(captor.capture());
+        assertThat(captor.getAllValues().get(0).getText())
+                .contains("withdrawn from the \"Pay as you can\" plan", "Returned to the buyer:       ₦1,600,000.00",
+                        "sells the plot for more than ₦15,000,000.00, you receive 40% of the difference")
+                .doesNotContain("instalment plan", "NGN");
+        assertThat(captor.getAllValues().get(1).getText())
+                .contains("on the exit terms of that plan", "Finance > Flexible plans")
+                .doesNotContain("instalment plan", "your estate declared");
+    }
+
+    @Test
+    void anInstalmentWithdrawalKeepsItsWordingAndNamesNoGainShare() {
+        sender.planWithdrawn(new SettlementAlertSender.WithdrawalAlert("b@example.com", false, "LV-1", "12-month plan",
+                "2000000.00", "1600000.00", "400000.00", null, null, URL, false, "15000000.00", null));
+
+        assertThat(sent().getText()).contains("withdrawn from the instalment plan (12-month plan)")
+                .doesNotContain("difference");
+    }
+
+    /** A notice says the least a payment may be, not "any amount", when the plan declares a minimum. */
+    @Test
+    void aQuietPlanNoticeStatesTheMinimumPayment() {
+        sender.quietPlan(new SettlementAlertSender.QuietPlanAlert("b@example.com",
+                SettlementAlertSender.RevocationStage.NOTICE, "LV-1", "Pay as you can", "Block C, Plot 6",
+                "inactivity", 6, "27 March 2026", null, "14000000.00", "26 November 2026", "1200000.00",
+                "300000.00", "No payment in 7 months.", URL, "100000.00"));
+
+        assertThat(sent().getText()).contains("make a payment of at least ₦100,000.00 by 26 November 2026")
+                .doesNotContain("any amount");
     }
 
     @Test
@@ -79,7 +143,7 @@ class BuyerEmailsTest {
 
         SimpleMailMessage message = sent();
         assertThat(message.getSubject()).isEqualTo("Your payment for Block A, Plot 7 is being returned");
-        assertThat(message.getText()).contains("Charged back by the bank.").contains("full NGN 15000000.00")
+        assertThat(message.getText()).contains("Charged back by the bank.").contains("full ₦15,000,000.00")
                 .contains(URL).doesNotContainIgnoringCase("days");
     }
 

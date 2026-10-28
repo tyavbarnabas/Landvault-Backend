@@ -1,5 +1,6 @@
 package com.techcomfort.landvaultbackend.payments.internal.service;
 
+import com.techcomfort.landvaultbackend.common.PlanNames;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -9,6 +10,10 @@ import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
 import java.util.Locale;
 
 /** Sends the payout-account alert by SMTP — same arrangement as the invitation and OTP emails. */
@@ -68,13 +73,13 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
 
                     Company:   %s
                     Payout:    %s (%s)
-                    Amount:    NGN %s
+                    Amount:    %s
                     Status:    %s
 
                 %s
 
                 Open the payouts screen to review it and, if needed, pay that part again.
-                """.formatted(alert.companyName(), alert.payoutReference(), alert.part(), alert.amount(),
+                """.formatted(alert.companyName(), alert.payoutReference(), alert.part(), naira(alert.amount()),
                 alert.status(), alert.detail()));
         mailSender.send(message);
         log.info("Payout problem alert delivered to a Super Admin for {}", alert.companyName());
@@ -89,13 +94,13 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
         message.setText("""
                 Hello,
 
-                We're refunding NGN %s for your payment %s. Because it was paid by bank transfer, the payment \
+                We're refunding %s for your payment %s. Because it was paid by bank transfer, the payment \
                 provider needs to know which account to send it to.
 
                 Add a bank account in your own name to receive it:
 
                     %s
-                """.formatted(alert.amount(), alert.paymentReference(), alert.purchaseUrl()));
+                """.formatted(naira(alert.amount()), alert.paymentReference(), alert.purchaseUrl()));
         mailSender.send(message);
         log.info("Refund account request delivered to a buyer");
     }
@@ -110,11 +115,11 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
                 A HomeTrue refund needs attention.
 
                     Payment:   %s
-                    Amount:    NGN %s
+                    Amount:    %s
                     Status:    %s
 
                 %s
-                """.formatted(alert.paymentReference(), alert.amount(), alert.status(), alert.detail()));
+                """.formatted(alert.paymentReference(), naira(alert.amount()), alert.status(), alert.detail()));
         mailSender.send(message);
         log.info("Refund problem alert delivered to a Super Admin");
     }
@@ -129,13 +134,13 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
             message.setText("""
                     Hello,
 
-                    Your payment of NGN %s arrived after your reservation had ended. The plot was still \
+                    Your payment of %s arrived after your reservation had ended. The plot was still \
                     available, so it has been allocated to you: %s, %s.
                     %s
                     See your purchase:
 
                         %s
-                    """.formatted(alert.amount(), alert.plotLabel(), alert.estateName(),
+                    """.formatted(naira(alert.amount()), alert.plotLabel(), alert.estateName(),
                     letterParagraph("allocation letter", alert.letterNumber(), alert.letterUrl()),
                     alert.purchaseUrl()));
         } else {
@@ -143,13 +148,13 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
             message.setText("""
                     Hello,
 
-                    Your payment of NGN %s arrived after your reservation for %s, %s had ended, and it \
+                    Your payment of %s arrived after your reservation for %s, %s had ended, and it \
                     couldn't be allocated: %s
 
                     The full amount is being returned to you. Follow the refund on your purchase:
 
                         %s
-                    """.formatted(alert.amount(), alert.plotLabel(), alert.estateName(), alert.reason(),
+                    """.formatted(naira(alert.amount()), alert.plotLabel(), alert.estateName(), alert.reason(),
                     alert.purchaseUrl()));
         }
         mailSender.send(message);
@@ -168,14 +173,15 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
             message.setText("""
                     Hello,
 
-                    The developer has verified your first payment of NGN %s on the %s. %s, %s is now held for \
+                    The developer has verified your first payment of %s on %s. %s, %s is now held for \
                     you, and becomes yours when the plan total is paid and verified. You can pay any amount, at \
                     any time, until then.
                     %s
                     See your purchase:
 
                         %s
-                    """.formatted(alert.amount(), alert.planName(), alert.plotLabel(), alert.estateName(),
+                    """.formatted(naira(alert.amount()), PlanNames.phrase(alert.planName()), alert.plotLabel(),
+                    alert.estateName(),
                     letterParagraph("provisional allocation letter", alert.letterNumber(), alert.letterUrl()),
                     alert.purchaseUrl()));
         } else if (alert.verified() && alert.planName() != null) {
@@ -185,27 +191,42 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
             message.setText("""
                     Hello,
 
-                    The developer has verified your deposit of NGN %s on the %s. %s, %s is now held for you on \
+                    The developer has verified your deposit of %s on %s. %s, %s is now held for you on \
                     the plan, and becomes yours when every instalment is paid and verified.
                     %s
                     See your purchase and its schedule:
 
                         %s
-                    """.formatted(alert.amount(), alert.planName(), alert.plotLabel(), alert.estateName(),
+                    """.formatted(naira(alert.amount()), PlanNames.phrase(alert.planName()), alert.plotLabel(),
+                    alert.estateName(),
                     letterParagraph("provisional allocation letter", alert.letterNumber(), alert.letterUrl()),
                     alert.purchaseUrl()));
+        } else if (alert.verified() && alert.paidInFull() != null) {
+            // A plan's last payment: the plan is paid in full, not "your payment of" its last part.
+            message.setSubject("Good news: " + alert.plotLabel() + " at " + alert.estateName() + " is yours");
+            message.setText("""
+                    Hello,
+
+                    The developer has verified your payment of %s, and your plan is now paid in full \
+                    (%s). The plot is allocated to you: %s, %s.
+                    %s
+                    See your purchase:
+
+                        %s
+                    """.formatted(naira(alert.amount()), naira(alert.paidInFull()), alert.plotLabel(), alert.estateName(),
+                    letterParagraph("allocation letter", alert.letterNumber(), alert.letterUrl()), alert.purchaseUrl()));
         } else if (alert.verified()) {
             message.setSubject("Good news: " + alert.plotLabel() + " at " + alert.estateName() + " is yours");
             message.setText("""
                     Hello,
 
-                    The developer has verified your payment of NGN %s, and the plot is allocated to you: \
+                    The developer has verified your payment of %s, and the plot is allocated to you: \
                     %s, %s.
                     %s
                     See your purchase:
 
                         %s
-                    """.formatted(alert.amount(), alert.plotLabel(), alert.estateName(),
+                    """.formatted(naira(alert.amount()), alert.plotLabel(), alert.estateName(),
                     letterParagraph("allocation letter", alert.letterNumber(), alert.letterUrl()), alert.purchaseUrl()));
         } else {
             message.setSubject("Your payment for " + alert.plotLabel() + " is being returned");
@@ -214,10 +235,10 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
 
                     The developer didn't accept your payment for %s, %s. Their reason: %s
 
-                    The full NGN %s is being returned to you. Follow the refund on your purchase:
+                    The full %s is being returned to you. Follow the refund on your purchase:
 
                         %s
-                    """.formatted(alert.plotLabel(), alert.estateName(), alert.reason(), alert.amount(),
+                    """.formatted(alert.plotLabel(), alert.estateName(), alert.reason(), naira(alert.amount()),
                     alert.purchaseUrl()));
         }
         mailSender.send(message);
@@ -234,15 +255,15 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
         message.setText("""
                 Hello,
 
-                The developer has verified your instalment of NGN %s for %s, %s. You have now paid %d of %d \
+                The developer has verified your instalment of %s for %s, %s. You have now paid %d of %d \
                 instalments.
                 %s
                 See your purchase and its schedule:
 
                     %s
-                """.formatted(alert.amount(), alert.plotLabel(), alert.estateName(), alert.instalmentsPaid(),
+                """.formatted(naira(alert.amount()), alert.plotLabel(), alert.estateName(), alert.instalmentsPaid(),
                 alert.instalmentCount(), alert.nextDueDate() == null ? ""
-                        : "\nYour next instalment, NGN " + alert.nextDueAmount() + ", is due on " + alert.nextDueDate()
+                        : "\nYour next instalment, " + naira(alert.nextDueAmount()) + ", is due on " + alert.nextDueDate()
                         + ".\n", alert.purchaseUrl()));
         mailSender.send(message);
         log.info("Instalment verification delivered to a buyer");
@@ -258,14 +279,14 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
         message.setText("""
                 Hello,
 
-                The developer has verified your payment of NGN %s for %s, %s. You have now paid NGN %s, and \
-                NGN %s is left. You can pay any amount, at any time, until it's finished.
+                The developer has verified your payment of %s for %s, %s. You have now paid %s, and \
+                %s is left. You can pay any amount, at any time, until it's finished.
 
                 See your purchase:
 
                     %s
-                """.formatted(alert.amount(), alert.plotLabel(), alert.estateName(), alert.paidSoFar(),
-                alert.remaining(), alert.purchaseUrl()));
+                """.formatted(naira(alert.amount()), alert.plotLabel(), alert.estateName(), naira(alert.paidSoFar()),
+                naira(alert.remaining()), alert.purchaseUrl()));
         mailSender.send(message);
         log.info("Contribution verification delivered to a buyer");
     }
@@ -288,7 +309,7 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
                         The developer has given notice on your %s: %s
 
                         %s If not, from the day after, the developer may end the plan on the terms for leaving: you \
-                        would get back NGN %s, and the developer keeps NGN %s. You can also leave now on those same \
+                        would get back %s, and the developer keeps %s. You can also leave now on those same \
                         terms.
 
                         The developer's reason: %s
@@ -296,10 +317,12 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
                                 ? "the plan was due to be finished by " + alert.finishBy() + "."
                                 : "no payment has been made since " + alert.lastPaymentOn() + ", and the plan allows "
                                 + alert.inactivityMonths() + " months without one.",
-                        finishBy ? "To keep the plot, finish the plan (NGN " + alert.remaining() + " is left) by "
+                        finishBy ? "To keep the plot, finish the plan (" + naira(alert.remaining()) + " is left) by "
                                 + alert.deadline() + "."
-                                : "To keep the plan going, make a payment of any amount by " + alert.deadline() + ".",
-                        alert.refund(), alert.developerKeeps(), alert.note());
+                                : "To keep the plan going, make a payment of " + (alert.minimumPayment() == null
+                                ? "any amount" : "at least " + naira(alert.minimumPayment())) + " by " + alert.deadline()
+                                + ".",
+                        naira(alert.refund()), naira(alert.developerKeeps()), alert.note());
             }
             case CANCELLED -> {
                 subject = "Notice withdrawn: your plan for " + alert.plotLabel();
@@ -315,8 +338,8 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
                 subject = "Your plan for " + alert.plotLabel() + " has ended";
                 body = """
                         The developer has ended your %s after the notice ran out, on the terms for leaving. You will \
-                        get back NGN %s; the developer keeps NGN %s. HomeTrue sends the refund to you.
-                        """.formatted(plan, alert.refund(), alert.developerKeeps());
+                        get back %s; the developer keeps %s. HomeTrue sends the refund to you.
+                        """.formatted(plan, naira(alert.refund()), naira(alert.developerKeeps()));
             }
         }
         SimpleMailMessage message = new SimpleMailMessage();
@@ -334,14 +357,14 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
         sendGainShare(alert.to(), "Good news: a share of the sale of " + alert.plotLabel() + " is yours", """
                 Hello,
 
-                %s at %s, which you left, has been sold again through HomeTrue for NGN %s — NGN %s more than your \
-                agreed price of NGN %s. Your share of that is %s%%: NGN %s.%s
+                %s at %s, which you left, has been sold again through HomeTrue for %s — %s more than your \
+                agreed price of %s. Your share of that is %s%%: %s.%s
 
                 Tell us which bank account to send it to, in your HomeTrue account:
 
                     %s
-                """.formatted(alert.plotLabel(), alert.estateName(), alert.salePrice(), alert.gain(),
-                alert.agreedPrice(), alert.buyerSharePct(), alert.amount(), alert.capped()
+                """.formatted(alert.plotLabel(), alert.estateName(), naira(alert.salePrice()), naira(alert.gain()),
+                naira(alert.agreedPrice()), alert.buyerSharePct(), naira(alert.amount()), alert.capped()
                         ? " (This is all the developer's payout from the sale could cover.)" : "", alert.url()));
     }
 
@@ -350,11 +373,11 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
         sendGainShare(alert.to(), "Payout note: " + alert.plotLabel() + " at " + alert.estateName(), """
                 Hello,
 
-                %s at %s (purchase %s) has sold for NGN %s. An earlier buyer of the plot left a flexible plan with \
-                a share of any later gain, as your declared terms set out, so NGN %s is paid to them out of this \
+                %s at %s (purchase %s) has sold for %s. An earlier buyer of the plot left a flexible plan with \
+                a share of any later gain, as your declared terms set out, so %s is paid to them out of this \
                 sale before your payout.
-                """.formatted(alert.plotLabel(), alert.estateName(), alert.purchaseReference(), alert.salePrice(),
-                alert.amount()));
+                """.formatted(alert.plotLabel(), alert.estateName(), alert.purchaseReference(), naira(alert.salePrice()),
+                naira(alert.amount())));
     }
 
     @Override
@@ -362,10 +385,10 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
         sendGainShare(alert.to(), "Your gain share is on its way", """
                 Hello,
 
-                HomeTrue has sent NGN %s of your gain share to %s ending %s. Banks can take a little while to show it.
+                HomeTrue has sent %s of your gain share to %s ending %s. Banks can take a little while to show it.
 
                     %s
-                """.formatted(alert.amount(), alert.bankName(), alert.accountLast4(), alert.url()));
+                """.formatted(naira(alert.amount()), alert.bankName(), alert.accountLast4(), alert.url()));
     }
 
     private void sendGainShare(String to, String subject, String text) {
@@ -385,44 +408,49 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
         message.setFrom(fromAddress);
         message.setTo(alert.to());
         String figures = """
-                Paid on the plan:            NGN %s
-                Returned to the buyer:       NGN %s
-                Kept by the developer:       NGN %s
-                """.formatted(alert.paid(), alert.refund(), alert.developerKeeps());
+                Paid on the plan:            %s
+                Returned to the buyer:       %s
+                Kept by the developer:       %s
+                """.formatted(naira(alert.paid()), naira(alert.refund()), naira(alert.developerKeeps()));
         if (alert.toDeveloper()) {
             message.setSubject("A buyer withdrew from their plan: " + alert.purchaseReference());
             message.setText("""
                     Hello,
 
-                    The buyer on purchase %s (%s) has withdrawn from their instalment plan, on the refund terms \
-                    your estate declared. The plot is back on sale.
+                    The buyer on purchase %s has withdrawn from %s, on %s. The plot is back on sale.
 
                     %s
                     HomeTrue returns the buyer's part from the money it holds in escrow. Your shares already \
                     verified are paid out as usual.%s%s
 
-                    See it under Finance > Plans in your HomeTrue portal.
-                    """.formatted(alert.purchaseReference(), alert.planName(), figures,
+                    See it under %s in your HomeTrue portal.
+                    """.formatted(alert.purchaseReference(), planPhrase(alert),
+                    alert.flexible() ? "the exit terms of that plan" : "the refund terms your estate declared", figures,
                     alert.awaitingFinance() == null ? "" : "\n\nOne payment is still waiting for your finance team to "
-                            + "verify it. Your share of it, NGN " + alert.awaitingFinance() + ", is held for you and "
+                            + "verify it. Your share of it, " + naira(alert.awaitingFinance()) + ", is held for you and "
                             + "paid out once it is verified.",
-                    alert.reason() == null ? "" : "\n\nThe buyer's reason: " + alert.reason()));
+                    alert.reason() == null ? "" : "\n\nThe buyer's reason: " + alert.reason(),
+                    alert.flexible() ? "Finance > Flexible plans" : "Finance > Plans"));
         } else {
             message.setSubject("You have withdrawn from your plan: " + alert.purchaseReference());
             message.setText("""
                     Hello,
 
-                    You have withdrawn from your instalment plan (%s) for purchase %s, on the refund terms set \
-                    out in your offer letter. The plot is no longer held for you.
+                    You have withdrawn from %s for purchase %s, on the terms set out in your offer letter. The plot is no \
+                    longer held for you.
 
                     %s
                     HomeTrue holds your part and returns it to you through the payment provider, payment by \
-                    payment. We'll email you if we need a bank account from you.
+                    payment. We'll email you if we need a bank account from you.%s
 
                     See your purchase and the refund:
 
                         %s
-                    """.formatted(alert.planName(), alert.purchaseReference(), figures, alert.purchaseUrl()));
+                    """.formatted(planPhrase(alert), alert.purchaseReference(), figures,
+                    alert.buyerGainSharePct() == null ? "" : "\n\nIf HomeTrue later sells the plot for more than "
+                            + naira(alert.agreedPrice()) + ", you receive " + alert.buyerGainSharePct() + "% of the "
+                            + "difference. We'll email you if that happens.",
+                    alert.purchaseUrl()));
         }
         mailSender.send(message);
         log.info("Plan withdrawal delivered to the {}", alert.toDeveloper() ? "developer" : "buyer");
@@ -446,21 +474,21 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
 
                         Pay what is overdue by the end of %s and the notice stops. Paying today would cost:
 
-                            NGN %s
+                            %s
 
                         If it is not paid by then, the developer may revoke the plan. The plot would no longer \
                         be held for you, and HomeTrue would return to you exactly what withdrawing returns:
 
-                            Returned to you:         NGN %s
-                            Kept by the developer:   NGN %s
+                            Returned to you:         %s
+                            Kept by the developer:   %s
 
                         You may also withdraw yourself at any time, on the same terms.%s
 
                         See your plan and pay:
 
                             %s
-                        """.formatted(plot, alert.afterMonths(), alert.deadline(), alert.totalDue(), alert.refund(),
-                        alert.developerKeeps(), alert.note() == null ? "" : "\n\nThe developer's reason: " + alert.note(),
+                        """.formatted(plot, alert.afterMonths(), alert.deadline(), naira(alert.totalDue()), naira(alert.refund()),
+                        naira(alert.developerKeeps()), alert.note() == null ? "" : "\n\nThe developer's reason: " + alert.note(),
                         alert.purchaseUrl()));
             }
             case CANCELLED -> {
@@ -498,14 +526,14 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
                         HomeTrue returns to you exactly what withdrawing would have returned, from the money it \
                         holds:
 
-                            Returned to you:         NGN %s
-                            Kept by the developer:   NGN %s
+                            Returned to you:         %s
+                            Kept by the developer:   %s
 
                         It is paid back through the payment provider, payment by payment. We'll email you if we \
                         need a bank account from you.
 
                             %s
-                        """.formatted(plot, alert.refund(), alert.developerKeeps(), alert.purchaseUrl()));
+                        """.formatted(plot, naira(alert.refund()), naira(alert.developerKeeps()), alert.purchaseUrl()));
             }
         }
         mailSender.send(message);
@@ -521,17 +549,17 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
         message.setText("""
                 Hello,
 
-                The developer has waived NGN %s of the late-payment penalty on instalment %d of your instalment \
+                The developer has waived %s of the late-payment penalty on instalment %d of your instalment \
                 plan for %s (purchase %s, %s).
 
                 Their reason: %s
 
-                Penalty still owed on that instalment today: NGN %s. The instalment itself is still due; if it \
+                Penalty still owed on that instalment today: %s. The instalment itself is still due; if it \
                 stays unpaid long enough to reach a higher penalty step, the difference applies.
 
                     %s
-                """.formatted(alert.waived(), alert.instalmentSequence(), alert.plotLabel(), alert.purchaseReference(),
-                alert.planName(), alert.reason(), alert.stillOwed(), alert.purchaseUrl()));
+                """.formatted(naira(alert.waived()), alert.instalmentSequence(), alert.plotLabel(), alert.purchaseReference(),
+                alert.planName(), alert.reason(), naira(alert.stillOwed()), alert.purchaseUrl()));
         mailSender.send(message);
         log.info("Penalty waiver delivered to the buyer");
     }
@@ -649,7 +677,7 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
     @Override
     public void instalmentReminder(InstalmentReminderAlert alert) {
         String instalment = "Instalment " + alert.sequence() + " of " + alert.instalmentCount();
-        String what = instalment + " for " + alert.plotLabel() + ", " + alert.estateName() + ", NGN " + alert.amount();
+        String what = instalment + " for " + alert.plotLabel() + ", " + alert.estateName() + ", " + naira(alert.amount());
         String subject;
         String body;
         switch (alert.stage()) {
@@ -670,9 +698,9 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
                 subject = instalment + " is in arrears";
                 body = what + ", was due on " + alert.dueDate() + " and is now in arrears."
                         + (alert.penalty() == null
-                        ? " Paying it now, NGN " + alert.totalDue() + ", brings your plan back up to date."
-                        : " A late-payment penalty of NGN " + alert.penalty() + " applies, as set out in your offer "
-                        + "letter, so paying it now is NGN " + alert.totalDue() + " and brings your plan back up "
+                        ? " Paying it now, " + naira(alert.totalDue()) + ", brings your plan back up to date."
+                        : " A late-payment penalty of " + naira(alert.penalty()) + " applies, as set out in your offer "
+                        + "letter, so paying it now is " + naira(alert.totalDue()) + " and brings your plan back up "
                         + "to date.")
                         + " If it stays unpaid, the developer may take the steps set out in your offer letter.";
             }
@@ -694,6 +722,17 @@ public class EmailSettlementAlertSender implements SettlementAlertSender {
                 """.formatted(body, alert.purchaseUrl()));
         mailSender.send(message);
         log.info("Instalment reminder ({}) delivered to a buyer", alert.stage());
+    }
+
+    /** "the \"Pay as you can\" plan" for a flexible plan; "the instalment plan (12-month plan)" otherwise. */
+    private static String planPhrase(WithdrawalAlert alert) {
+        return alert.flexible() ? PlanNames.phrase(alert.planName()) : "the instalment plan (" + alert.planName() + ")";
+    }
+
+    /** Amounts reach this class as plain naira strings ("6500000.0000"); every email prints them as ₦6,500,000.00. */
+    private static String naira(String plain) {
+        return "₦" + new DecimalFormat("#,##0.00", DecimalFormatSymbols.getInstance(Locale.UK))
+                .format(new BigDecimal(plain).setScale(2, RoundingMode.HALF_UP));
     }
 
     /** Names the allocation letter and links to it; a blank line when there is none (never expected once allocated). */

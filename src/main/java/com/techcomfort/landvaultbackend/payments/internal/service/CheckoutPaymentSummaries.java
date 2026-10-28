@@ -136,9 +136,10 @@ public class CheckoutPaymentSummaries implements PaymentSummaryProvider {
         return out;
     }
 
-    /** The successful attempt if any, otherwise the newest. */
+    /** The newest successful attempt if any (a plan has many), otherwise the newest. */
     private static Payment choose(List<Payment> attempts) {
-        return attempts.stream().filter(p -> p.getStatus() == PaymentStatus.SUCCEEDED).findFirst()
-                .orElseGet(() -> attempts.stream().max(Comparator.comparing(Payment::getCreatedAt)).orElseThrow());
+        Comparator<Payment> newest = Comparator.comparing(Payment::getCreatedAt);
+        return attempts.stream().filter(p -> p.getStatus() == PaymentStatus.SUCCEEDED).max(newest)
+                .orElseGet(() -> attempts.stream().max(newest).orElseThrow());
     }
 }
