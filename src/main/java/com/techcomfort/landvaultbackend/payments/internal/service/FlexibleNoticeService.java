@@ -58,6 +58,7 @@ public class FlexibleNoticeService {
     private final SettlementAlertSender alerts;
     private final BuyerNotifier buyerNotifier;
     private final GainShareService gainShares;
+    private final FlexibleStandings flexibleStandings;
 
     /** The purchase is this company's flexible plan (any status), visible to the caller. */
     boolean handles(UUID transactionId, TenantScope scope) {
@@ -81,8 +82,9 @@ public class FlexibleNoticeService {
         LocalDate today = PlanStandings.today();
         List<Payment> all = payments.findAllByTransactionIdOrderByCreatedAtAsc(transactionId);
         LocalDate last = FlexibleStandings.lastPaymentOn(all);
-        NoticeTrigger trigger = FlexibleStandings.trigger(plan, FlexibleProgress.of(plan, all), last, today)
-                .orElseThrow(() -> new PaymentException.RevocationNotDue(notDue(plan, last)));
+        int paused = flexibleStandings.pausedDays(transactionId, all, today);
+        NoticeTrigger trigger = FlexibleStandings.trigger(plan, FlexibleProgress.of(plan, all), last, today, paused)
+                .orElseThrow(() -> new PaymentException.RevocationNotDue(notDue(plan, last, paused)));
         PlanRevocation notice = revocations.saveAndFlush(PlanRevocation.builder()
                 .transactionId(transactionId)
                 .sellerTenantId(scope.tenantId())
@@ -139,7 +141,8 @@ public class FlexibleNoticeService {
             throw new PaymentException.RevocationNotDue("The buyer has paid, and the payment is waiting for your "
                     + "finance team to verify it. Verify or reject it first.");
         }
-        if (FlexibleStandings.trigger(plan, progress, FlexibleStandings.lastPaymentOn(all), today).isEmpty()) {
+        if (FlexibleStandings.trigger(plan, progress, FlexibleStandings.lastPaymentOn(all), today,
+                flexibleStandings.pausedDays(transactionId, all, today)).isEmpty()) {
             throw new PaymentException.RevocationNotDue("The plan isn't quiet any more: the buyer has paid since. "
                     + "Withdraw the notice instead.");
         }
@@ -179,8 +182,11 @@ public class FlexibleNoticeService {
         FlexibleStanding standing = null;
         RevocationDto.Settlement settlement = null;
         if (running) {
-            standing = FlexibleStandings.standing(plan, payments.findAllByTransactionIdOrderByCreatedAtAsc(purchase.id()),
-                    history.stream().filter(PlanRevocation::isOpen).findFirst().orElse(null), PlanStandings.today());
+            List<Payment> all = payments.findAllByTransactionIdOrderByCreatedAtAsc(purchase.id());
+            LocalDate today = PlanStandings.today();
+            standing = FlexibleStandings.standing(plan, all,
+                    history.stream().filter(PlanRevocation::isOpen).findFirst().orElse(null), today,
+                    flexibleStandings.pausedDays(purchase.id(), all, today));
             WithdrawalService.Quote q = withdrawals.preview(purchase);
             settlement = new RevocationDto.Settlement(q.paid(), q.refund(), q.developerKeeps(), q.currency());
         } else if (purchase.isRevoked() || purchase.isWithdrawn()) {
@@ -202,10 +208,11 @@ public class FlexibleNoticeService {
         return afterFinish != null && afterFinish.isBefore(standing.quietFrom()) ? afterFinish : standing.quietFrom();
     }
 
-    private static String notDue(FlexiblePurchase plan, LocalDate last) {
+    private static String notDue(FlexiblePurchase plan, LocalDate last, int pausedDays) {
         return "A flexible plan can be given notice once no payment has come in for " + plan.inactivityMonths()
-                + " months — this one from " + last.plusMonths(plan.inactivityMonths()) + ", its last payment being on "
-                + last + (plan.finishBy() == null ? "" : " — or after its date to finish by, " + plan.finishBy())
+                + " months — this one from " + FlexibleStandings.quietFrom(plan, last, pausedDays)
+                + ", its last payment being on " + last + (pausedDays == 0 ? "" : " and its listing for sale having "
+                + "paused the clock for " + pausedDays + " days") + (plan.finishBy() == null ? "" : " — or after its date to finish by, " + plan.finishBy())
                 + ". A payment waiting for your finance to verify counts.";
     }
 

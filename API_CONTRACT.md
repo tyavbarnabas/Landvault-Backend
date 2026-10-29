@@ -866,6 +866,22 @@ agreedPrice, paid, paidInAll, developerPrice, lowestPrice, thresholds, consentRe
 - `consentRequired`: the estate's terms need the developer's consent to a transfer; `notHandled`: what HomeTrue
   doesn't charge or withhold (recurring charges, consent/registration fees, capital gains tax) — show before listing.
 
+**Phase 2, listing** (changeset 116) — new permission `client.resale.manage` (buyer; add it to `authService.ts`):
+- `POST /api/resale/listings` `{ plotId (owned-plot or transaction id), price? }` → 201 `ResaleListing`. Every
+  condition of the read is checked again (409 `RESALE_NOT_ALLOWED`, all reasons in `message`); one live listing per
+  plot (409 `ALREADY_LISTED`). An early sale takes **no** `price`; otherwise it is required (`INVALID_PRICE`).
+- `GET /api/resale/listings/mine` → `ResaleListing[]`, newest first, every status.
+- `PUT /api/resale/listings/{id}` `{ price }` — not on an early sale (`INVALID_PRICE`); 409 `LISTING_NOT_LIVE`.
+- `POST /api/resale/listings/{id}/withdraw` — 409 `LISTING_NOT_LIVE`. Another buyer's listing is 404
+  `LISTING_NOT_FOUND`.
+- `ResaleListing`: `{ id, transactionId, transactionReference, kind, status (listed | withdrawn | expired | ended),
+  earlySale, price (asking, or the developer's current price on an early sale), currency, listedAt, expiresAt,
+  closedAt, closeReason (in_arrears | notice_running | estate_not_listed | early_sale_below_agreed_price |
+  plan_ended), closeMessage, pausesInactivity, quote }` (`quote` as on the read, while listed).
+- A listing **comes down by itself** once a day: 90 days after listing (`expired`), or by a rule (`ended`). A
+  payment waiting for finance doesn't take it down. On a flexible plan the first listing stops the inactivity
+  clock while it is up (the plan's `quietFrom` moves on by those days); relisting doesn't.
+
 The frontend mock's earlier shape, kept for reference until the later phases replace it:
 
 | Method | Path | Request | Response |

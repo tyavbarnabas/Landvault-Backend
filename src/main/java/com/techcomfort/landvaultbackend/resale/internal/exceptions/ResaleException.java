@@ -19,4 +19,29 @@ public abstract class ResaleException extends RuntimeException {
             super(message);
         }
     }
+
+    /** A plot that can't be listed now; every reason is in the message. */
+    public static class NotAllowed extends ResaleException {
+        public NotAllowed(String message) {
+            super(message);
+        }
+    }
+
+    public static class AlreadyListed extends ResaleException {
+        public AlreadyListed() {
+            super("This plot is already listed. Change its price or take it down instead.");
+        }
+    }
+
+    public static class ListingNotFound extends ResaleException {
+        public ListingNotFound() {
+            super("No such listing of yours.");
+        }
+    }
+
+    public static class ListingNotLive extends ResaleException {
+        public ListingNotLive(String status) {
+            super("This listing is " + status + ", so it can't be changed. List the plot again instead.");
+        }
+    }
 }

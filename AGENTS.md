@@ -6900,6 +6900,29 @@ fixed price, no offers; the new buyer pays in full; the developer is always paid
 
 Proven red: the early sale's 100% gain to the developer (the seller was quoted ₦7M instead of the ₦5M paid).
 
+### Phase 2: listing (changeset 116)
+
+`POST /api/resale/listings` `{ plotId, price? }`, `GET .../mine`, `PUT .../{id}` `{ price }`, `POST .../{id}/withdraw`
+— new permission **`client.resale.manage`** (buyer). `ResaleListingService`, table `resale_listings`.
+
+- **Listing re-checks every condition of the eligibility read, when it is made** (409 `RESALE_NOT_ALLOWED`,
+  every reason in the message). One live listing per purchase (service check + partial unique index).
+- **An early sale stores no price** (a CHECK keeps it so): its price is always the developer's current one, so a
+  price given for one, or a change to it, is `INVALID_PRICE`. Otherwise the seller's price, under the read's rules.
+- **A listing comes down by itself** (`ResaleListingSweeper`, daily 00:30 Lagos, `landvault.resale.sweep-cron`;
+  platform scope; dev trigger `POST /api/dev/resale/sweep`): `EXPIRED` 90 days after listing; `ENDED` with a
+  `close_reason` when the plan ends, falls into arrears, notice is given, the estate leaves the marketplace, or an
+  early sale's developer price falls below the agreed price. **Not** when a payment waits for finance — a seller may
+  keep paying while listed (decided with the user); a buyer will be unable to hold it then (phase 5).
+- **The flexible pause (D24)**: the first listing on a flexible plan (`pauses_inactivity`) stops the inactivity
+  clock from listing until it comes down, never past its 90 days; relisting doesn't pause again; the date to finish
+  by never moves. The payments module reads it through **`payments.InactivityPauses`**, declared there and
+  implemented by resale (`ResaleInactivityPauses`) — the inverted shape, because resale will need payments for
+  payouts. `FlexibleStandings.quietFrom` = last payment + inactivity months + the paused days after that payment;
+  the notice routes, the standing and the not-due message all use it.
+
+Proven red: the pause (with no pauses read, notice was given on a listed plan).
+
 ## A buyer's address (changeset 097)
 
 Built 2026-10-21, decided with the user, so the allocation letter can name

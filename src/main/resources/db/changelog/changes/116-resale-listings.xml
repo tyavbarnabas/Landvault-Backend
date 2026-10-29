@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Sell my plot, phase 2 (decided with the user 2026-10-29): a buyer lists
+        a plot they own or are paying for. See AGENTS.md, "Sell my plot".
+
+        One row per listing, never edited into another listing: a relisting is
+        a new row. An early-sale listing (on a plan, before the profit
+        thresholds) stores no price — its price is always the developer's
+        current one — and a CHECK keeps the two kinds apart. A listing lasts 90
+        days (expires_at), then comes down by itself; it also comes down when
+        the plan falls into arrears, notice is given, the estate leaves the
+        marketplace or an early sale's developer price drops below the agreed
+        price (status ENDED, with the reason).
+
+        pauses_inactivity: on a flexible plan the FIRST listing stops the
+        inactivity clock for as long as it is up (at most its 90 days);
+        relisting doesn't pause it again.
+
+        Buyer-owned like transactions: not RLS-policied, reached by
+        seller_user_id (the seller) or by the sweep (platform scope). Never
+        deleted. One live listing per purchase.
+
+        client.resale.manage: listing is a different act from viewing one's
+        portfolio — the same reasoning that split client.checkout.reserve from
+        browsing. FRONTEND REQUIREMENT: add it to authService.ts.
+    -->
+    <changeSet id="116-resale-listings" author="landvault">
+        <sql><![CDATA[
+            CREATE TABLE resale_listings (
+                id                    uuid NOT NULL PRIMARY KEY,
+                tenant_id             uuid,
+                branch_id             uuid,
+                created_at            timestamp(6) with time zone NOT NULL,
+                updated_at            timestamp(6) with time zone,
+                created_by            varchar(255),
+                updated_by            varchar(255),
+                deleted               boolean NOT NULL DEFAULT false,
+
+                transaction_id        uuid NOT NULL REFERENCES transactions (id),
+                seller_user_id        uuid NOT NULL REFERENCES users (id),
+                seller_tenant_id      uuid NOT NULL REFERENCES organizations (id),
+                estate_id             uuid NOT NULL REFERENCES estates (id),
+                plot_id               uuid NOT NULL REFERENCES plots (id),
+                kind                  varchar(16) NOT NULL,
+                early_sale            boolean NOT NULL,
+                asking_price          numeric(19, 2),
+                currency              varchar(3) NOT NULL,
+                status                varchar(16) NOT NULL,
+                listed_at             timestamp(6) with time zone NOT NULL,
+                expires_at            timestamp(6) with time zone NOT NULL,
+                closed_at             timestamp(6) with time zone,
+                close_reason          varchar(40),
+                pauses_inactivity     boolean NOT NULL DEFAULT false,
+
+                CONSTRAINT chk_resale_listings_kind CHECK (kind IN ('PAID_IN_FULL', 'INSTALLMENT', 'FLEXIBLE')),
+                CONSTRAINT chk_resale_listings_status CHECK (status IN ('LISTED', 'WITHDRAWN', 'EXPIRED', 'ENDED')),
+                CONSTRAINT chk_resale_listings_price CHECK (early_sale = (asking_price IS NULL)
+                    AND (asking_price IS NULL OR asking_price > 0)),
+                CONSTRAINT chk_resale_listings_early CHECK (NOT early_sale OR kind <> 'PAID_IN_FULL'),
+                CONSTRAINT chk_resale_listings_pause CHECK (NOT pauses_inactivity OR kind = 'FLEXIBLE'),
+                CONSTRAINT chk_resale_listings_closed CHECK ((status = 'LISTED') = (closed_at IS NULL)
+                    AND (status = 'ENDED') = (close_reason IS NOT NULL))
+            );
+            CREATE UNIQUE INDEX uq_resale_listings_one_live ON resale_listings (transaction_id) WHERE status = 'LISTED';
+            CREATE INDEX idx_resale_listings_seller ON resale_listings (seller_user_id);
+            CREATE INDEX idx_resale_listings_live ON resale_listings (expires_at) WHERE status = 'LISTED';
+            REVOKE DELETE, TRUNCATE ON resale_listings FROM ${appDbUsername};
+            COMMENT ON TABLE resale_listings IS
+                'Sell my plot: a buyer''s listing of a plot they own or are paying for. LISTED until withdrawn, EXPIRED after 90 days, or ENDED by a rule (close_reason). An early sale has no asking_price: its price is the developer''s current one.';
+
+            INSERT INTO permissions (id, created_at, created_by, deleted, code, description) VALUES
+                (gen_random_uuid(), now(), 'system', false, 'client.resale.manage',
+                 'List one''s own plot for sale through HomeTrue, change its price or take it down.');
+            INSERT INTO role_permissions (id, created_at, created_by, deleted, role_id, permission_id)
+            SELECT gen_random_uuid(), now(), 'system', false, r.id, p.id
+            FROM roles r, permissions p
+            WHERE r.code = 'buyer' AND p.code = 'client.resale.manage';
+        ]]></sql>
+        <rollback><![CDATA[
+            DELETE FROM role_permissions WHERE permission_id IN (
+                SELECT id FROM permissions WHERE code = 'client.resale.manage');
+            DELETE FROM permissions WHERE code = 'client.resale.manage';
+            DROP TABLE resale_listings;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>
