@@ -67,4 +67,18 @@ public interface MarketplaceApi {
      * declared no default terms.
      */
     Optional<LatePaymentTerms> latePaymentTermsOf(UUID estateId);
+
+    /**
+     * Sell my plot, phase 1: what the developer charges for this plot today
+     * (whatever its status), through the public projection. Empty when the
+     * estate isn't listed.
+     */
+    Optional<CurrentPlotPrice> currentPriceOf(UUID plotId);
+
+    /**
+     * Sell my plot: whether the estate's declared terms say a transfer needs
+     * the developer's consent. Empty when the estate isn't listed or declares
+     * no default terms.
+     */
+    Optional<Boolean> transferRequiresConsent(UUID estateId);
 }

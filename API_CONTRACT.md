@@ -834,7 +834,40 @@ submits an NIN **only**.
 | GET | `/api/disputes?cursor&limit` | — | `Page<DisputeTicket>` |
 | POST | `/api/disputes` | `CreateDisputeInput` | `DisputeTicket` |
 
-## Resale — `resaleService.ts`
+## Resale — `resaleService.ts` — **"Sell my plot", phase 1 built** (read only)
+
+**Built and replacing the table below**: resale is "sell my plot", for buyers paid in full, on an instalment plan
+or on a flexible plan, decided 2026-10-29 (`~/Documents/hometrue-sell-my-plot-user-stories.md`). A fixed price,
+**no offers** in v1 — the offer routes below won't be built as written. The developer is always paid first.
+
+`GET /api/resale/plots/{id}?price=` (`client.portfolio.view`; owned-plot or transaction id, own only — 404
+`OWNED_PLOT_NOT_FOUND`) → `ResaleEligibility`:
+`{ transactionId, transactionReference, kind, canList, reasons: [{ code, message }], earlySale, currency,
+agreedPrice, paid, paidInAll, developerPrice, lowestPrice, thresholds, consentRequired, quote, advice, notHandled[] }`.
+- `kind`: `paid_in_full` (finance verified it in full, however it was bought), `installment` or `flexible` (a
+  running plan); null for a purchase not yet verified or ended (`reasons` says which).
+- `reasons` codes, all at once: `not_owned_yet`, `plan_ended`, `kyc_not_approved`, `estate_not_listed`,
+  `in_arrears`, `notice_running`, `payment_awaiting_finance`, `restructure_open`, `past_finish_by`,
+  `early_sale_below_agreed_price`. Show `message`.
+- `paid` is the **land share** of what finance verified (premium already paid stays with the developer); `paidInAll`
+  is everything verified, premium included. Penalties are excluded from both.
+- **The profit thresholds, on a plan** — `thresholds: { minimumPaid (30% of the agreed price), paidMet, stillToPay,
+  firstPaymentOn (the day Paystack confirmed the first verified payment), timeMetOn (6 months on), timeMet, met }`; null when paid in full. Before both are met
+  `earlySale: true`: the price is the developer's (`developerPrice`), the seller gets back exactly what they paid
+  (less any penalties owed), and the developer gets the rest — offered only while `developerPrice` ≥ `agreedPrice`.
+  `advice` is the sentence to show ("Sell now and you get back ₦600,000.00. From 27 January 2027, once you've paid
+  ₦1,200,000.00 in all, you can sell at your own price and keep your share of any gain.").
+- `price`: whole kobo, above zero, not below `agreedPrice` on a plan (`lowestPrice`; null when paid in full — any
+  price). On an early sale it can't be set. Both refused with 400 `INVALID_PRICE`. Left out, the quote is at
+  `developerPrice` when one applies.
+- `quote: { price, developerBalance (still owed on the agreed price + penaltiesOwed), penaltiesOwed, gain,
+  developerGainSharePct (100 early, the plan's declared share on flexible, 0 otherwise), developerGainShare,
+  transferFee (0 for now), developerReceives, sellerReceives, reviewRequired (more than 50% above developerPrice) }`.
+- `consentRequired`: the estate's terms need the developer's consent to a transfer; `notHandled`: what HomeTrue
+  doesn't charge or withhold (recurring charges, consent/registration fees, capital gains tax) — show before listing.
+
+The frontend mock's earlier shape, kept for reference until the later phases replace it:
+
 | Method | Path | Request | Response |
 |---|---|---|---|
 | GET | `/api/resale/listings?cursor&limit` | — | `Page<ResaleListing>` |
