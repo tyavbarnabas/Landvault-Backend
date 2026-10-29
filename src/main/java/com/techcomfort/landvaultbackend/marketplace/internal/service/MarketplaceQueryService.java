@@ -15,7 +15,9 @@ import com.techcomfort.landvaultbackend.common.geojson.GeoJsonPolygonWriter;
 import com.techcomfort.landvaultbackend.marketplace.dto.BranchOfficeDto;
 import com.techcomfort.landvaultbackend.marketplace.dto.CostDisclosureDto;
 import com.techcomfort.landvaultbackend.marketplace.dto.ExitCostsDto;
+import com.techcomfort.landvaultbackend.marketplace.dto.MarketplaceFeedItemDto;
 import com.techcomfort.landvaultbackend.marketplace.dto.MarketplaceListingDto;
+import com.techcomfort.landvaultbackend.marketplace.dto.MarketplaceResaleListingDto;
 import com.techcomfort.landvaultbackend.marketplace.dto.MarketplacePaymentPlanDto;
 import com.techcomfort.landvaultbackend.marketplace.dto.MarketplacePhotoDto;
 import com.techcomfort.landvaultbackend.marketplace.dto.MarketplacePlotDto;
@@ -29,17 +31,21 @@ import com.techcomfort.landvaultbackend.marketplace.internal.domain.AmenityView;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.DefaultTermsView;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.EstatePhotoView;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.FeeView;
+import com.techcomfort.landvaultbackend.marketplace.internal.domain.FeedView;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.ListingView;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.PaymentPlanView;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.PenaltyTierView;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.PlotView;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.PriceTierView;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.RefundTermsView;
+import com.techcomfort.landvaultbackend.marketplace.internal.domain.ResaleListingView;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.VerificationCheckView;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.AmenityViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.DefaultTermsViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.EstatePhotoViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.FeeViewRepository;
+import com.techcomfort.landvaultbackend.marketplace.internal.repository.FeedViewRepository;
+import com.techcomfort.landvaultbackend.marketplace.internal.repository.FeedViewSpecifications;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.ListingViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.ListingViewSpecifications;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.PaymentPlanViewRepository;
@@ -47,6 +53,7 @@ import com.techcomfort.landvaultbackend.marketplace.internal.repository.PenaltyT
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.PlotViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.PriceTierViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.RefundTermsViewRepository;
+import com.techcomfort.landvaultbackend.marketplace.internal.repository.ResaleListingViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.VerificationCheckViewRepository;
 import com.techcomfort.landvaultbackend.storage.StorageApi;
 import lombok.RequiredArgsConstructor;
@@ -66,6 +73,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -91,6 +99,10 @@ public class MarketplaceQueryService {
     /** The frontend's tiersFromPlots() rule, so both sides label stock the same way. */
     private static final int LOW_STOCK_THRESHOLD = 3;
 
+    /** marketplace_feed's listing_type values. */
+    private static final String PRIMARY = "PRIMARY";
+    private static final String RESALE = "RESALE";
+
     private final ListingViewRepository listings;
     private final PriceTierViewRepository tiers;
     private final PlotViewRepository plots;
@@ -102,6 +114,8 @@ public class MarketplaceQueryService {
     private final PenaltyTierViewRepository penaltyTiers;
     private final PaymentPlanViewRepository paymentPlans;
     private final EstatePhotoViewRepository photos;
+    private final ResaleListingViewRepository resales;
+    private final FeedViewRepository feed;
     private final StorageApi storage;
 
     @Transactional(readOnly = true)
@@ -114,6 +128,71 @@ public class MarketplaceQueryService {
     public MarketplaceListingDto get(UUID estateId) {
         ListingView listing = listings.findById(estateId).orElseThrow(ListingNotFound::new);
         return toDtos(List.of(listing)).get(listing);
+    }
+
+    /**
+     * Sell my plot, phase 3: estates and resale plots as one list, sorted and
+     * paged once across both (marketplace_feed), each item then built from
+     * its own view in batches — never one query per item.
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<MarketplaceFeedItemDto> feed(ListingViewSpecifications.Filters filters, String listingType,
+                                                     UUID estateId, Pageable pageable) {
+        Page<FeedView> page = feed.findAll(FeedViewSpecifications.matching(filters, listingType, estateId), pageable);
+        List<UUID> estateIds = page.getContent().stream().filter(f -> PRIMARY.equals(f.getListingType()))
+                .map(FeedView::getListingId).toList();
+        List<UUID> resaleIds = page.getContent().stream().filter(f -> RESALE.equals(f.getListingType()))
+                .map(FeedView::getListingId).toList();
+        Map<UUID, MarketplaceListingDto> estates = new HashMap<>();
+        if (!estateIds.isEmpty()) {
+            toDtos(listings.findByEstateIdIn(estateIds)).values().forEach(d -> estates.put(d.id(), d));
+        }
+        Map<UUID, MarketplaceResaleListingDto> resaleDtos = new HashMap<>();
+        if (!resaleIds.isEmpty()) {
+            resaleDtos(resales.findByListingIdIn(resaleIds)).forEach(d -> resaleDtos.put(d.id(), d));
+        }
+        // A row that left its view between the two reads (an estate unlisted
+        // that instant) is dropped rather than returned half-built.
+        List<MarketplaceFeedItemDto> items = page.getContent().stream()
+                .map(f -> PRIMARY.equals(f.getListingType())
+                        ? (estates.containsKey(f.getListingId())
+                                ? new MarketplaceFeedItemDto("primary", estates.get(f.getListingId())) : null)
+                        : (resaleDtos.containsKey(f.getListingId())
+                                ? new MarketplaceFeedItemDto("resale", resaleDtos.get(f.getListingId())) : null))
+                .filter(Objects::nonNull)
+                .toList();
+        return new PageResponse<>(items, page.getTotalElements(), page.hasNext() ? String.valueOf(page.getNumber() + 1)
+                : null, page.hasNext());
+    }
+
+    /** One plot for resale; 404 when it isn't on the marketplace, for whatever reason. */
+    @Transactional(readOnly = true)
+    public MarketplaceResaleListingDto resale(UUID listingId) {
+        return resales.findById(listingId).map(r -> resaleDtos(List.of(r)).getFirst())
+                .orElseThrow(ListingNotFound::new);
+    }
+
+    private List<MarketplaceResaleListingDto> resaleDtos(List<ResaleListingView> rows) {
+        Set<UUID> fileIds = rows.stream().map(ResaleListingView::getCoverFileId).filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<UUID, String> urls = new HashMap<>();
+        storage.findAll(fileIds).forEach(f -> {
+            if (f.publicUrl() != null) {
+                urls.put(f.id(), f.publicUrl());
+            }
+        });
+        return rows.stream().map(r -> new MarketplaceResaleListingDto(
+                r.getListingId(), r.getPlotId(), r.getEstateId(), r.getEstateName(),
+                r.getBlockName() == null ? "Plot " + r.getPlotNumber()
+                        : "Block " + r.getBlockName() + ", Plot " + r.getPlotNumber(),
+                r.getBlockName(), r.getPlotNumber(), r.getArea(), r.getCity(), r.getState(),
+                r.getIntent() == null ? null : r.getIntent().getValue(),
+                r.getCoverFileId() == null ? null : urls.get(r.getCoverFileId()),
+                r.getTitleType() == null ? null : r.getTitleType().getValue(),
+                r.getTitleStatus() == null ? null : r.getTitleStatus().getValue(),
+                r.getTitleVerifiedAt(), r.getCompanyName(), r.isCorner(), r.getNominalSizeSqm(),
+                r.getActualAreaSqm(), r.isHasBoundary(), r.getPrice(), r.getCurrency(), r.getPricePerSqm(),
+                r.getListedAt(), r.getTransferRequiresConsent())).toList();
     }
 
     /**
@@ -230,8 +309,14 @@ public class MarketplaceQueryService {
             }
         });
 
+        // Sell my plot: each estate's resales, in one more query.
+        Map<UUID, List<ResaleListingView>> resalesByEstate = ids.isEmpty() ? Map.of()
+                : resales.findByEstateIdIn(ids).stream()
+                        .collect(Collectors.groupingBy(ResaleListingView::getEstateId));
+
         Map<ListingView, MarketplaceListingDto> result = new LinkedHashMap<>();
         for (ListingView l : page) {
+            List<ResaleListingView> estateResales = resalesByEstate.getOrDefault(l.getEstateId(), List.of());
             List<FeeView> estateFees = feesByEstate.getOrDefault(l.getEstateId(), List.of());
             List<PriceTierView> estateTiers = tiersByEstate.getOrDefault(l.getEstateId(), List.of());
             List<PaymentPlanView> estatePlans = plansByEstate.getOrDefault(l.getEstateId(), List.of());
@@ -271,7 +356,11 @@ public class MarketplaceQueryService {
                     photosByEstate.getOrDefault(l.getEstateId(), List.of()).stream()
                             .filter(p -> urls.containsKey(p.getFileId()))
                             .map(p -> new MarketplacePhotoDto(urls.get(p.getFileId()), p.getCaption()))
-                            .toList()));
+                            .toList(),
+                    estateResales.size(),
+                    estateResales.stream().filter(r -> r.getCurrency() == l.getFromPriceCurrency())
+                            .map(ResaleListingView::getPrice).filter(Objects::nonNull)
+                            .min(Comparator.naturalOrder()).orElse(null)));
         }
         return result;
     }

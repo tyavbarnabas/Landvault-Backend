@@ -6923,6 +6923,31 @@ Proven red: the early sale's 100% gain to the developer (the seller was quoted �
 
 Proven red: the pause (with no pauses read, notice was given on a listed plan).
 
+### Phase 3: on the public marketplace (changeset 117)
+
+Decided with the user 2026-10-29: **one marketplace**, not a second one — resale plots sit in the same feed as
+developers' estates.
+
+- **`marketplace_resale_listings`**, a view built on the other `marketplace_*` views (SELECT only,
+  `security_barrier`): live (`LISTED`, before `expires_at`) listings on estates on the marketplace now, so an estate
+  leaving takes its resales with it. It never selects the seller, the purchase, what was paid or owed, the kind of
+  buyer, or whether it's an early sale — an early sale's price *is* the developer's, so marking it would expose the
+  seller's position. It reads `transactions.total_price` only to leave an early sale out while the developer's price
+  is below the agreed price (the sweep takes it down overnight).
+- **An early sale's price is worked out in the view exactly as `PlotPricing` does** (premium to 10 places, the price
+  to 4, then to the kobo, half up), the same figure as `MarketplaceApi.currentPriceOf`. **Change one, change both**:
+  `anEarlySaleOnTheFeedShowsTheDevelopersPriceExactlyAsPhaseOneWorksItOut` compares them on a corner plot.
+- **`marketplace_feed`**: estates and resales `UNION ALL`, with just the columns the feed filters and sorts on, so
+  `GET /api/marketplace/listings` sorts and pages once across both (`MarketplaceFeedController`); each item is then
+  built from its own view in batches. Items are `{ listingType: primary | resale, data }`, the frontend's union.
+  `GET /api/marketplace/resales/{id}` is one plot. Both public, GET only, rate limited, each listed in
+  `SecurityConfig`. The estate DTO gains `resaleCount` and `resaleFromPrice`.
+- **The map is unchanged**: a resale plot shows `UNAVAILABLE` (it isn't for sale from the developer); the listing
+  carries `plotId` so the frontend can highlight it.
+- Not yet: the wishlist's `resale` type, holding and buying (phase 5), consent (phase 4).
+
+Proven red: the early sale's below-the-agreed-price filter (the listing stayed on the feed).
+
 ## A buyer's address (changeset 097)
 
 Built 2026-10-21, decided with the user, so the allocation letter can name

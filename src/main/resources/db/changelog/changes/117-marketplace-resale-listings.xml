@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Sell my plot, phase 3 (decided with the user 2026-10-29): resale
+        listings on the same public marketplace as developers' estates. See
+        AGENTS.md, "Sell my plot".
+
+        marketplace_resale_listings: a live listing (LISTED, not past its 90
+        days) on an estate that is on the marketplace now. Built on the other
+        marketplace_* views, so an estate leaving the marketplace takes its
+        resales with it, with nothing to remember. What it never selects: the
+        seller, what they paid or owe, the purchase, the kind of buyer, and
+        whether it is an early sale — an early sale's price is simply the
+        developer's current price, so marking it would expose the seller's
+        position.
+
+        An early sale's price is the developer's current price, worked out
+        here exactly as PlotPricing does (premium to 10 places, the price to 4,
+        then to the kobo, half up — Postgres rounds numeric half away from
+        zero, the same for a positive price), the same figure as
+        MarketplaceApi.currentPriceOf. CHANGE ONE, CHANGE BOTH; a test compares
+        them. While that price is below the agreed price an early sale isn't
+        offered (the sweep takes it down overnight), so the view leaves it out
+        until then.
+
+        marketplace_feed: estates and resales as one list, so the public feed
+        is sorted and paged once, across both.
+    -->
+    <changeSet id="117-marketplace-resale-listings" author="landvault">
+        <sql><![CDATA[
+            CREATE VIEW marketplace_resale_listings WITH (security_barrier = true) AS
+            SELECT
+                r.id                        AS listing_id,
+                r.estate_id                 AS estate_id,
+                r.plot_id                   AS plot_id,
+                ml.name                     AS estate_name,
+                ml.area                     AS area,
+                ml.city                     AS city,
+                ml.state                    AS state,
+                ml.intent                   AS intent,
+                ml.cover_file_id            AS cover_file_id,
+                ml.title_type               AS title_type,
+                ml.title_status             AS title_status,
+                ml.title_verified_at        AS title_verified_at,
+                ml.company_name             AS company_name,
+                mp.block_name               AS block_name,
+                mp.plot_number              AS plot_number,
+                mp.is_corner                AS is_corner,
+                mp.nominal_size_sqm         AS nominal_size_sqm,
+                mp.actual_area_sqm          AS actual_area_sqm,
+                (mp.footprint IS NOT NULL)  AS has_boundary,
+                pr.price                    AS price,
+                r.currency                  AS currency,
+                CASE WHEN mp.nominal_size_sqm > 0
+                     THEN round(pr.price / mp.nominal_size_sqm, 2) END AS price_per_sqm,
+                r.listed_at                 AS listed_at,
+                dt.transfer_requires_consent AS transfer_requires_consent
+            FROM resale_listings r
+            JOIN marketplace_listings ml ON ml.estate_id = r.estate_id
+            JOIN marketplace_plots mp ON mp.plot_id = r.plot_id
+            JOIN marketplace_price_tiers pt ON pt.tier_id = mp.price_tier_id
+            JOIN transactions t ON t.id = r.transaction_id
+            CROSS JOIN LATERAL (
+                SELECT CASE WHEN mp.is_corner AND COALESCE(ml.corner_premium_pct, 0) <> 0
+                            THEN round(round(pt.price * (1 + round(ml.corner_premium_pct / 100, 10)), 4), 2)
+                            ELSE round(pt.price, 2) END AS price
+            ) developer
+            CROSS JOIN LATERAL (
+                SELECT CASE WHEN r.early_sale THEN developer.price ELSE r.asking_price END AS price
+            ) pr
+            LEFT JOIN marketplace_default_terms dt ON dt.estate_id = r.estate_id
+            WHERE r.deleted = false
+              AND r.status = 'LISTED'
+              AND r.expires_at > now()
+              AND (NOT r.early_sale
+                   OR (pt.currency = r.currency AND developer.price >= t.total_price));
+
+            CREATE VIEW marketplace_feed WITH (security_barrier = true) AS
+            SELECT
+                'PRIMARY'::varchar(16)  AS listing_type,
+                ml.estate_id            AS listing_id,
+                ml.estate_id            AS estate_id,
+                ml.name                 AS name,
+                ml.area                 AS area,
+                ml.city                 AS city,
+                ml.state                AS state,
+                ml.intent               AS intent,
+                ml.title_type           AS title_type,
+                ml.title_status         AS title_status,
+                ml.from_price           AS price,
+                ml.from_price_currency  AS currency,
+                ml.from_price_per_sqm   AS price_per_sqm,
+                ml.min_size_sqm         AS min_size_sqm,
+                ml.max_size_sqm         AS max_size_sqm,
+                ml.plots_remaining      AS plots_remaining,
+                ml.published_at         AS listed_at
+            FROM marketplace_listings ml
+            UNION ALL
+            SELECT
+                'RESALE'::varchar(16),
+                rl.listing_id,
+                rl.estate_id,
+                rl.estate_name,
+                rl.area,
+                rl.city,
+                rl.state,
+                rl.intent,
+                rl.title_type,
+                rl.title_status,
+                rl.price,
+                rl.currency,
+                rl.price_per_sqm,
+                rl.nominal_size_sqm,
+                rl.nominal_size_sqm,
+                1::bigint,
+                rl.listed_at
+            FROM marketplace_resale_listings rl;
+
+            -- SELECT only, like every marketplace_* view (see 049).
+            REVOKE ALL ON marketplace_resale_listings, marketplace_feed FROM PUBLIC;
+            REVOKE ALL ON marketplace_resale_listings, marketplace_feed FROM ${appDbUsername};
+            GRANT SELECT ON marketplace_resale_listings, marketplace_feed TO ${appDbUsername};
+        ]]></sql>
+        <rollback>
+            DROP VIEW marketplace_feed;
+            DROP VIEW marketplace_resale_listings;
+        </rollback>
+    </changeSet>
+</databaseChangeLog>

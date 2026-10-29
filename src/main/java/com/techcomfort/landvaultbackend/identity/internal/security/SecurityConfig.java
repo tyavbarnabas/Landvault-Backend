@@ -112,6 +112,9 @@ public class SecurityConfig {
             "/api/marketplace/estates/*",
             "/api/marketplace/estates/*/geojson",
             "/api/marketplace/estates/*/plots",
+            // Estates and resale plots in one feed; one resale plot (sell my plot, phase 3).
+            "/api/marketplace/listings",
+            "/api/marketplace/resales/*",
             // A document's QR code opens this for anyone holding a copy (DV-2); rate limited.
             "/api/documents/verify/*"
     };
