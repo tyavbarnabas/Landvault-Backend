@@ -3594,6 +3594,96 @@ class ReservationCheckoutUnderRlsIT {
                 + "transaction_id = '" + purchase.id() + "'")).isEqualTo("PROVISIONAL,ALLOCATION");
     }
 
+    /**
+     * Sell my plot, phase 1: a flexible plan before the thresholds is an early
+     * sale at the developer's price, returning what was paid — even after a
+     * price rise; past both (30% paid, 6 months) the seller names a price, not
+     * below the agreed one, and keeps their share of the gain.
+     */
+    @Test
+    void aPlanBeforeTheThresholdsIsAnEarlySaleAndPastThemTheSellerKeepsTheirShareOfTheGain() {
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        TransactionDto purchase = flexibleHeldOnPlan("5000000", officer);
+
+        JsonNode early = resale(buyer, purchase.id(), "");
+        assertThat(early.path("kind").asString()).isEqualTo("flexible");
+        assertThat(early.path("canList").asBoolean()).as(early.toString()).isTrue();
+        assertThat(early.path("earlySale").asBoolean()).isTrue();
+        assertThat(early.path("thresholds").path("minimumPaid").decimalValue()).isEqualByComparingTo("6000000");
+        assertThat(early.path("paidInAll").decimalValue()).isEqualByComparingTo("5000000");
+        assertThat(early.path("paid").decimalValue()).as("the land share: premium paid stays the developer's")
+                .isEqualByComparingTo("4545454.54");
+        assertThat(early.path("thresholds").path("stillToPay").decimalValue()).isEqualByComparingTo("1454545.46");
+        assertThat(early.path("quote").path("price").decimalValue()).as("the developer's price")
+                .isEqualByComparingTo("20000000");
+        assertThat(early.path("quote").path("sellerReceives").decimalValue()).as("what was paid towards the land")
+                .isEqualByComparingTo("4545454.54");
+        assertThat(early.path("advice").asString()).startsWith("Sell now and you get back ₦4,545,454.54. From ")
+                .contains("once you've paid ₦6,000,000.00 in all");
+        assertThat(resaleRaw(buyer, purchase.id(), "?price=25000000").getBody())
+                .as("an early sale's price is HomeTrue's").contains("INVALID_PRICE");
+
+        execute("UPDATE price_tiers SET price = 25000000 WHERE id = '" + tierId + "'");
+        JsonNode risen = resale(buyer, purchase.id(), "");
+        assertThat(risen.path("quote").path("price").decimalValue()).isEqualByComparingTo("25000000");
+        assertThat(risen.path("quote").path("sellerReceives").decimalValue()).as("a rise before the thresholds is "
+                + "the developer's").isEqualByComparingTo("4545454.54");
+
+        contribute(purchase, "3000000", 300_000_000L);
+        JsonNode waiting = resale(buyer, purchase.id(), "");
+        assertThat(waiting.path("canList").asBoolean()).isFalse();
+        assertThat(waiting.path("reasons").toString()).contains("payment_awaiting_finance");
+        assertThat(financeAction(officer, purchase.id(), "verify", null).getStatusCode()).isEqualTo(HttpStatus.OK);
+        execute("UPDATE payments SET finance_verified_at = now(), paid_at = now() - interval '7 months' WHERE "
+                + "transaction_id = '" + purchase.id() + "' AND amount_kobo = 500000000");
+
+        JsonNode past = resale(buyer, purchase.id(), "?price=25000000");
+        assertThat(past.path("earlySale").asBoolean()).as(past.toString()).isFalse();
+        assertThat(past.path("thresholds").path("met").asBoolean()).isTrue();
+        JsonNode quote = past.path("quote");
+        assertThat(past.path("thresholds").path("timeMet").asBoolean()).as("paid 7 months ago, verified today: "
+                + "the clock runs from the payment").isTrue();
+        assertThat(quote.path("developerBalance").decimalValue()).as("₦20M agreed less the land share of ₦8M")
+                .isEqualByComparingTo("12727272.73");
+        assertThat(quote.path("developerGainSharePct").decimalValue()).isEqualByComparingTo("60");
+        assertThat(quote.path("sellerReceives").decimalValue()).as("the land share back and 40% of the ₦5M gain")
+                .isEqualByComparingTo("9272727.27");
+        assertThat(past.path("advice").isNull()).isTrue();
+        assertThat(resaleRaw(buyer, purchase.id(), "?price=19999999.99").getBody()).as("below the agreed price")
+                .contains("INVALID_PRICE", "₦20,000,000.00");
+        assertThat(resale(buyer, purchase.id(), "?price=37500000.01").path("quote").path("reviewRequired")
+                .asBoolean()).as("more than 50% above the developer's price").isTrue();
+
+        assertThat(resaleRaw(verifiedBuyer(), purchase.id(), "").getStatusCode()).as("someone else's")
+                .isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    /** Sell my plot, phase 1: paid in full may sell at once, at any price, and keeps the whole gain. */
+    @Test
+    void aPlotPaidInFullCanBeSoldAtOnceAtAnyPrice() {
+        TransactionDto sale = verifiedSale();
+
+        JsonNode now = resale(buyer, sale.id(), "?price=1000000");
+        assertThat(now.path("kind").asString()).isEqualTo("paid_in_full");
+        assertThat(now.path("canList").asBoolean()).as(now.toString()).isTrue();
+        assertThat(now.path("earlySale").asBoolean()).isFalse();
+        assertThat(now.path("thresholds").isNull()).isTrue();
+        assertThat(now.path("quote").path("sellerReceives").decimalValue()).as("theirs to sell low")
+                .isEqualByComparingTo("1000000");
+        assertThat(now.path("quote").path("developerReceives").decimalValue()).isEqualByComparingTo("0");
+        assertThat(now.path("notHandled").toString()).contains("Capital gains tax");
+    }
+
+    private JsonNode resale(Buyer who, UUID id, String query) {
+        ResponseEntity<String> reply = resaleRaw(who, id, query);
+        assertThat(reply.getStatusCode()).as(reply.getBody()).isEqualTo(HttpStatus.OK);
+        return objectMapper.readTree(reply.getBody());
+    }
+
+    private ResponseEntity<String> resaleRaw(Buyer who, UUID id, String query) {
+        return get("/api/resale/plots/" + id + query, who.token(), String.class);
+    }
+
     /** A flexible purchase whose first payment ({@code first} naira) finance has verified; returns it. */
     private TransactionDto flexibleHeldOnPlan(String first, String officer) {
         UUID planId = planIds(declarePlans(FLEXIBLE_AND_INSTALMENT_PLANS)).get("Pay as you can");

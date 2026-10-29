@@ -2,6 +2,8 @@ package com.techcomfort.landvaultbackend.marketplace.internal.service;
 
 import com.techcomfort.landvaultbackend.common.LatePaymentTerms;
 import com.techcomfort.landvaultbackend.common.PlanKind;
+import com.techcomfort.landvaultbackend.common.PlotPricing;
+import com.techcomfort.landvaultbackend.marketplace.CurrentPlotPrice;
 import com.techcomfort.landvaultbackend.marketplace.EstateEligibility;
 import com.techcomfort.landvaultbackend.marketplace.MarketplaceApi;
 import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
@@ -12,14 +14,17 @@ import com.techcomfort.landvaultbackend.marketplace.OfferedRefundTerms;
 import com.techcomfort.landvaultbackend.marketplace.internal.domain.PlotView;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.DefaultTermsViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.EstateEligibilityViewRepository;
+import com.techcomfort.landvaultbackend.marketplace.internal.repository.ListingViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.PaymentPlanViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.PenaltyTierViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.PlotViewRepository;
+import com.techcomfort.landvaultbackend.marketplace.internal.repository.PriceTierViewRepository;
 import com.techcomfort.landvaultbackend.marketplace.internal.repository.RefundTermsViewRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.RoundingMode;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -34,6 +39,8 @@ public class MarketplaceApiImpl implements MarketplaceApi {
     private final RefundTermsViewRepository refundTerms;
     private final DefaultTermsViewRepository defaultTerms;
     private final PenaltyTierViewRepository penaltyTiers;
+    private final PriceTierViewRepository priceTiers;
+    private final ListingViewRepository listings;
 
     @Override
     @Transactional(readOnly = true)
@@ -82,5 +89,22 @@ public class MarketplaceApiImpl implements MarketplaceApi {
                         .stream().map(t -> new LatePaymentTerms.Step(t.getMonthsLate(), t.getPenaltyPct())).toList(),
                         d.isPenaltiesRefundable(),
                         RevocationTerms.offered(d.getRevocationAfterMonths(), d.getRevocationNoticeDays())));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<CurrentPlotPrice> currentPriceOf(UUID plotId) {
+        return plots.findByPlotId(plotId).flatMap(plot -> priceTiers.findByTierId(plot.getPriceTierId())
+                .flatMap(tier -> listings.findById(plot.getEstateId()).map(estate -> new CurrentPlotPrice(
+                        // Rounded to the kobo as a reservation's agreed price is (ReservationService).
+                        PlotPricing.price(tier.getPrice(), plot.isCorner(), estate.getCornerPremiumPct())
+                                .setScale(2, RoundingMode.HALF_UP), tier.getCurrency()))));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<Boolean> transferRequiresConsent(UUID estateId) {
+        return defaultTerms.findByEstateIdIn(List.of(estateId)).stream().findFirst()
+                .map(d -> d.isTransferRequiresConsent());
     }
 }

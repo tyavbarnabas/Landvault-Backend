@@ -6869,6 +6869,37 @@ Executive Directors. Built first because "sell my plot" needs the same thing: pa
   instead of the developer-facing close note, and `REVOCATION_ALREADY_NOTIFIED` reads "has already been given
   notice, and has until 26 November 2026" (no "of revocation" on a flexible plan).
 
+## Sell my plot (resale), phase 1
+
+Decided with the user 2026-10-28/29 (stories and D1–D30 in `~/Documents/hometrue-sell-my-plot-user-stories.md`):
+resale starts with "sell my plot", open to buyers **paid in full, on an instalment plan and on a flexible plan**. A
+fixed price, no offers; the new buyer pays in full; the developer is always paid first. Module `resale`.
+
+- **The profit thresholds** (`ResaleCalculator`): on a plan, a seller keeps any gain only once **30% of the agreed
+  price** is verified by finance **and 6 months** have passed since the first verified payment. "Paid" is the
+  **land share** (`ResaleCalculator.landShare`: payment × agreed ÷ plan total; penalties excluded) — premium
+  already paid stays with the developer, it paid for time the buyer had — and the 6 months run from the day
+  **Paystack confirmed** that first payment, not from finance's check (decided after the walk: a slow finance
+  team mustn't delay the seller's clock). Before both it is an **early sale**: the price is the developer's current price, the seller gets back
+  exactly what they paid (less penalties owed), the developer the rest — so paying ₦500,000 today and flipping
+  tomorrow returns ₦500,000. Offered only while the developer's price is at or above the agreed price (below it the
+  developer would be short; the seller may withdraw). Paid in full: any price, the whole gain.
+- **The split**: the developer's balance is what's owed on the **agreed price** (never the unearned premium) plus
+  penalties owed; then the gain — 100% the developer's on an early sale, the plan's `developerGainSharePct` on a
+  flexible plan, nothing on an instalment plan or paid in full (none was declared; terms copied onto a purchase
+  never change). The seller's side of a gain rounds down to the kobo, as gain-share claims do. No exit deduction.
+- **Who may list** (`ResaleEligibilityService`): KYC approved and the estate on the marketplace; on a plan, not in
+  arrears, no notice running, no payment awaiting finance, no restructure open, not past the date to finish by.
+  Every reason at once.
+- **The developer's price** comes through the public projection (`MarketplaceApi.currentPriceOf`:
+  `marketplace_plots` + `marketplace_price_tiers` + the listing's corner premium, through `PlotPricing`, rounded to
+  the kobo as a reservation is) — a buyer can't read inventory under RLS, and an estate off the marketplace has no
+  price to show, which is also D2's rule.
+- **Phase 1 is read only**: `GET /api/resale/plots/{id}?price=`. An early sale's price is HomeTrue's, so a price
+  given for one is refused (`INVALID_PRICE`), never ignored.
+
+Proven red: the early sale's 100% gain to the developer (the seller was quoted ₦7M instead of the ₦5M paid).
+
 ## A buyer's address (changeset 097)
 
 Built 2026-10-21, decided with the user, so the allocation letter can name
