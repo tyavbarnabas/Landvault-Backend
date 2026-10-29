@@ -625,7 +625,7 @@ class MarketplaceIT {
     void theAppRoleHoldsSelectOnlyOnEveryMarketplaceView() {
         for (String view : List.of("marketplace_estate_eligibility", "marketplace_listings",
                 "marketplace_price_tiers", "marketplace_plots", "marketplace_verification_checks",
-                "marketplace_amenities")) {
+                "marketplace_amenities", "marketplace_resale_listings", "marketplace_feed")) {
             assertThat(hasPrivilege(view, "SELECT")).as(view + " SELECT").isTrue();
             for (String write : List.of("INSERT", "UPDATE", "DELETE", "TRUNCATE")) {
                 assertThat(hasPrivilege(view, write)).as(view + " " + write).isFalse();

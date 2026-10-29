@@ -527,12 +527,33 @@ today reads them.
 
 `Listing extends Estate` — server-projected, never a second independently authored catalogue; compute it from `Estate` + publication gate, same as `marketplaceService.ts`'s `projectListing()` does client-side today.
 
-## Unified marketplace feed (primary + resale) — `marketplaceFeedService.ts`
+## Unified marketplace feed (primary + resale) — `marketplaceFeedService.ts` — **built** (sell my plot, phase 3, changeset 117)
+One marketplace: developers' estates and plots buyers are selling, **sorted and paged as one list** by the backend
+(the client no longer merges two lists). Public, GET only, rate limited.
+
 | Method | Path | Response |
 |---|---|---|
-| GET | `/api/marketplace/feed?<UnifiedListingFilters>&cursor&limit` | `Page<MarketplaceListing>` |
+| GET | `/api/marketplace/listings?listingType&estateId&q&state&city&minPrice&maxPrice&currency&minSize&maxSize&titleType&intent&sort&cursor&limit` | `Page<MarketplaceListing>` |
+| GET | `/api/marketplace/resales/{id}` | `ResaleMarketplacePlot`; 404 `LISTING_NOT_FOUND` once it's off the marketplace for any reason |
 
-`MarketplaceListing = PrimaryMarketplaceListing | ResaleMarketplaceListing` (discriminated union — server should tag which).
+- `MarketplaceListing = { listingType: "primary", data: Listing }` (the `/estates` shape) `| { listingType: "resale",
+  data: ResaleMarketplacePlot }`.
+- `listingType`: `primary` | `resale` | `all` (default). `estateId` lists one estate and its resales —
+  `listingType=resale&estateId=…` for the estate page. Every other filter applies to both kinds: a resale plot's size
+  is its own, its title and intent are its estate's (`titleType` matches verified titles only), price within one
+  `currency`. `sort`: `newest` (published / listed), `price_low`, `price_per_sqm`, `plots_remaining` (a resale counts
+  as 1). Unknown `listingType`/`sort` → 400 `VALIDATION_ERROR`.
+- `ResaleMarketplacePlot { id, plotId, estateId, estateName, plotLabel ("Block A, Plot 7"), blockName, plotNumber,
+  area, city, state, intent, imageUrl (the estate's cover), titleType, titleStatus, titleVerifiedAt, developerName,
+  isCorner, sizeSqm, actualAreaSqm, hasBoundary, price, currency, pricePerSqm, listedAt, transferRequiresConsent
+  (null = no default terms declared) }`. **Never the seller, what they paid or owe, how they bought, or whether it is
+  an early sale.** The mock's `sellerName`, `originalPrice`, `paidAmount`, `outstandingBalance`, `pctPaid` must not be
+  shown to a buyer and are not sent. `plotId` is the plot on `/estates/{estateId}/geojson`, where it shows
+  `UNAVAILABLE` (not for sale from the developer) — highlight it from the resale.
+- **A fixed price, no offers**: the resale detail page's "Make an offer" becomes buying at the price (phase 5).
+- Each `Listing` (estate) also carries `resaleCount` and `resaleFromPrice` (the cheapest in `fromPriceCurrency`, null
+  when none) — "3 plots for resale from ₦X".
+- `/api/marketplace/estates` and its sub-routes are unchanged.
 
 ## Wishlist — `marketplaceService.ts` (`WishlistItem`) — **built** (changeset 096)
 A buyer's saved listings, kept on the account. **Needs a login** (`client.marketplace.view`), unlike the
@@ -881,6 +902,9 @@ agreedPrice, paid, paidInAll, developerPrice, lowestPrice, thresholds, consentRe
 - A listing **comes down by itself** once a day: 90 days after listing (`expired`), or by a rule (`ended`). A
   payment waiting for finance doesn't take it down. On a flexible plan the first listing stops the inactivity
   clock while it is up (the plan's `quietFrom` moves on by those days); relisting doesn't.
+
+**Phase 3, on the marketplace** (changeset 117): live listings appear in the public feed — see "Unified
+marketplace feed" above.
 
 The frontend mock's earlier shape, kept for reference until the later phases replace it:
 

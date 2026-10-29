@@ -3763,6 +3763,105 @@ class ReservationCheckoutUnderRlsIT {
                 .isEqualTo(HttpStatus.CREATED);
     }
 
+    /**
+     * Sell my plot, phase 3: a listed plot is on the same public feed as the
+     * estates, filterable by kind and estate, counted on its estate, readable
+     * on its own — never naming the seller or the purchase — and gone once it
+     * comes down.
+     */
+    @Test
+    void aListedPlotIsOnThePublicFeedBesideTheEstatesWithoutItsSeller() {
+        TransactionDto sale = verifiedSale();
+        String id = objectMapper.readTree(listResale(sale.id(), "18000000").getBody()).path("id").asString();
+
+        JsonNode all = publicJson("/api/marketplace/listings?limit=100");
+        JsonNode resaleItem = feedItem(all, "resale", id);
+        assertThat(resaleItem).as(all.toString()).isNotNull();
+        assertThat(feedItem(all, "primary", estateId.toString())).as("the estate is in the same feed").isNotNull();
+        JsonNode data = resaleItem.path("data");
+        assertThat(data.path("price").decimalValue()).isEqualByComparingTo("18000000");
+        assertThat(data.path("plotId").asString()).isEqualTo(plotId.toString());
+        assertThat(data.path("estateId").asString()).isEqualTo(estateId.toString());
+        assertThat(data.path("developerName").asString()).isNotBlank();
+        assertThat(data.path("plotLabel").asString()).as("the label letters use").startsWith("Block ").contains(", Plot ");
+
+        String raw = restTemplate.getForEntity("/api/marketplace/resales/" + id, String.class).getBody();
+        assertThat(raw).as("nothing about the seller or the purchase").doesNotContain(buyer.email(),
+                buyer.id().toString(), sale.id().toString(), sale.reference(), "earlySale", "paid", "kind");
+
+        assertThat(feedItem(publicJson("/api/marketplace/listings?listingType=primary&limit=100"), "resale", id))
+                .isNull();
+        JsonNode onlyResales = publicJson("/api/marketplace/listings?listingType=resale&estateId=" + estateId);
+        assertThat(onlyResales.path("total").asLong()).isEqualTo(1);
+        assertThat(onlyResales.path("items").get(0).path("listingType").asString()).isEqualTo("resale");
+        assertThat(restTemplate.getForEntity("/api/marketplace/listings?listingType=used", String.class)
+                .getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+
+        JsonNode estate = publicJson("/api/marketplace/estates/" + estateId);
+        assertThat(estate.path("resaleCount").asLong()).isEqualTo(1);
+        assertThat(estate.path("resaleFromPrice").decimalValue()).isEqualByComparingTo("18000000");
+
+        restTemplate.exchange("/api/resale/listings/" + id + "/withdraw", HttpMethod.POST,
+                entity(buyer.token(), null), String.class);
+        assertThat(restTemplate.getForEntity("/api/marketplace/resales/" + id, String.class).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(feedItem(publicJson("/api/marketplace/listings?limit=100"), "resale", id)).isNull();
+        assertThat(publicJson("/api/marketplace/estates/" + estateId).path("resaleCount").asLong()).isZero();
+    }
+
+    /**
+     * Sell my plot, phase 3: an early sale shows the developer's price — the
+     * view's figure equals phase 1's (PlotPricing), corner premium and kobo
+     * rounding included — and leaves the feed while that price is below the
+     * agreed price, or when its estate leaves the marketplace.
+     */
+    @Test
+    void anEarlySaleOnTheFeedShowsTheDevelopersPriceExactlyAsPhaseOneWorksItOut() {
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        TransactionDto purchase = flexibleHeldOnPlan("5000000", officer);
+        String id = objectMapper.readTree(listResale(purchase.id(), null).getBody()).path("id").asString();
+
+        execute("UPDATE plots SET is_corner = true WHERE id = '" + plotId + "'");
+        execute("UPDATE estates SET corner_premium_pct = 12.5 WHERE id = '" + estateId + "'");
+        execute("UPDATE price_tiers SET price = 20000001 WHERE id = '" + tierId + "'");
+        BigDecimal phaseOne = resale(buyer, purchase.id(), "").path("developerPrice").decimalValue();
+        assertThat(phaseOne).isEqualByComparingTo("22500001.13");
+        JsonNode shown = publicJson("/api/marketplace/resales/" + id);
+        assertThat(shown.path("price").decimalValue()).as("the view and PlotPricing agree").isEqualByComparingTo(phaseOne);
+        assertThat(shown.path("isCorner").asBoolean()).isTrue();
+
+        execute("UPDATE price_tiers SET price = 17000000 WHERE id = '" + tierId + "'");
+        assertThat(restTemplate.getForEntity("/api/marketplace/resales/" + id, String.class).getStatusCode())
+                .as("₦19,125,000 is below the agreed ₦20,000,000").isEqualTo(HttpStatus.NOT_FOUND);
+        execute("UPDATE price_tiers SET price = 20000000 WHERE id = '" + tierId + "'");
+        assertThat(publicJson("/api/marketplace/resales/" + id).path("price").decimalValue())
+                .isEqualByComparingTo("22500000");
+
+        execute("UPDATE estates SET published = false WHERE id = '" + estateId + "'");
+        assertThat(restTemplate.getForEntity("/api/marketplace/resales/" + id, String.class).getStatusCode())
+                .as("the estate left the marketplace").isEqualTo(HttpStatus.NOT_FOUND);
+
+        // Don't leave it live: other tests run the sweep and count what it takes down.
+        assertThat(restTemplate.exchange("/api/resale/listings/" + id + "/withdraw", HttpMethod.POST,
+                entity(buyer.token(), null), String.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    private JsonNode publicJson(String path) {
+        ResponseEntity<String> reply = restTemplate.getForEntity(path, String.class);
+        assertThat(reply.getStatusCode()).as(reply.getBody()).isEqualTo(HttpStatus.OK);
+        return objectMapper.readTree(reply.getBody());
+    }
+
+    /** The feed item of that type and id, or null. */
+    private static JsonNode feedItem(JsonNode page, String type, String id) {
+        for (JsonNode item : page.path("items")) {
+            if (type.equals(item.path("listingType").asString()) && id.equals(item.path("data").path("id").asString())) {
+                return item;
+            }
+        }
+        return null;
+    }
+
     private ResponseEntity<String> listResale(UUID plotId, String price) {
         return restTemplate.exchange("/api/resale/listings", HttpMethod.POST, entity(buyer.token(),
                 "{\"plotId\":\"" + plotId + "\"" + (price == null ? "" : ",\"price\":" + price) + "}"), String.class);

@@ -63,6 +63,15 @@ public record MarketplaceListingDto(
         CostDisclosureDto costDisclosure,
 
         /** Every photo, the cover first, then in the developer's order. Empty when there are none. */
-        List<MarketplacePhotoDto> photos
+        List<MarketplacePhotoDto> photos,
+
+        /** Sell my plot: how many of this estate's plots buyers are selling now. */
+        long resaleCount,
+
+        /**
+         * The cheapest of them, in {@code fromPriceCurrency}; null when there are
+         * none in that currency.
+         */
+        BigDecimal resaleFromPrice
 ) {
 }
