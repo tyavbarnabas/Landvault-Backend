@@ -128,6 +128,10 @@ landvault:
     # Phase 4: instalment reminders (7 days and 1 day before, first day overdue,
     # entering arrears), once a day at 08:00 Lagos time. Moves no money.
     reminder-cron: "0 0 8 * * *"
+  resale:
+    # Sell my plot: once a day at 00:30 Lagos, listings past 90 days, or that a rule
+    # says must come down, are taken down.
+    sweep-cron: "0 30 0 * * *"
   refunds:
     # How often Paystack is asked about refunds it accepted but hasn't finished.
     sweep-interval: 15m

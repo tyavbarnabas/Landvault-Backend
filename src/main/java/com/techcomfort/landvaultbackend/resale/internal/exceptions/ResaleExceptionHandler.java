@@ -2,13 +2,20 @@ package com.techcomfort.landvaultbackend.resale.internal.exceptions;
 
 import com.techcomfort.landvaultbackend.common.ErrorResponse;
 import com.techcomfort.landvaultbackend.resale.internal.controllers.ResaleController;
+import com.techcomfort.landvaultbackend.resale.internal.controllers.ResaleListingController;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
-@RestControllerAdvice(assignableTypes = ResaleController.class)
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+@RestControllerAdvice(assignableTypes = {ResaleController.class, ResaleListingController.class})
 public class ResaleExceptionHandler {
 
     @ExceptionHandler(ResaleException.PlotNotFound.class)
@@ -26,5 +33,43 @@ public class ResaleExceptionHandler {
     public ResponseEntity<ErrorResponse> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
         return ResponseEntity.badRequest()
                 .body(ErrorResponse.of("'" + ex.getName() + "' isn't a valid value.", "INVALID_PARAMETER"));
+    }
+
+    @ExceptionHandler(ResaleException.NotAllowed.class)
+    public ResponseEntity<ErrorResponse> handleNotAllowed(ResaleException.NotAllowed ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ErrorResponse.of(ex.getMessage(), "RESALE_NOT_ALLOWED"));
+    }
+
+    @ExceptionHandler(ResaleException.AlreadyListed.class)
+    public ResponseEntity<ErrorResponse> handleAlreadyListed(ResaleException.AlreadyListed ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ErrorResponse.of(ex.getMessage(), "ALREADY_LISTED"));
+    }
+
+    /** Two listings racing past the service check: the one-live-listing index is the backstop. */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponse> handleRace(DataIntegrityViolationException ex) {
+        return handleAlreadyListed(new ResaleException.AlreadyListed());
+    }
+
+    @ExceptionHandler(ResaleException.ListingNotFound.class)
+    public ResponseEntity<ErrorResponse> handleListingNotFound(ResaleException.ListingNotFound ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ErrorResponse.of(ex.getMessage(), "LISTING_NOT_FOUND"));
+    }
+
+    @ExceptionHandler(ResaleException.ListingNotLive.class)
+    public ResponseEntity<ErrorResponse> handleNotLive(ResaleException.ListingNotLive ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ErrorResponse.of(ex.getMessage(), "LISTING_NOT_LIVE"));
+    }
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException ex) {
+        Map<String, String> fields = new LinkedHashMap<>();
+        ex.getBindingResult().getFieldErrors().forEach(e -> fields.putIfAbsent(e.getField(), e.getDefaultMessage()));
+        return ResponseEntity.badRequest().body(new ErrorResponse("Some fields are invalid.", "VALIDATION_ERROR", fields));
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponse> handleUnreadable(HttpMessageNotReadableException ex) {
+        return ResponseEntity.badRequest().body(ErrorResponse.of("The request body couldn't be read.", "MALFORMED_REQUEST"));
     }
 }

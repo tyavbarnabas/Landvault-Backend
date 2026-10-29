@@ -61,6 +61,8 @@ import com.techcomfort.landvaultbackend.payments.internal.service.PaymentSweeper
 import com.techcomfort.landvaultbackend.payments.internal.service.PayoutRecorder;
 import com.techcomfort.landvaultbackend.payments.internal.service.PayoutSweeper;
 import com.techcomfort.landvaultbackend.payments.internal.service.RefundSweeper;
+import com.techcomfort.landvaultbackend.resale.internal.enums.ListingStatus;
+import com.techcomfort.landvaultbackend.resale.internal.service.ResaleListingSweeper;
 import com.techcomfort.landvaultbackend.payments.internal.service.SettlementAlertSender;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.junit.jupiter.api.BeforeEach;
@@ -156,6 +158,8 @@ class ReservationCheckoutUnderRlsIT {
 
     /** Each estate gets its own longitude band, so fixtures never overlap into conflicts. */
     private static final AtomicInteger BAND = new AtomicInteger();
+    /** Bands per row: 7.30 + 139 × 0.05 = 14.25, inside Nigeria's eastern edge. */
+    private static final int BANDS_PER_ROW = 140;
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>(
@@ -216,6 +220,9 @@ class ReservationCheckoutUnderRlsIT {
     /** Called directly: a lost refund webhook must be testable without waiting on a clock. */
     @Autowired
     private RefundSweeper refundSweeper;
+
+    @Autowired
+    private ResaleListingSweeper resaleSweeper;
 
     /** Payout alerts, checked rather than sent. */
     @MockitoBean
@@ -3674,6 +3681,98 @@ class ReservationCheckoutUnderRlsIT {
         assertThat(now.path("notHandled").toString()).contains("Capital gains tax");
     }
 
+    /**
+     * Sell my plot, phase 2: an early sale is listed with no price of its own;
+     * the first listing on a flexible plan stops the inactivity clock (and
+     * keeps the days it stopped it after coming down); a relisting doesn't;
+     * a plan that ends takes its listing down at the next sweep.
+     */
+    @Test
+    void anEarlySaleIsListedAtTheDevelopersPriceAndItsFirstListingPausesTheQuietClock() {
+        String officer = staffWithRole(seller.id(), "finance_officer", null);
+        TransactionDto purchase = flexibleHeldOnPlan("5000000", officer);
+
+        assertThat(listResale(purchase.id(), "25000000").getBody()).as("an early sale's price is HomeTrue's")
+                .contains("INVALID_PRICE");
+        ResponseEntity<String> created = listResale(purchase.id(), null);
+        assertThat(created.getStatusCode()).as(created.getBody()).isEqualTo(HttpStatus.CREATED);
+        JsonNode listing = objectMapper.readTree(created.getBody());
+        String id = listing.path("id").asString();
+        assertThat(listing.path("earlySale").asBoolean()).isTrue();
+        assertThat(listing.path("price").decimalValue()).isEqualByComparingTo("20000000");
+        assertThat(listing.path("pausesInactivity").asBoolean()).isTrue();
+        assertThat(listing.path("quote").path("sellerReceives").decimalValue()).isEqualByComparingTo("4545454.54");
+        assertThat(listResale(purchase.id(), null).getBody()).contains("ALREADY_LISTED");
+        assertThat(changeResalePrice(id, "21000000").getBody()).contains("INVALID_PRICE");
+
+        // Paid 7 months ago, listed for the last 60 of them: quiet from 7 − 6 = a month ago, moved on 60 days.
+        execute("UPDATE payments SET paid_at = now() - interval '7 months' WHERE transaction_id = '" + purchase.id()
+                + "'");
+        execute("UPDATE resale_listings SET listed_at = now() - interval '60 days' WHERE id = '" + id + "'");
+        assertThat(revocation(seller.token(), purchase, "", "{\"reason\":\"Quiet\"}").getBody())
+                .as("the listing paused the clock").contains("REVOCATION_NOT_DUE", "paused the clock for 60 days");
+
+        ResponseEntity<String> down = restTemplate.exchange("/api/resale/listings/" + id + "/withdraw",
+                HttpMethod.POST, entity(buyer.token(), null), String.class);
+        assertThat(down.getBody()).as(down.getBody()).contains("\"status\":\"withdrawn\"");
+        assertThat(restTemplate.exchange("/api/resale/listings/" + id + "/withdraw", HttpMethod.POST,
+                entity(buyer.token(), null), String.class).getBody()).contains("LISTING_NOT_LIVE");
+        assertThat(revocation(seller.token(), purchase, "", "{\"reason\":\"Quiet\"}").getBody())
+                .as("the days it paused still count once it's down").contains("REVOCATION_NOT_DUE");
+
+        JsonNode again = objectMapper.readTree(listResale(purchase.id(), null).getBody());
+        assertThat(again.path("pausesInactivity").asBoolean()).as("only the first listing pauses it").isFalse();
+
+        JsonNode quote = objectMapper.readTree(get("/api/transactions/" + purchase.id() + "/withdrawal",
+                buyer.token(), String.class).getBody());
+        assertThat(restTemplate.exchange("/api/transactions/" + purchase.id() + "/withdrawal", HttpMethod.POST,
+                entity(buyer.token(), "{\"refund\":" + quote.path("refund").decimalValue() + "}"), String.class)
+                .getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resaleSweeper.sweep(Instant.now())).containsEntry(ListingStatus.ENDED, 1);
+        JsonNode mine = objectMapper.readTree(get("/api/resale/listings/mine", buyer.token(), String.class).getBody());
+        assertThat(mine.get(0).path("status").asString()).isEqualTo("ended");
+        assertThat(mine.get(0).path("closeReason").asString()).isEqualTo("plan_ended");
+        assertThat(mine.get(1).path("status").asString()).isEqualTo("withdrawn");
+    }
+
+    /** Sell my plot, phase 2: paid in full names and changes its price; after 90 days the listing comes down. */
+    @Test
+    void aPaidInFullListingTakesTheSellersPriceAndExpiresAfterNinetyDays() {
+        TransactionDto sale = verifiedSale();
+
+        assertThat(listResale(sale.id(), null).getBody()).as("the seller names the price").contains("INVALID_PRICE");
+        JsonNode listing = objectMapper.readTree(listResale(sale.id(), "18000000").getBody());
+        String id = listing.path("id").asString();
+        assertThat(listing.path("earlySale").asBoolean()).isFalse();
+        assertThat(listing.path("pausesInactivity").asBoolean()).isFalse();
+        assertThat(listing.path("price").decimalValue()).isEqualByComparingTo("18000000");
+
+        JsonNode changed = objectMapper.readTree(changeResalePrice(id, "19000000").getBody());
+        assertThat(changed.path("price").decimalValue()).isEqualByComparingTo("19000000");
+        assertThat(changed.path("quote").path("sellerReceives").decimalValue()).isEqualByComparingTo("19000000");
+        assertThat(changeResalePrice(id, "0").getBody()).contains("INVALID_PRICE");
+        assertThat(restTemplate.exchange("/api/resale/listings/" + id + "/withdraw", HttpMethod.POST,
+                entity(verifiedBuyer().token(), null), String.class).getStatusCode()).as("someone else's")
+                .isEqualTo(HttpStatus.NOT_FOUND);
+
+        assertThat(resaleSweeper.sweep(Instant.now())).as("nothing due yet").doesNotContainKey(ListingStatus.EXPIRED);
+        execute("UPDATE resale_listings SET expires_at = now() - interval '1 minute' WHERE id = '" + id + "'");
+        assertThat(resaleSweeper.sweep(Instant.now())).containsEntry(ListingStatus.EXPIRED, 1);
+        assertThat(queryString("SELECT status FROM resale_listings WHERE id = '" + id + "'")).isEqualTo("EXPIRED");
+        assertThat(listResale(sale.id(), "18000000").getStatusCode()).as("listed again")
+                .isEqualTo(HttpStatus.CREATED);
+    }
+
+    private ResponseEntity<String> listResale(UUID plotId, String price) {
+        return restTemplate.exchange("/api/resale/listings", HttpMethod.POST, entity(buyer.token(),
+                "{\"plotId\":\"" + plotId + "\"" + (price == null ? "" : ",\"price\":" + price) + "}"), String.class);
+    }
+
+    private ResponseEntity<String> changeResalePrice(String listingId, String price) {
+        return restTemplate.exchange("/api/resale/listings/" + listingId, HttpMethod.PUT,
+                entity(buyer.token(), "{\"price\":" + price + "}"), String.class);
+    }
+
     private JsonNode resale(Buyer who, UUID id, String query) {
         ResponseEntity<String> reply = resaleRaw(who, id, query);
         assertThat(reply.getStatusCode()).as(reply.getBody()).isEqualTo(HttpStatus.OK);
@@ -4818,9 +4917,14 @@ class ReservationCheckoutUnderRlsIT {
     }
 
     /** ~1.1km squares, each estate in its own longitude band inside FCT. */
+    /**
+     * Each test's estate sits in its own band, 0.05° apart. The bands wrap a row north before they would cross
+     * longitude 15 (Nigeria's eastern edge, where estate creation refuses a boundary): the 155th band used to land
+     * at 15.05 and fail whichever test drew it.
+     */
     private static List<List<BigDecimal>> estateRing(int band) {
-        double lng = 7.30 + band * 0.05;
-        double lat = 9.05;
+        double lng = 7.30 + (band % BANDS_PER_ROW) * 0.05;
+        double lat = 9.05 + (double) (band / BANDS_PER_ROW) * 0.05;
         return Arrays.stream(new double[][] {
                         {lng, lat}, {lng + 0.01, lat}, {lng + 0.01, lat + 0.01}, {lng, lat + 0.01}, {lng, lat}})
                 .map(position -> List.of(BigDecimal.valueOf(position[0]), BigDecimal.valueOf(position[1])))
