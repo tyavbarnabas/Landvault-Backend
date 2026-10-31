@@ -123,6 +123,7 @@
     <include file="changes/115-buyer-gain-payouts.xml" relativeToChangelogFile="true"/>
     <include file="changes/116-resale-listings.xml" relativeToChangelogFile="true"/>
     <include file="changes/117-marketplace-resale-listings.xml" relativeToChangelogFile="true"/>
+    <include file="changes/118-resale-consent.xml" relativeToChangelogFile="true"/>
 
     <!-- Include each domain's changelog here as it's added. -->
 </databaseChangeLog>

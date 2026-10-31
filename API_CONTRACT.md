@@ -895,7 +895,7 @@ agreedPrice, paid, paidInAll, developerPrice, lowestPrice, thresholds, consentRe
 - `PUT /api/resale/listings/{id}` `{ price }` — not on an early sale (`INVALID_PRICE`); 409 `LISTING_NOT_LIVE`.
 - `POST /api/resale/listings/{id}/withdraw` — 409 `LISTING_NOT_LIVE`. Another buyer's listing is 404
   `LISTING_NOT_FOUND`.
-- `ResaleListing`: `{ id, transactionId, transactionReference, kind, status (listed | withdrawn | expired | ended),
+- `ResaleListing`: `{ id, transactionId, transactionReference, kind, status (listed | withdrawn | expired | ended; phase 4 adds awaiting_consent | refused),
   earlySale, price (asking, or the developer's current price on an early sale), currency, listedAt, expiresAt,
   closedAt, closeReason (in_arrears | notice_running | estate_not_listed | early_sale_below_agreed_price |
   plan_ended), closeMessage, pausesInactivity, quote }` (`quote` as on the read, while listed).
@@ -905,6 +905,28 @@ agreedPrice, paid, paidInAll, developerPrice, lowestPrice, thresholds, consentRe
 
 **Phase 3, on the marketplace** (changeset 117): live listings appear in the public feed — see "Unified
 marketplace feed" above.
+
+**Phase 4, the developer's consent** (changeset 118):
+- On an estate whose default terms say `transferRequiresConsent`, a new listing comes back `status:
+  awaiting_consent` — **not on the marketplace** — with `requiresConsent: true` and `consentDueAt` (14 days);
+  `listedAt`/`expiresAt` are null until the developer consents, and the 90 days start then. Price changes and
+  withdrawal work while it waits. Otherwise it is `listed` at once, as before.
+- `ResaleListing` gains `requiresConsent`, `consentDueAt`, `consentDecidedAt`, `refusalReason`; `status` gains
+  `awaiting_consent` and `refused`; `closeReason` gains `consent_not_given` (no answer in 14 days — list again to
+  ask again).
+- Developer (`portal.resale.consent`, Executive Director, company-wide — 403
+  `RESALE_CONSENT_REQUIRES_COMPANY_WIDE_SCOPE` when narrowed; add the slug to `authService.ts`):
+  - `GET /api/portal/resale/listings?status=&cursor&limit` → `Page<PortalResaleListing>`, waiting for consent first
+    (soonest due), then newest. `{ id, status, estateId, estateName, plotId, plotLabel, sellerName,
+    transactionReference, kind, earlySale, price, currency, requiresConsent, requestedAt, consentDueAt,
+    consentDecidedAt, refusalReason, listedAt, expiresAt, closedAt, closeReason }` — never what the seller paid.
+  - `POST …/{id}/consent` → the listing, now `listed` (or `ended` with `closeReason` if the plan fell into arrears,
+    got a notice or the estate left the marketplace while it waited).
+  - `POST …/{id}/refuse` `{ reason }` (required; the seller reads it) → `refused`.
+  - 409 `CONSENT_NOT_AWAITED` (not waiting), `CONSENT_REQUEST_LAPSED` (past the 14 days); another company's is 404
+    `LISTING_NOT_FOUND`.
+- The Executive Directors are emailed when consent is asked, and told (no decision) when a plot on an estate
+  needing no consent is listed.
 
 The frontend mock's earlier shape, kept for reference until the later phases replace it:
 

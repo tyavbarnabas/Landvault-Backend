@@ -53,6 +53,7 @@ public class OpenApiConfig {
     public static final String TAG_PORTAL_CONFLICTS = "Portal — Conflicts";
     public static final String TAG_PORTAL_BRANCHES = "Portal — Branches";
     public static final String TAG_PORTAL_STAFF = "Portal — Staff";
+    public static final String TAG_PORTAL_RESALE = "Portal — Resale";
     public static final String TAG_ADMIN_TENANTS = "Admin — Tenants";
     public static final String TAG_ADMIN_KYC = "Admin — Verification";
     public static final String TAG_ADMIN_CONFLICTS = "Admin — Conflicts";
@@ -186,6 +187,10 @@ public class OpenApiConfig {
                         new Tag().name(TAG_PORTAL_STAFF)
                                 .description("Inviting a company's own staff. Invitation only — staff never "
                                         + "self-register."),
+                        new Tag().name(TAG_PORTAL_RESALE)
+                                .description("Plots buyers are reselling on a developer's estates. Where an "
+                                        + "estate's terms need consent, nothing goes on sale until the Executive "
+                                        + "Director gives it."),
                         new Tag().name(TAG_ADMIN_TENANTS)
                                 .description("Onboarding requests and tenant onboarding, the verification "
                                         + "state machine, plan, status and support access."),

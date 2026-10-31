@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Sell my plot, phase 4 (decided with the user 2026-10-29): on an estate
+        whose terms say a transfer needs the developer's consent, the developer
+        is asked BEFORE the plot goes on sale. See AGENTS.md, "Sell my plot".
+
+        requires_consent is the estate's answer when the plot was listed, kept
+        on the listing: a later change to the estate's terms doesn't reach a
+        listing already made. Such a listing starts AWAITING_CONSENT, off the
+        marketplace (the views read LISTED only), with 14 days for an answer
+        (consent_due_at). Consent makes it LISTED and starts its 90 days
+        (listed_at, expires_at — so both are null until then); a refusal makes
+        it REFUSED with a reason the seller reads; no answer in time ends it
+        (ENDED, close_reason consent_not_given).
+
+        Consent belongs to the listing: a price change keeps it, a new listing
+        asks again. The flexible inactivity pause starts when it goes live, so
+        pauses_inactivity is decided then (it is no longer fixed at creation).
+
+        portal.resale.consent: company-wide (the Executive Director), like
+        revocation — putting a new buyer on a plot is the director's call.
+        FRONTEND REQUIREMENT: add it to authService.ts.
+    -->
+    <changeSet id="118-resale-consent" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE resale_listings
+                ADD COLUMN requires_consent   boolean NOT NULL DEFAULT false,
+                ADD COLUMN consent_due_at     timestamp(6) with time zone,
+                ADD COLUMN consent_decided_at timestamp(6) with time zone,
+                ADD COLUMN consent_decided_by uuid REFERENCES users (id),
+                ADD COLUMN refusal_reason     varchar(1000),
+                ALTER COLUMN listed_at DROP NOT NULL,
+                ALTER COLUMN expires_at DROP NOT NULL,
+                DROP CONSTRAINT chk_resale_listings_status,
+                DROP CONSTRAINT chk_resale_listings_closed,
+                DROP CONSTRAINT chk_resale_listings_pause;
+
+            ALTER TABLE resale_listings
+                ADD CONSTRAINT chk_resale_listings_status CHECK (status IN
+                    ('AWAITING_CONSENT', 'LISTED', 'WITHDRAWN', 'EXPIRED', 'ENDED', 'REFUSED')),
+                ADD CONSTRAINT chk_resale_listings_closed CHECK (
+                    (status IN ('AWAITING_CONSENT', 'LISTED')) = (closed_at IS NULL)
+                    AND (status = 'ENDED') = (close_reason IS NOT NULL)
+                    AND (status = 'REFUSED') = (refusal_reason IS NOT NULL)),
+                ADD CONSTRAINT chk_resale_listings_live CHECK (
+                    (listed_at IS NULL) = (expires_at IS NULL)
+                    AND (status <> 'LISTED' OR listed_at IS NOT NULL)
+                    AND (status <> 'AWAITING_CONSENT' OR listed_at IS NULL)),
+                ADD CONSTRAINT chk_resale_listings_consent CHECK (
+                    requires_consent = (consent_due_at IS NOT NULL)
+                    AND (requires_consent OR listed_at IS NOT NULL)
+                    AND (status <> 'AWAITING_CONSENT' OR requires_consent)
+                    AND (status <> 'REFUSED' OR requires_consent)
+                    AND (NOT requires_consent OR listed_at IS NULL OR consent_decided_at IS NOT NULL)
+                    AND (consent_decided_at IS NULL) = (consent_decided_by IS NULL)),
+                ADD CONSTRAINT chk_resale_listings_pause CHECK (NOT pauses_inactivity
+                    OR (kind = 'FLEXIBLE' AND listed_at IS NOT NULL));
+
+            DROP INDEX uq_resale_listings_one_live;
+            CREATE UNIQUE INDEX uq_resale_listings_one_live ON resale_listings (transaction_id)
+                WHERE status IN ('AWAITING_CONSENT', 'LISTED');
+            CREATE INDEX idx_resale_listings_awaiting ON resale_listings (consent_due_at)
+                WHERE status = 'AWAITING_CONSENT';
+            CREATE INDEX idx_resale_listings_seller_tenant ON resale_listings (seller_tenant_id);
+            COMMENT ON TABLE resale_listings IS
+                'Sell my plot: a buyer''s listing of a plot they own or are paying for. AWAITING_CONSENT (an estate needing the developer''s consent, off the marketplace, 14 days to answer), LISTED, then WITHDRAWN, EXPIRED after 90 days, REFUSED by the developer (refusal_reason) or ENDED by a rule (close_reason). An early sale has no asking_price: its price is the developer''s current one.';
+
+            INSERT INTO permissions (id, created_at, created_by, deleted, code, description, label, group_code,
+                                     sort_order, requires_company_wide) VALUES
+                (gen_random_uuid(), now(), 'system', false, 'portal.resale.consent',
+                 'See the plots buyers are reselling on the company''s estates, and give or refuse consent to a sale where the estate''s terms require it. Company-wide roles only.',
+                 'Consent to resales', 'estates', 30, true);
+            INSERT INTO role_permissions (id, created_at, created_by, deleted, role_id, permission_id)
+            SELECT gen_random_uuid(), now(), 'system', false, r.id, p.id
+            FROM roles r, permissions p
+            WHERE p.code = 'portal.resale.consent' AND r.code = 'executive_director';
+        ]]></sql>
+        <!-- Restoring 116's constraints needs every listing to have gone live; ones awaiting or refused must go first. -->
+        <rollback><![CDATA[
+            DELETE FROM role_permissions WHERE permission_id IN
+                (SELECT id FROM permissions WHERE code = 'portal.resale.consent');
+            DELETE FROM permissions WHERE code = 'portal.resale.consent';
+            DROP INDEX idx_resale_listings_seller_tenant;
+            DROP INDEX idx_resale_listings_awaiting;
+            DROP INDEX uq_resale_listings_one_live;
+            CREATE UNIQUE INDEX uq_resale_listings_one_live ON resale_listings (transaction_id) WHERE status = 'LISTED';
+            ALTER TABLE resale_listings
+                DROP CONSTRAINT chk_resale_listings_pause,
+                DROP CONSTRAINT chk_resale_listings_consent,
+                DROP CONSTRAINT chk_resale_listings_live,
+                DROP CONSTRAINT chk_resale_listings_closed,
+                DROP CONSTRAINT chk_resale_listings_status,
+                ALTER COLUMN listed_at SET NOT NULL,
+                ALTER COLUMN expires_at SET NOT NULL,
+                DROP COLUMN refusal_reason,
+                DROP COLUMN consent_decided_by,
+                DROP COLUMN consent_decided_at,
+                DROP COLUMN consent_due_at,
+                DROP COLUMN requires_consent;
+            ALTER TABLE resale_listings
+                ADD CONSTRAINT chk_resale_listings_status CHECK (status IN ('LISTED', 'WITHDRAWN', 'EXPIRED', 'ENDED')),
+                ADD CONSTRAINT chk_resale_listings_closed CHECK ((status = 'LISTED') = (closed_at IS NULL)
+                    AND (status = 'ENDED') = (close_reason IS NOT NULL)),
+                ADD CONSTRAINT chk_resale_listings_pause CHECK (NOT pauses_inactivity OR kind = 'FLEXIBLE');
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

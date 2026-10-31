@@ -1,6 +1,7 @@
 package com.techcomfort.landvaultbackend.resale.internal.exceptions;
 
 import com.techcomfort.landvaultbackend.common.ErrorResponse;
+import com.techcomfort.landvaultbackend.resale.internal.controllers.PortalResaleController;
 import com.techcomfort.landvaultbackend.resale.internal.controllers.ResaleController;
 import com.techcomfort.landvaultbackend.resale.internal.controllers.ResaleListingController;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -15,7 +16,8 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-@RestControllerAdvice(assignableTypes = {ResaleController.class, ResaleListingController.class})
+@RestControllerAdvice(assignableTypes = {ResaleController.class, ResaleListingController.class,
+        PortalResaleController.class})
 public class ResaleExceptionHandler {
 
     @ExceptionHandler(ResaleException.PlotNotFound.class)
@@ -59,6 +61,28 @@ public class ResaleExceptionHandler {
     @ExceptionHandler(ResaleException.ListingNotLive.class)
     public ResponseEntity<ErrorResponse> handleNotLive(ResaleException.ListingNotLive ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(ErrorResponse.of(ex.getMessage(), "LISTING_NOT_LIVE"));
+    }
+
+    @ExceptionHandler(ResaleException.ConsentNotAwaited.class)
+    public ResponseEntity<ErrorResponse> handleNotAwaited(ResaleException.ConsentNotAwaited ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ErrorResponse.of(ex.getMessage(), "CONSENT_NOT_AWAITED"));
+    }
+
+    @ExceptionHandler(ResaleException.ConsentRequestLapsed.class)
+    public ResponseEntity<ErrorResponse> handleLapsed(ResaleException.ConsentRequestLapsed ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ErrorResponse.of(ex.getMessage(), "CONSENT_REQUEST_LAPSED"));
+    }
+
+    @ExceptionHandler(ResaleException.ConsentRequiresCompanyWideScope.class)
+    public ResponseEntity<ErrorResponse> handleScope(ResaleException.ConsentRequiresCompanyWideScope ex) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ErrorResponse.of(ex.getMessage(), "RESALE_CONSENT_REQUIRES_COMPANY_WIDE_SCOPE"));
+    }
+
+    /** An unknown {@code status} filter. */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ErrorResponse> handleBadValue(IllegalArgumentException ex) {
+        return ResponseEntity.badRequest().body(ErrorResponse.of(ex.getMessage(), "VALIDATION_ERROR"));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

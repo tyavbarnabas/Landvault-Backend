@@ -203,7 +203,7 @@ class CompanyRolesUnderRlsIT {
         assertThat(permissions).filteredOn(PortalPermissionDto::requiresCompanyWide).extracting(PortalPermissionDto::code)
                 .containsExactlyInAnyOrder("portal.branches.manage", "portal.staff.invite",
                         "portal.settlement.manage", "portal.plans.revoke", "portal.roles.manage",
-                        "portal.documents.manage");
+                        "portal.documents.manage", "portal.resale.consent");
         assertThat(permissions).allMatch(p -> p.label() != null && p.held());
     }
 
@@ -215,13 +215,13 @@ class CompanyRolesUnderRlsIT {
                 }).getBody();
         assertThat(permissions).allMatch(p -> p.group() != null && p.groupLabel() != null);
         assertThat(permissions).extracting(PortalPermissionDto::code).containsExactly(
-                "portal.estates.view", "portal.estates.manage",
+                "portal.estates.view", "portal.estates.manage", "portal.resale.consent",
                 "portal.payments.verify", "portal.settlement.manage", "portal.plans.revoke",
                 "portal.branches.manage",
                 "portal.staff.invite", "portal.staff.request", "portal.roles.manage",
                 "portal.documents.view", "portal.documents.manage");
         assertThat(permissions).extracting(PortalPermissionDto::group).containsExactly(
-                "estates", "estates", "finance", "finance", "finance", "branches", "staff", "staff", "staff",
+                "estates", "estates", "estates", "finance", "finance", "finance", "branches", "staff", "staff", "staff",
                 "documents", "documents");
         assertThat(permissions).extracting(PortalPermissionDto::groupLabel).containsSubsequence(
                 "Estates", "Money", "Branches", "Staff and roles", "Documents");

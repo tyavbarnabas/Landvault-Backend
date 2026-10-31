@@ -22,8 +22,9 @@ import java.util.UUID;
 
 /**
  * Sell my plot, phase 2: a buyer's listing of a plot they own or are paying
- * for (changeset 116). Buyer-owned like the purchase: not RLS-policied. An
- * early sale stores no price — it is always the developer's current one.
+ * for (changeset 116; consent, 118). Buyer-owned like the purchase: not
+ * RLS-policied. An early sale stores no price — it is always the developer's
+ * current one.
  */
 @Getter
 @Setter
@@ -70,10 +71,12 @@ public class ResaleListing extends AbstractEntity {
     @Column(name = "status", nullable = false, length = 16)
     private ListingStatus status;
 
-    @Column(name = "listed_at", nullable = false, updatable = false)
+    /** When it went on the marketplace; null while it waits for the developer's consent, or if it never did. */
+    @Column(name = "listed_at")
     private Instant listedAt;
 
-    @Column(name = "expires_at", nullable = false)
+    /** 90 days after {@code listedAt}; null with it. */
+    @Column(name = "expires_at")
     private Instant expiresAt;
 
     @Column(name = "closed_at")
@@ -84,10 +87,34 @@ public class ResaleListing extends AbstractEntity {
     private String closeReason;
 
     /** The first listing on a flexible plan stops the inactivity clock while it is up. */
-    @Column(name = "pauses_inactivity", nullable = false, updatable = false)
+    @Column(name = "pauses_inactivity", nullable = false)
     private boolean pausesInactivity;
 
+    /** The estate's terms said, when it was listed, that a transfer needs the developer's consent. */
+    @Column(name = "requires_consent", nullable = false, updatable = false)
+    private boolean requiresConsent;
+
+    /** The developer has until then to answer; null when no consent is needed. */
+    @Column(name = "consent_due_at", updatable = false)
+    private Instant consentDueAt;
+
+    @Column(name = "consent_decided_at")
+    private Instant consentDecidedAt;
+
+    @Column(name = "consent_decided_by")
+    private UUID consentDecidedBy;
+
+    /** The developer's reason, which the seller reads (REFUSED only). */
+    @Column(name = "refusal_reason", length = 1000)
+    private String refusalReason;
+
+    /** On the marketplace now. */
     public boolean isLive() {
         return status == ListingStatus.LISTED;
+    }
+
+    /** Not over yet: on the marketplace, or waiting for consent. */
+    public boolean isOpen() {
+        return status.isOpen();
     }
 }
