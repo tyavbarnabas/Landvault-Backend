@@ -51,8 +51,9 @@ public record ResaleEligibilityDto(
         @Schema(description = "The two profit thresholds on a plan; null when paid in full.", nullable = true)
         Thresholds thresholds,
 
-        @Schema(description = "The estate's terms say a transfer needs the developer's consent (asked before a "
-                + "buyer pays); null when the estate declares no default terms.", nullable = true)
+        @Schema(description = "The estate's terms say a transfer needs the developer's consent: a listing then "
+                + "waits off the marketplace until the developer gives it. Null when the estate declares no default "
+                + "terms (no consent needed).", nullable = true)
         Boolean consentRequired,
 
         @Schema(description = "The split at `price` (or, on an early sale or with no price given, at "

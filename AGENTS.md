@@ -6944,9 +6944,49 @@ developers' estates.
   `SecurityConfig`. The estate DTO gains `resaleCount` and `resaleFromPrice`.
 - **The map is unchanged**: a resale plot shows `UNAVAILABLE` (it isn't for sale from the developer); the listing
   carries `plotId` so the frontend can highlight it.
-- Not yet: the wishlist's `resale` type, holding and buying (phase 5), consent (phase 4).
+- Not yet: the wishlist's `resale` type, holding and buying (phase 5).
 
 Proven red: the early sale's below-the-agreed-price filter (the listing stayed on the feed).
+
+### Phase 4: the developer's consent (changeset 118)
+
+Decided with the user 2026-10-29 (D16, SP-11, SP-14): **consent is asked when the plot is listed, before any buyer
+exists**, so a buyer only ever sees a plot that can be sold and nothing is ever paid on one that can't.
+
+- **The estate's terms when the plot is listed decide** (`transferRequiresConsent` on its default terms; none
+  declared = no consent), and the listing keeps the answer (`requires_consent`): a later change to the estate's
+  terms doesn't reach a listing already made.
+- **Needs consent**: the listing starts `AWAITING_CONSENT` — off the marketplace (the views read `LISTED` only) —
+  with **14 days** for an answer (`consent_due_at`). Consenting makes it `LISTED`, and **its 90 days start then**
+  (`listed_at`/`expires_at` are null until it goes live). Refusing needs a reason the seller reads (`REFUSED`,
+  `refusal_reason`). No answer in time: the sweep ends it (`ENDED`, `consent_not_given`); the seller can list again,
+  which asks again. A consent arriving late is 409 `CONSENT_REQUEST_LAPSED`.
+- **No consent needed**: live at once, as before — and the Executive Directors get a notice email, no decision asked.
+- **Consent belongs to the listing**: a price change keeps it; a new listing asks again. The seller may change the
+  price or withdraw while it waits; the sweep's other rules (arrears, a notice, the estate leaving) apply while it
+  waits too.
+- **Consenting re-runs the sweep's rules**: if the plan fell into arrears (etc.) while it waited, the consent is
+  recorded but the listing comes back `ENDED` with that reason rather than going live.
+- **The flexible pause starts at go-live**: `pauses_inactivity` is decided when a listing goes `LISTED` (the first
+  to go live on the plan), so a refused or unanswered listing doesn't use it up, and waiting for the developer
+  doesn't pause the clock.
+- **Who decides**: `portal.resale.consent` (estates group, `requires_company_wide`, Executive Director) **and** a
+  company-wide view (`RESALE_CONSENT_REQUIRES_COMPANY_WIDE_SCOPE`, 403, a director narrowed with `X-Branch-Id`
+  included) — the revocation rule: putting a new buyer on a plot is the director's call. `GET|POST
+  /api/portal/resale/listings[/{id}/consent|refuse]`, `ResaleConsentService`.
+- **The company filter is the wall**: `resale_listings` isn't RLS-policied (buyer-owned), so every developer read
+  and write is by `seller_tenant_id` from `TenantContext`; another company's listing is a 404.
+- **The developer sees** the seller's name and purchase reference (their own customer), the plot and the price —
+  never what was paid or the split. Labels come from `PortfolioApi.plotLabelOf` (through
+  `landvault_buyer_plot_details`), so the seller's own request, which has no tenant scope, can name the plot in the
+  email.
+- **Emails** (`ResaleMailer`, `landvault.resale.delivery`; `log` in tests only): every active company-wide Executive
+  Director, after commit, failure-safe — "consent needed by …" or "listed for resale". Decisions aren't emailed to
+  the seller yet (phase 8); they read them on `GET /api/resale/listings/mine`.
+- Audit: `resale.consent_requested`, `resale.consent_given`, `resale.consent_refused`, `resale.consent_lapsed`.
+
+Proven red: the company filter (another company's director consented, 200), listing without waiting for consent,
+and the lapse.
 
 ## A buyer's address (changeset 097)
 

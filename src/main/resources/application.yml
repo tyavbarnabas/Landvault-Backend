@@ -132,6 +132,10 @@ landvault:
     # Sell my plot: once a day at 00:30 Lagos, listings past 90 days, or that a rule
     # says must come down, are taken down.
     sweep-cron: "0 30 0 * * *"
+    # The developer's emails (phase 4). `delivery` works like invitations.delivery; "log" is for tests only.
+    delivery: ${RESALE_DELIVERY:email}
+    from-address: ${MAIL_FROM:noreply@hometrue.com.ng}
+    review-url: ${RESALE_REVIEW_URL:http://localhost:8443/portal/resale}
   refunds:
     # How often Paystack is asked about refunds it accepted but hasn't finished.
     sweep-interval: 15m

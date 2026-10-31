@@ -14,6 +14,7 @@ import com.techcomfort.landvaultbackend.common.PageResponse;
 import com.techcomfort.landvaultbackend.common.PageResponses;
 import com.techcomfort.landvaultbackend.common.TitleStatus;
 import com.techcomfort.landvaultbackend.common.TitleType;
+import com.techcomfort.landvaultbackend.portfolio.PlotLabel;
 import com.techcomfort.landvaultbackend.portfolio.PortfolioApi;
 import com.techcomfort.landvaultbackend.portfolio.dto.ArrearsDto;
 import com.techcomfort.landvaultbackend.portfolio.dto.OwnedPlotDto;
@@ -105,6 +106,12 @@ public class PortfolioService implements PortfolioApi {
                 .map(OwnedPlotDto::transactionId)
                 .filter(Objects::nonNull)
                 .findFirst();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<PlotLabel> plotLabelOf(UUID buyerUserId, UUID plotId) {
+        return Optional.ofNullable(details(buyerUserId).get(plotId)).map(d -> new PlotLabel(d.estateName(), d.label()));
     }
 
     @Transactional(readOnly = true)

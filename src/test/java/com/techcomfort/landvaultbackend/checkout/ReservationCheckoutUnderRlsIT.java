@@ -63,6 +63,7 @@ import com.techcomfort.landvaultbackend.payments.internal.service.PayoutSweeper;
 import com.techcomfort.landvaultbackend.payments.internal.service.RefundSweeper;
 import com.techcomfort.landvaultbackend.resale.internal.enums.ListingStatus;
 import com.techcomfort.landvaultbackend.resale.internal.service.ResaleListingSweeper;
+import com.techcomfort.landvaultbackend.resale.internal.service.ResaleMailer;
 import com.techcomfort.landvaultbackend.payments.internal.service.SettlementAlertSender;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.junit.jupiter.api.BeforeEach;
@@ -86,6 +87,7 @@ import org.testcontainers.utility.DockerImageName;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -223,6 +225,10 @@ class ReservationCheckoutUnderRlsIT {
 
     @Autowired
     private ResaleListingSweeper resaleSweeper;
+
+    /** Real (the logging one), watched: the developer is told about every resale listing. */
+    @MockitoSpyBean
+    private ResaleMailer resaleMailer;
 
     /** Payout alerts, checked rather than sent. */
     @MockitoBean
@@ -3844,6 +3850,149 @@ class ReservationCheckoutUnderRlsIT {
         // Don't leave it live: other tests run the sweep and count what it takes down.
         assertThat(restTemplate.exchange("/api/resale/listings/" + id + "/withdraw", HttpMethod.POST,
                 entity(buyer.token(), null), String.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    /**
+     * Sell my plot, phase 4: on an estate whose terms need consent, a listing
+     * waits off the marketplace; the Executive Director is asked, sees the
+     * seller and the plot, and consenting puts it live with its 90 days
+     * starting then. The estate's terms when it was listed decide.
+     */
+    @Test
+    void onAnEstateNeedingConsentAListingWaitsOffTheMarketplaceUntilTheDirectorConsents() {
+        declareDefaultTerms("[]", null);
+        TransactionDto sale = verifiedSale();
+        execute("UPDATE users SET status = 'ACTIVE' WHERE tenant_id = '" + seller.id() + "'");
+        clearInvocations(resaleMailer);
+
+        JsonNode listing = objectMapper.readTree(listResale(sale.id(), "18000000").getBody());
+        String id = listing.path("id").asString();
+        assertThat(listing.path("status").asString()).as(listing.toString()).isEqualTo("awaiting_consent");
+        assertThat(listing.path("requiresConsent").asBoolean()).isTrue();
+        assertThat(listing.path("listedAt").isNull()).isTrue();
+        assertThat(Instant.parse(listing.path("consentDueAt").asString()))
+                .isBetween(Instant.now().plus(Duration.ofDays(14)).minusSeconds(60), Instant.now().plus(Duration.ofDays(14)));
+        verify(resaleMailer).consentRequested(argThat(a -> a.estateName() != null && a.plotLabel().startsWith("Block ")
+                && a.price().equals("₦18,000,000.00") && !a.earlySale()), eq(LocalDate.ofInstant(
+                Instant.parse(listing.path("consentDueAt").asString()), ZoneId.of("Africa/Lagos"))));
+        verify(resaleMailer, never()).listedNotice(any());
+
+        assertThat(restTemplate.getForEntity("/api/marketplace/resales/" + id, String.class).getStatusCode())
+                .as("not for sale yet").isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(feedItem(publicJson("/api/marketplace/listings?limit=100"), "resale", id)).isNull();
+
+        // The estate's terms changing now doesn't reach a listing already made.
+        assertThat(restTemplate.exchange("/api/portal/estates/" + estateId + "/default-terms", HttpMethod.PUT,
+                entity(seller.token(), "{\"revocationAfterMonths\":3,\"revocationNoticeDays\":30,"
+                        + "\"transferRequiresConsent\":false,\"penaltyTiers\":[]}"), String.class).getStatusCode())
+                .isEqualTo(HttpStatus.OK);
+        execute(LetterApprovalFixture.approvedLetterSql(estateId));
+        assertThat(changeResalePrice(id, "19000000").getBody()).as("a price change keeps the request")
+                .contains("\"status\":\"awaiting_consent\"");
+
+        JsonNode queue = objectMapper.readTree(get("/api/portal/resale/listings?status=awaiting_consent",
+                seller.token(), String.class).getBody());
+        JsonNode row = queue.path("items").get(0);
+        assertThat(row.path("id").asString()).as(queue.toString()).isEqualTo(id);
+        assertThat(row.path("sellerName").asString()).isNotBlank();
+        assertThat(row.path("transactionReference").asString()).isEqualTo(sale.reference());
+        assertThat(row.path("plotLabel").asString()).startsWith("Block ");
+        assertThat(row.path("price").decimalValue()).isEqualByComparingTo("19000000");
+        assertThat(row.toString()).as("never what they paid").doesNotContain("\"paid\"", "paidInAll", "quote",
+                "sellerReceives");
+
+        String otherDirector = verifiedTenant().token();
+        assertThat(consentAction(otherDirector, id, "consent", null).getStatusCode()).as("another company's")
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        UUID branch = UUID.fromString(queryString("SELECT id FROM branches WHERE organization_id = '" + seller.id()
+                + "' LIMIT 1"));
+        assertThat(consentAction(staffWithRole(seller.id(), "executive_director", branch), id, "consent", null)
+                .getBody()).as("narrowed to a branch").contains("RESALE_CONSENT_REQUIRES_COMPANY_WIDE_SCOPE");
+        assertThat(consentAction(staffWithRole(seller.id(), "finance_officer", null), id, "consent", null)
+                .getStatusCode()).as("finance can't").isEqualTo(HttpStatus.FORBIDDEN);
+
+        JsonNode given = objectMapper.readTree(consentAction(seller.token(), id, "consent", null).getBody());
+        assertThat(given.path("status").asString()).as(given.toString()).isEqualTo("listed");
+        Instant listedAt = Instant.parse(given.path("listedAt").asString());
+        assertThat(Instant.parse(given.path("expiresAt").asString())).isEqualTo(listedAt.plus(Duration.ofDays(90)));
+        assertThat(given.path("consentDecidedAt").isNull()).isFalse();
+        assertThat(publicJson("/api/marketplace/resales/" + id).path("price").decimalValue())
+                .isEqualByComparingTo("19000000");
+        assertThat(consentAction(seller.token(), id, "consent", null).getBody()).as("already decided")
+                .contains("CONSENT_NOT_AWAITED");
+
+        restTemplate.exchange("/api/resale/listings/" + id + "/withdraw", HttpMethod.POST,
+                entity(buyer.token(), null), String.class);
+    }
+
+    /** Sell my plot, phase 4: a refusal needs a reason, which the seller reads; listing again asks again. */
+    @Test
+    void aRefusedConsentTakesTheListingDownWithAReasonTheSellerReads() {
+        declareDefaultTerms("[]", null);
+        TransactionDto sale = verifiedSale();
+        String id = objectMapper.readTree(listResale(sale.id(), "18000000").getBody()).path("id").asString();
+
+        assertThat(consentAction(seller.token(), id, "refuse", "{\"reason\":\" \"}").getBody())
+                .as("a reason is required").contains("VALIDATION_ERROR");
+        JsonNode refused = objectMapper.readTree(consentAction(seller.token(), id, "refuse",
+                "{\"reason\":\"Outstanding development levy on this plot.\"}").getBody());
+        assertThat(refused.path("status").asString()).as(refused.toString()).isEqualTo("refused");
+
+        JsonNode mine = objectMapper.readTree(get("/api/resale/listings/mine", buyer.token(), String.class).getBody());
+        assertThat(mine.get(0).path("status").asString()).isEqualTo("refused");
+        assertThat(mine.get(0).path("refusalReason").asString()).isEqualTo("Outstanding development levy on this plot.");
+        assertThat(restTemplate.getForEntity("/api/marketplace/resales/" + id, String.class).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(consentAction(seller.token(), id, "consent", null).getBody()).contains("CONSENT_NOT_AWAITED");
+
+        JsonNode again = objectMapper.readTree(listResale(sale.id(), "18000000").getBody());
+        assertThat(again.path("status").asString()).as("a new listing asks again").isEqualTo("awaiting_consent");
+        restTemplate.exchange("/api/resale/listings/" + again.path("id").asString() + "/withdraw", HttpMethod.POST,
+                entity(buyer.token(), null), String.class);
+    }
+
+    /** Sell my plot, phase 4: with no answer in 14 days the request lapses and the sweep takes it down. */
+    @Test
+    void aConsentRequestNobodyAnswersLapsesAfterFourteenDays() {
+        declareDefaultTerms("[]", null);
+        TransactionDto sale = verifiedSale();
+        String id = objectMapper.readTree(listResale(sale.id(), "18000000").getBody()).path("id").asString();
+
+        assertThat(resaleSweeper.sweep(Instant.now())).as("still within the 14 days")
+                .doesNotContainKey(ListingStatus.ENDED);
+        execute("UPDATE resale_listings SET consent_due_at = now() - interval '1 minute' WHERE id = '" + id + "'");
+        assertThat(consentAction(seller.token(), id, "consent", null).getBody()).contains("CONSENT_REQUEST_LAPSED");
+        assertThat(resaleSweeper.sweep(Instant.now())).containsEntry(ListingStatus.ENDED, 1);
+
+        JsonNode mine = objectMapper.readTree(get("/api/resale/listings/mine", buyer.token(), String.class).getBody());
+        assertThat(mine.get(0).path("status").asString()).isEqualTo("ended");
+        assertThat(mine.get(0).path("closeReason").asString()).isEqualTo("consent_not_given");
+        assertThat(mine.get(0).path("closeMessage").asString()).contains("didn't answer within 14 days");
+    }
+
+    /** Sell my plot, phase 4: where no consent is needed the plot goes live at once and the developer is told. */
+    @Test
+    void onAnEstateNeedingNoConsentTheListingGoesLiveAndTheDeveloperIsTold() {
+        TransactionDto sale = verifiedSale();
+        execute("UPDATE users SET status = 'ACTIVE' WHERE tenant_id = '" + seller.id() + "'");
+        clearInvocations(resaleMailer);
+
+        JsonNode listing = objectMapper.readTree(listResale(sale.id(), "18000000").getBody());
+        assertThat(listing.path("status").asString()).isEqualTo("listed");
+        assertThat(listing.path("requiresConsent").asBoolean()).isFalse();
+        verify(resaleMailer, atLeastOnce()).listedNotice(argThat(a -> a.plotLabel().startsWith("Block ")
+                && a.transactionReference().equals(sale.reference())));
+        verify(resaleMailer, never()).consentRequested(any(), any());
+        assertThat(consentAction(seller.token(), listing.path("id").asString(), "consent", null).getBody())
+                .as("nothing to consent to").contains("CONSENT_NOT_AWAITED");
+
+        restTemplate.exchange("/api/resale/listings/" + listing.path("id").asString() + "/withdraw",
+                HttpMethod.POST, entity(buyer.token(), null), String.class);
+    }
+
+    private ResponseEntity<String> consentAction(String token, String listingId, String action, String body) {
+        return restTemplate.exchange("/api/portal/resale/listings/" + listingId + "/" + action, HttpMethod.POST,
+                entity(token, body), String.class);
     }
 
     private JsonNode publicJson(String path) {

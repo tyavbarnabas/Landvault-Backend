@@ -29,7 +29,7 @@ import java.util.UUID;
 @RequestMapping("/api/resale")
 @RequiredArgsConstructor
 @Tag(name = OpenApiConfig.TAG_RESALE)
-public class ResaleController {
+public class   ResaleController {
 
     private final ResaleEligibilityService eligibility;
 

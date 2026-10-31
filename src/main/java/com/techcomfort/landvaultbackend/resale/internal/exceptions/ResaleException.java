@@ -44,4 +44,24 @@ public abstract class ResaleException extends RuntimeException {
             super("This listing is " + status + ", so it can't be changed. List the plot again instead.");
         }
     }
+
+    /** Phase 4: consent is only given or refused while the listing waits for it. */
+    public static class ConsentNotAwaited extends ResaleException {
+        public ConsentNotAwaited(String status) {
+            super("This listing isn't waiting for consent; it is " + status.replace('_', ' ') + ".");
+        }
+    }
+
+    public static class ConsentRequestLapsed extends ResaleException {
+        public ConsentRequestLapsed() {
+            super("The 14 days to answer this request have passed, so it has lapsed. The seller can list the plot "
+                    + "again to ask once more.");
+        }
+    }
+
+    public static class ConsentRequiresCompanyWideScope extends ResaleException {
+        public ConsentRequiresCompanyWideScope() {
+            super("Consent to a resale is given company-wide. Clear the branch filter and try again.");
+        }
+    }
 }
