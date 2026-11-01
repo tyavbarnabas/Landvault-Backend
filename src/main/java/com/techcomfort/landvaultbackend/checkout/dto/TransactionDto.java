@@ -115,6 +115,10 @@ public record TransactionDto(
                 + "didn't act on. Settled exactly as a withdrawal: the breakdown is at "
                 + "`GET /api/transactions/{id}/withdrawal`. Null otherwise. A notice still running is "
                 + "`standing.revocation.notice`.", nullable = true)
-        Instant revokedAt
+        Instant revokedAt,
+
+        @Schema(description = "Sell my plot: the resale listing this purchase buys from its present holder; null "
+                + "when bought from the developer. Always paid in full.", nullable = true)
+        UUID resaleListingId
 ) {
 }

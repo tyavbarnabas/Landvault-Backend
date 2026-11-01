@@ -58,12 +58,14 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
      * Rows: transaction id, reference, estate id, estate name, plot id, block
      * name, plot number, buyer id, total price, currency, awaiting since,
      * the plan's deposit (a flexible plan's minimum to start) and name (null
-     * when paying in full), and a flexible plan's total.
+     * when paying in full), a flexible plan's total, and (sell my plot) the
+     * resale split, null unless a resale.
      */
     @Query(value = "SELECT t.id, t.reference, e.id AS estate_id, e.name, p.id AS plot_id, b.name AS block_name, "
             + "p.plot_number, t.buyer_user_id, t.total_price, t.currency, t.updated_at, "
             + "COALESCE(t.deposit_amount, t.flexible_minimum_to_start) AS amount_due, t.plan_name, "
-            + "CASE WHEN t.plan = 'FLEXIBLE' THEN t.plan_total END AS flexible_plan_total "
+            + "CASE WHEN t.plan = 'FLEXIBLE' THEN t.plan_total END AS flexible_plan_total, "
+            + "t.resale_developer_receives, t.resale_seller_receives "
             + "FROM transactions t JOIN plots p ON p.id = t.plot_id JOIN estates e ON e.id = t.estate_id "
             + "LEFT JOIN blocks b ON b.id = p.block_id "
             + "WHERE t.status = 'AWAITING_FINANCE' AND t.seller_tenant_id = :tenantId "

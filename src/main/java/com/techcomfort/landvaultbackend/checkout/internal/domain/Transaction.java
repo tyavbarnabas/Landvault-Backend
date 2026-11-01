@@ -214,6 +214,24 @@ public class Transaction extends AbstractEntity {
     @Column(name = "schedule_version", nullable = false, insertable = false, updatable = false)
     private Integer scheduleVersion;
 
+    /** Sell my plot, phase 5b: the resale listing this purchase buys, and the purchase it buys it from. */
+    @Column(name = "resale_listing_id", updatable = false)
+    private UUID resaleListingId;
+
+    @Column(name = "resale_of_transaction_id", updatable = false)
+    private UUID resaleOfTransactionId;
+
+    /** The split fixed when the buyer held it (D25): the developer's part and the seller's; they add up to the price. */
+    @Column(name = "resale_developer_receives", precision = 19, scale = 2, updatable = false)
+    private BigDecimal resaleDeveloperReceives;
+
+    @Column(name = "resale_seller_receives", precision = 19, scale = 2, updatable = false)
+    private BigDecimal resaleSellerReceives;
+
+    public boolean isResale() {
+        return resaleListingId != null;
+    }
+
     /** The schedule version in force: 1 until a restructure (also before the row is re-read after insert). */
     public int currentScheduleVersion() {
         return scheduleVersion == null ? 1 : scheduleVersion;

@@ -112,6 +112,10 @@ public class OfferLetter extends AbstractAppendOnlyEntity {
     @Column(name = "opening", nullable = false, updatable = false)
     private String opening;
 
+    /** Sell my plot: an offer for a plot bought from its present holder, titled as a resale. */
+    @Column(name = "resale", nullable = false, updatable = false)
+    private boolean resale;
+
     @JdbcTypeCode(SqlTypes.ARRAY)
     @Column(name = "clauses", nullable = false, updatable = false, columnDefinition = "text[]")
     private String[] clauses;

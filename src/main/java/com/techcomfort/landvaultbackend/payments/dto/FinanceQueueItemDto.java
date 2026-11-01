@@ -73,8 +73,17 @@ public record FinanceQueueItemDto(
         @Schema(description = "A `contribution` on a flexible plan: which payment on the plan this is, counting "
                 + "those finance has verified — 1 is the first, whose verification holds the plot on the plan and "
                 + "issues the provisional letter. Null otherwise.", nullable = true, example = "1")
-        Integer contributionSequence
+        Integer contributionSequence,
+        @Schema(description = "Sell my plot: a resale, bought from the plot's present holder and paid in full — with "
+                + "the split fixed when the buyer held it. Verifying it, and the transfer, come in phase 6. Null "
+                + "when bought from you.", nullable = true)
+        Resale resale
 ) {
+
+    /** What you and the present holder receive from the price; they add up to it. */
+    @Schema(name = "FinanceResale")
+    public record Resale(BigDecimal developerReceives, BigDecimal sellerReceives) {
+    }
 
     /** A penalty charged on one instalment: the step reached and its amount. */
     @Schema(name = "FinancePenaltyLine")

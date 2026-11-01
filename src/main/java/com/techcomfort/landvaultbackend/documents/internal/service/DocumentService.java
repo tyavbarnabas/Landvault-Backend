@@ -414,7 +414,7 @@ public class DocumentService {
                 o.getNumber(),
                 properties.verifyUrlFor(o.getVerificationCode()),
                 o.getVerificationCode(),
-                AllocationLetterContent.OFFER_TITLE,
+                o.isResale() ? AllocationLetterContent.RESALE_OFFER_TITLE : AllocationLetterContent.OFFER_TITLE,
                 accepted.map(a -> "Accepted on " + DocumentFormats.dateTime(a.getAcceptedAt())).orElse(null));
     }
 
