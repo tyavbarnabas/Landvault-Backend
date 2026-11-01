@@ -33,7 +33,7 @@ public record ReservationDto(
 
         UUID plotId,
 
-        @Schema(description = "The tier this plot is priced by.")
+        @Schema(description = "The tier this plot is priced by; null on a resale hold.", nullable = true)
         UUID priceTierId,
 
         @Schema(description = "`active`, `expired`, `released` or `converted`.", example = "active")
@@ -43,6 +43,10 @@ public record ReservationDto(
 
         @Schema(description = "Seconds left on the hold, floored at 0. Computed server-side.",
                 example = "2700")
-        long secondsRemaining
+        long secondsRemaining,
+
+        @Schema(description = "Sell my plot: the resale listing held, when this is a hold on a buyer's resale "
+                + "rather than on a plot for sale from the developer; null otherwise.", nullable = true)
+        UUID resaleListingId
 ) {
 }

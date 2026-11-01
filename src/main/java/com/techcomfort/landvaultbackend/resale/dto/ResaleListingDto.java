@@ -14,7 +14,8 @@ public record ResaleListingDto(
         String transactionReference,
         @Schema(description = "`paid_in_full`, `installment` or `flexible`.") String kind,
         @Schema(description = "`awaiting_consent` (the estate needs the developer's consent; not on the marketplace "
-                + "yet), `listed`, `withdrawn` (you took it down), `expired` (90 days with no buyer), `refused` (the "
+                + "yet), `listed`, `held` (a buyer is holding it to buy it — it can't be changed or taken down, and your "
+                + "plan is paused), `withdrawn` (you took it down), `expired` (90 days with no buyer), `refused` (the "
                 + "developer refused — `refusalReason`) or `ended` (a rule took it down — `closeReason`).")
         String status,
         @Schema(description = "An early sale: its price is always the developer's current one.") boolean earlySale,

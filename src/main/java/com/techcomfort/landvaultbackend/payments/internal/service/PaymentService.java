@@ -113,6 +113,10 @@ public class PaymentService {
         UUID buyerId = currentScope().userId();
         PayableTransaction transaction = checkoutApi.transactionForBuyer(transactionId, buyerId)
                 .orElseThrow(PaymentException.TransactionNotFound::new);
+        // Sell my plot (D25): while a new buyer holds the plot, the seller's plan is paused and can't be paid.
+        if (checkoutApi.isHeldForResale(transactionId)) {
+            throw new PaymentException.PlotHeldForResale();
+        }
         if (amount != null && !transaction.isFlexible()) {
             throw new PaymentException.InvalidAmount(
                     "The amount comes from your purchase; only a flexible plan lets you choose it.");

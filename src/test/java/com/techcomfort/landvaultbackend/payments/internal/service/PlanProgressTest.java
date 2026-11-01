@@ -155,4 +155,21 @@ class PlanProgressTest {
                 .financeVerifiedAt(verifiedAt)
                 .build();
     }
+
+    /** Sell my plot (D25): only the days held on or after an instalment's due date move it; a running hold counts through today. */
+    @Test
+    void anUnpaidDueDateMovesByTheDaysAResaleHoldCoveredIt() {
+        LocalDate today = LocalDate.of(2026, 11, 1);
+        LocalDate due = LocalDate.of(2026, 10, 20);
+        List<PlanSchedule.Pause> closed = List.of(new PlanSchedule.Pause(LocalDate.of(2026, 10, 10),
+                LocalDate.of(2026, 10, 25)));
+        assertThat(PlanProgress.heldDaysFrom(closed, due, today)).as("20 Oct to 25 Oct").isEqualTo(5);
+        assertThat(PlanProgress.heldDaysFrom(closed, LocalDate.of(2026, 10, 1), today)).as("all 15 days")
+                .isEqualTo(15);
+        assertThat(PlanProgress.heldDaysFrom(closed, LocalDate.of(2026, 10, 30), today)).as("due after it ended")
+                .isZero();
+        List<PlanSchedule.Pause> running = List.of(new PlanSchedule.Pause(LocalDate.of(2026, 10, 10), null));
+        assertThat(PlanProgress.heldDaysFrom(running, due, today)).as("20 Oct through today").isEqualTo(13);
+        assertThat(due.plusDays(PlanProgress.heldDaysFrom(running, due, today))).isEqualTo(today.plusDays(1));
+    }
 }

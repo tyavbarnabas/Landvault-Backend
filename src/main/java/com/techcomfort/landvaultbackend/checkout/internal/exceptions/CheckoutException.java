@@ -80,6 +80,13 @@ public sealed class CheckoutException extends RuntimeException {
         }
     }
 
+    /** Sell my plot, phase 5a: buying a held resale arrives in phase 5b. */
+    public static final class ResalePurchaseNotYet extends CheckoutException {
+        public ResalePurchaseNotYet() {
+            super("Buying a resale plot isn't open yet. Your hold stands until it runs out, or release it.");
+        }
+    }
+
     /** A second transaction against one hold. */
     public static final class TransactionAlreadyExists extends CheckoutException {
         public TransactionAlreadyExists() {

@@ -516,6 +516,7 @@ public class FinanceVerificationService {
             case LATE_DEPOSIT_NOT_SUPPORTED -> new PaymentException.LateDepositNotSupported();
             case NOT_ON_PLAN -> new PaymentException.NotAwaitingFinance();
             case PLOT_NOT_ON_PLAN -> new PaymentException.PlotNotReserved();
+            case RESALE_NOT_YET -> new PaymentException.ResaleVerificationNotYet();
             case DONE -> new IllegalStateException("DONE is not a failure");
         };
     }

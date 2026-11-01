@@ -64,4 +64,33 @@ public abstract class ResaleException extends RuntimeException {
             super("Consent to a resale is given company-wide. Clear the branch filter and try again.");
         }
     }
+
+    /** Phase 5a: not on the marketplace, held by someone else, or no longer for sale — one answer. */
+    public static class ListingNotAvailable extends ResaleException {
+        public ListingNotAvailable() {
+            super("This plot is no longer available.");
+        }
+    }
+
+    /** D15: a buyer can't buy their own plot, under this account or another of theirs. */
+    public static class CannotBuyOwnPlot extends ResaleException {
+        public CannotBuyOwnPlot() {
+            super("You can't buy a plot you are selling.");
+        }
+    }
+
+    /** KY-1, as for any hold: verification gates buying. */
+    public static class KycRequired extends ResaleException {
+        public KycRequired() {
+            super("Identity verification must be completed before reserving a plot.");
+        }
+    }
+
+    /** D25: while a new buyer holds the plot, the seller can't change or withdraw the listing. */
+    public static class ListingHeld extends ResaleException {
+        public ListingHeld() {
+            super("A buyer is holding this plot to buy it, so the listing can't be changed or taken down "
+                    + "until that ends.");
+        }
+    }
 }

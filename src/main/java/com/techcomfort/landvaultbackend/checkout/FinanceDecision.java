@@ -20,5 +20,7 @@ public enum FinanceDecision {
     /** 3b: the purchase isn't an instalment plan in progress. */
     NOT_ON_PLAN,
     /** 3b: the held plot isn't ON_PLAN any more, so it can't be sold. */
-    PLOT_NOT_ON_PLAN
+    PLOT_NOT_ON_PLAN,
+    /** Sell my plot: a resale purchase — verifying and the transfer come in phase 6. */
+    RESALE_NOT_YET
 }

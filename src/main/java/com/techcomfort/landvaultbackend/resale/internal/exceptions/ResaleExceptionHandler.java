@@ -3,6 +3,7 @@ package com.techcomfort.landvaultbackend.resale.internal.exceptions;
 import com.techcomfort.landvaultbackend.common.ErrorResponse;
 import com.techcomfort.landvaultbackend.resale.internal.controllers.PortalResaleController;
 import com.techcomfort.landvaultbackend.resale.internal.controllers.ResaleController;
+import com.techcomfort.landvaultbackend.resale.internal.controllers.ResaleHoldController;
 import com.techcomfort.landvaultbackend.resale.internal.controllers.ResaleListingController;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -17,7 +18,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 @RestControllerAdvice(assignableTypes = {ResaleController.class, ResaleListingController.class,
-        PortalResaleController.class})
+        PortalResaleController.class, ResaleHoldController.class})
 public class ResaleExceptionHandler {
 
     @ExceptionHandler(ResaleException.PlotNotFound.class)
@@ -47,9 +48,13 @@ public class ResaleExceptionHandler {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(ErrorResponse.of(ex.getMessage(), "ALREADY_LISTED"));
     }
 
-    /** Two listings racing past the service check: the one-live-listing index is the backstop. */
+    /** A race past the service checks: the one-live-listing and one-hold-per-listing indexes are the backstop. */
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<ErrorResponse> handleRace(DataIntegrityViolationException ex) {
+        String message = String.valueOf(ex.getMostSpecificCause().getMessage());
+        if (message.contains("uq_reservations_one_active_resale_hold") || message.contains("uq_resale_holds_one_open")) {
+            return handleNotAvailable(new ResaleException.ListingNotAvailable());
+        }
         return handleAlreadyListed(new ResaleException.AlreadyListed());
     }
 
@@ -77,6 +82,26 @@ public class ResaleExceptionHandler {
     public ResponseEntity<ErrorResponse> handleScope(ResaleException.ConsentRequiresCompanyWideScope ex) {
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
                 .body(ErrorResponse.of(ex.getMessage(), "RESALE_CONSENT_REQUIRES_COMPANY_WIDE_SCOPE"));
+    }
+
+    @ExceptionHandler(ResaleException.ListingNotAvailable.class)
+    public ResponseEntity<ErrorResponse> handleNotAvailable(ResaleException.ListingNotAvailable ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ErrorResponse.of(ex.getMessage(), "LISTING_NOT_AVAILABLE"));
+    }
+
+    @ExceptionHandler(ResaleException.CannotBuyOwnPlot.class)
+    public ResponseEntity<ErrorResponse> handleOwnPlot(ResaleException.CannotBuyOwnPlot ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ErrorResponse.of(ex.getMessage(), "CANNOT_BUY_OWN_PLOT"));
+    }
+
+    @ExceptionHandler(ResaleException.KycRequired.class)
+    public ResponseEntity<ErrorResponse> handleKyc(ResaleException.KycRequired ex) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(ErrorResponse.of(ex.getMessage(), "KYC_REQUIRED"));
+    }
+
+    @ExceptionHandler(ResaleException.ListingHeld.class)
+    public ResponseEntity<ErrorResponse> handleHeld(ResaleException.ListingHeld ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ErrorResponse.of(ex.getMessage(), "LISTING_HELD"));
     }
 
     /** An unknown {@code status} filter. */

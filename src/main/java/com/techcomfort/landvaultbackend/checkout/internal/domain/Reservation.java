@@ -20,7 +20,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * A 45-minute hold on one plot. Buyer-owned: the inherited
+ * A 45-minute hold on one plot, or on a buyer's resale listing of one. Buyer-owned: the inherited
  * {@code tenantId}/{@code branchId} stay null and the seller is carried by
  * the explicit {@code sellerTenantId} instead. See AGENTS.md.
  */
@@ -51,8 +51,8 @@ public class Reservation extends AbstractEntity {
     @Column(name = "seller_tenant_id", nullable = false, updatable = false)
     private UUID sellerTenantId;
 
-    /** The tier the plot was priced by when the hold was taken. */
-    @Column(name = "price_tier_id", nullable = false, updatable = false)
+    /** The tier the plot was priced by when the hold was taken; null on a resale hold, which has its own price. */
+    @Column(name = "price_tier_id", updatable = false)
     private UUID priceTierId;
 
     /**
@@ -80,8 +80,20 @@ public class Reservation extends AbstractEntity {
      * distinction, so a released development plot must not come back as an
      * investment one.
      */
-    @Column(name = "previous_plot_status", nullable = false, length = 32)
+    @Column(name = "previous_plot_status", length = 32)
     private String previousPlotStatus;
+
+    /**
+     * Sell my plot: a hold on a resale listing rather than on a plot for sale
+     * from the developer. The plot's own status never changes (it stays SOLD
+     * or ON_PLAN), so there is nothing to restore when the hold ends.
+     */
+    @Column(name = "resale_listing_id", updatable = false)
+    private UUID resaleListingId;
+
+    /** The seller's purchase, on a resale hold: its due dates pause while this hold is open (D25). */
+    @Column(name = "resale_of_transaction_id", updatable = false)
+    private UUID resaleOfTransactionId;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 16)
@@ -93,4 +105,8 @@ public class Reservation extends AbstractEntity {
     /** When the hold stopped being active, however it ended. */
     @Column(name = "ended_at")
     private Instant endedAt;
+
+    public boolean isResale() {
+        return resaleListingId != null;
+    }
 }

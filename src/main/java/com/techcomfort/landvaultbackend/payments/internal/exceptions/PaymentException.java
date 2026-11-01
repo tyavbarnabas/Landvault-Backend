@@ -121,6 +121,21 @@ public abstract class PaymentException extends RuntimeException {
         }
     }
 
+    /** Sell my plot: verifying or rejecting a resale purchase comes in phase 6. */
+    public static class ResaleVerificationNotYet extends PaymentException {
+        public ResaleVerificationNotYet() {
+            super("This is a resale purchase. Verifying it, and the transfer, aren't open yet. Nothing was changed.");
+        }
+    }
+
+    /** Sell my plot (D25): a new buyer holds the seller's plot, so the seller's plan is locked. */
+    public static class PlotHeldForResale extends PaymentException {
+        public PlotHeldForResale() {
+            super("A buyer is holding this plot to buy it from the seller, so nothing can change on the plan "
+                    + "until that ends. Due dates and penalties are paused meanwhile.");
+        }
+    }
+
     public static class PlotNotReserved extends PaymentException {
         public PlotNotReserved() {
             super("The plot is no longer held for this purchase, so it can't be allocated. Nothing was changed.");

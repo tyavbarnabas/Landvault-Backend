@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Sell my plot, phase 5a (decided with the user 2026-10-31): a new buyer
+        holds a resale listing. See AGENTS.md, "Sell my plot".
+
+        The hold is a reservation, so checkout's flow (offer letter, payment,
+        the 45-minute window, the sweeps) is the ordinary one — but it holds the
+        LISTING, never the plot: the plot stays SOLD or ON_PLAN underneath, so
+        a resale reservation has no price tier and no plot status to restore.
+        resale_of_transaction_id is the seller's purchase: it is what checkout
+        reads to pause the seller's due dates while a buyer holds the plot
+        (D25), and what payments reads to lock the seller's plan.
+
+        resale_holds is the resale module's record of each hold, with the price
+        and the split fixed at that moment (D25): nothing after can move them.
+        One open hold per listing; never deleted.
+
+        resale_listings gains HELD: off the marketplace (the views read LISTED),
+        and neither the seller nor the sweep may touch it.
+    -->
+    <changeSet id="119-resale-holds" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE reservations
+                ADD COLUMN resale_listing_id        uuid REFERENCES resale_listings (id),
+                ADD COLUMN resale_of_transaction_id uuid REFERENCES transactions (id),
+                ALTER COLUMN price_tier_id DROP NOT NULL,
+                ALTER COLUMN previous_plot_status DROP NOT NULL,
+                ADD CONSTRAINT chk_reservations_resale CHECK (
+                    (resale_listing_id IS NULL) = (resale_of_transaction_id IS NULL)
+                    AND (resale_listing_id IS NOT NULL
+                         OR (price_tier_id IS NOT NULL AND previous_plot_status IS NOT NULL))
+                    AND (resale_listing_id IS NULL OR previous_plot_status IS NULL));
+            CREATE UNIQUE INDEX uq_reservations_one_active_resale_hold ON reservations (resale_listing_id)
+                WHERE status = 'ACTIVE' AND resale_listing_id IS NOT NULL;
+            CREATE INDEX idx_reservations_resale_of ON reservations (resale_of_transaction_id)
+                WHERE resale_of_transaction_id IS NOT NULL;
+
+            ALTER TABLE resale_listings
+                DROP CONSTRAINT chk_resale_listings_status,
+                DROP CONSTRAINT chk_resale_listings_closed,
+                DROP CONSTRAINT chk_resale_listings_live;
+            ALTER TABLE resale_listings
+                ADD CONSTRAINT chk_resale_listings_status CHECK (status IN
+                    ('AWAITING_CONSENT', 'LISTED', 'HELD', 'WITHDRAWN', 'EXPIRED', 'ENDED', 'REFUSED')),
+                ADD CONSTRAINT chk_resale_listings_closed CHECK (
+                    (status IN ('AWAITING_CONSENT', 'LISTED', 'HELD')) = (closed_at IS NULL)
+                    AND (status = 'ENDED') = (close_reason IS NOT NULL)
+                    AND (status = 'REFUSED') = (refusal_reason IS NOT NULL)),
+                ADD CONSTRAINT chk_resale_listings_live CHECK (
+                    (listed_at IS NULL) = (expires_at IS NULL)
+                    AND (status NOT IN ('LISTED', 'HELD') OR listed_at IS NOT NULL)
+                    AND (status <> 'AWAITING_CONSENT' OR listed_at IS NULL));
+            DROP INDEX uq_resale_listings_one_live;
+            CREATE UNIQUE INDEX uq_resale_listings_one_live ON resale_listings (transaction_id)
+                WHERE status IN ('AWAITING_CONSENT', 'LISTED', 'HELD');
+
+            CREATE TABLE resale_holds (
+                id                       uuid NOT NULL PRIMARY KEY,
+                tenant_id                uuid,
+                branch_id                uuid,
+                created_at               timestamp(6) with time zone NOT NULL,
+                updated_at               timestamp(6) with time zone,
+                created_by               varchar(255),
+                updated_by               varchar(255),
+                deleted                  boolean NOT NULL DEFAULT false,
+
+                listing_id               uuid NOT NULL REFERENCES resale_listings (id),
+                seller_transaction_id    uuid NOT NULL REFERENCES transactions (id),
+                reservation_id           uuid NOT NULL UNIQUE REFERENCES reservations (id),
+                buyer_user_id            uuid NOT NULL REFERENCES users (id),
+                held_at                  timestamp(6) with time zone NOT NULL,
+                ended_at                 timestamp(6) with time zone,
+                end_reason               varchar(16),
+                price                    numeric(19, 2) NOT NULL,
+                currency                 varchar(3) NOT NULL,
+                early_sale               boolean NOT NULL,
+                developer_balance        numeric(19, 2) NOT NULL,
+                penalties_owed           numeric(19, 2) NOT NULL,
+                gain                     numeric(19, 2) NOT NULL,
+                developer_gain_share_pct numeric(5, 2) NOT NULL,
+                developer_gain_share     numeric(19, 2) NOT NULL,
+                transfer_fee             numeric(19, 2) NOT NULL,
+                developer_receives       numeric(19, 2) NOT NULL,
+                seller_receives          numeric(19, 2) NOT NULL,
+
+                CONSTRAINT chk_resale_holds_ended CHECK ((ended_at IS NULL) = (end_reason IS NULL)),
+                CONSTRAINT chk_resale_holds_end_reason CHECK (end_reason IS NULL
+                    OR end_reason IN ('RELEASED', 'EXPIRED', 'CONVERTED')),
+                CONSTRAINT chk_resale_holds_split CHECK (price > 0
+                    AND developer_receives + seller_receives = price
+                    AND developer_receives >= 0 AND seller_receives >= 0)
+            );
+            CREATE UNIQUE INDEX uq_resale_holds_one_open ON resale_holds (listing_id) WHERE ended_at IS NULL;
+            CREATE INDEX idx_resale_holds_seller_transaction ON resale_holds (seller_transaction_id);
+            REVOKE DELETE, TRUNCATE ON resale_holds FROM ${appDbUsername};
+            COMMENT ON TABLE resale_holds IS
+                'Sell my plot: a new buyer''s hold on a resale listing, with the price and the split fixed when it was taken (D25). One open per listing. The hold itself is the reservation; the seller''s due dates pause while it is open.';
+        ]]></sql>
+        <!-- Restoring the reservation and listing constraints needs no resale hold to exist. -->
+        <rollback><![CDATA[
+            DROP TABLE resale_holds;
+            DROP INDEX uq_resale_listings_one_live;
+            CREATE UNIQUE INDEX uq_resale_listings_one_live ON resale_listings (transaction_id)
+                WHERE status IN ('AWAITING_CONSENT', 'LISTED');
+            ALTER TABLE resale_listings
+                DROP CONSTRAINT chk_resale_listings_live,
+                DROP CONSTRAINT chk_resale_listings_closed,
+                DROP CONSTRAINT chk_resale_listings_status;
+            ALTER TABLE resale_listings
+                ADD CONSTRAINT chk_resale_listings_status CHECK (status IN
+                    ('AWAITING_CONSENT', 'LISTED', 'WITHDRAWN', 'EXPIRED', 'ENDED', 'REFUSED')),
+                ADD CONSTRAINT chk_resale_listings_closed CHECK (
+                    (status IN ('AWAITING_CONSENT', 'LISTED')) = (closed_at IS NULL)
+                    AND (status = 'ENDED') = (close_reason IS NOT NULL)
+                    AND (status = 'REFUSED') = (refusal_reason IS NOT NULL)),
+                ADD CONSTRAINT chk_resale_listings_live CHECK (
+                    (listed_at IS NULL) = (expires_at IS NULL)
+                    AND (status <> 'LISTED' OR listed_at IS NOT NULL)
+                    AND (status <> 'AWAITING_CONSENT' OR listed_at IS NULL));
+            DROP INDEX idx_reservations_resale_of;
+            DROP INDEX uq_reservations_one_active_resale_hold;
+            ALTER TABLE reservations
+                DROP CONSTRAINT chk_reservations_resale,
+                ALTER COLUMN previous_plot_status SET NOT NULL,
+                ALTER COLUMN price_tier_id SET NOT NULL,
+                DROP COLUMN resale_of_transaction_id,
+                DROP COLUMN resale_listing_id;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

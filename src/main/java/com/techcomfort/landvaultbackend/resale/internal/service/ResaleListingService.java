@@ -11,6 +11,7 @@ import com.techcomfort.landvaultbackend.resale.internal.domain.ResaleListing;
 import com.techcomfort.landvaultbackend.resale.internal.enums.ListingKind;
 import com.techcomfort.landvaultbackend.resale.internal.enums.ListingStatus;
 import com.techcomfort.landvaultbackend.resale.internal.exceptions.ResaleException;
+import com.techcomfort.landvaultbackend.resale.internal.repository.ResaleHoldRepository;
 import com.techcomfort.landvaultbackend.resale.internal.repository.ResaleListingRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -68,6 +69,7 @@ public class ResaleListingService {
     private final CheckoutApi checkoutApi;
     private final AuditApi auditApi;
     private final ResaleNotices notices;
+    private final ResaleHoldRepository holds;
 
     @Transactional
     public ResaleListingDto list(UUID sellerUserId, UUID plotOrTransactionId, BigDecimal price) {
@@ -153,8 +155,8 @@ public class ResaleListingService {
     @Transactional(readOnly = true)
     public List<ResaleListingDto> mine(UUID sellerUserId) {
         return listings.findBySellerUserIdOrderByCreatedAtDesc(sellerUserId).stream()
-                .map(l -> dto(l, reference(l), l.isOpen()
-                        ? eligibility.eligibility(sellerUserId, l.getTransactionId(), l.getAskingPrice()) : null))
+                .map(l -> heldQuote(dto(l, reference(l), l.isOpen()
+                        ? eligibility.eligibility(sellerUserId, l.getTransactionId(), l.getAskingPrice()) : null), l))
                 .toList();
     }
 
@@ -174,7 +176,8 @@ public class ResaleListingService {
     @Transactional
     public ListingStatus sweep(UUID listingId, Instant now) {
         ResaleListing listing = listings.findLockedById(listingId).orElseThrow();
-        if (!listing.isOpen()) {
+        // Held by a buyer (D25): nothing comes down, and its 90 days wait until the hold ends.
+        if (!listing.isOpen() || listing.getStatus() == ListingStatus.HELD) {
             return listing.getStatus();
         }
         if (listing.getStatus() == ListingStatus.AWAITING_CONSENT && !now.isBefore(listing.getConsentDueAt())) {
@@ -231,10 +234,29 @@ public class ResaleListingService {
 
     // --- reading ---
 
+    /** Open, and not held by a buyer (D25): what the seller may still change or take down. */
     private static void requireOpen(ResaleListing listing) {
         if (!listing.isOpen()) {
             throw new ResaleException.ListingNotLive(listing.getStatus().wire());
         }
+        if (listing.getStatus() == ListingStatus.HELD) {
+            throw new ResaleException.ListingHeld();
+        }
+    }
+
+    /** D25: while held, the price and split are the ones fixed when the buyer took the hold. */
+    private ResaleListingDto heldQuote(ResaleListingDto dto, ResaleListing listing) {
+        if (listing.getStatus() != ListingStatus.HELD) {
+            return dto;
+        }
+        return holds.findByListingIdAndEndedAtIsNull(listing.getId()).map(h -> new ResaleListingDto(dto.id(),
+                dto.transactionId(), dto.transactionReference(), dto.kind(), dto.status(), dto.earlySale(), h.getPrice(),
+                dto.currency(), dto.listedAt(), dto.expiresAt(), dto.closedAt(), dto.closeReason(), dto.closeMessage(),
+                dto.pausesInactivity(), new ResaleEligibilityDto.Quote(h.getPrice(), h.getDeveloperBalance(),
+                h.getPenaltiesOwed(), h.getGain(), h.getDeveloperGainSharePct(), h.getDeveloperGainShare(),
+                h.getTransferFee(), h.getDeveloperReceives(), h.getSellerReceives(),
+                dto.quote() != null && dto.quote().reviewRequired()), dto.requiresConsent(), dto.consentDueAt(),
+                dto.consentDecidedAt(), dto.refusalReason())).orElse(dto);
     }
 
     private String reference(ResaleListing listing) {

@@ -19,4 +19,13 @@ public interface KycApi {
      * the same answer to the only question the caller is asking.
      */
     boolean isVerified(UUID userId);
+
+    /**
+     * Sell my plot (D15): whether two approved verifications are the same
+     * person, by their NIN. Only a yes or no leaves this module — never the
+     * number. Diaspora buyers' passports carry no number on record, so two of
+     * them never compare equal; the caller's own account check covers the
+     * seller's account itself.
+     */
+    boolean sameVerifiedPerson(UUID userId, UUID otherUserId);
 }

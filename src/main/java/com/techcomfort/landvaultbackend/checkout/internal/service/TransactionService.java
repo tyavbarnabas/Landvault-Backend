@@ -118,6 +118,10 @@ public class TransactionService {
         transactionRepository.findByReservationId(reservation.getId()).ifPresent(existing -> {
             throw new CheckoutException.TransactionAlreadyExists();
         });
+        // Sell my plot, phase 5a: a resale hold can be taken and released; buying it arrives in phase 5b.
+        if (reservation.isResale()) {
+            throw new CheckoutException.ResalePurchaseNotYet();
+        }
 
         // Copied now and never again: changing the account's address later
         // doesn't rewrite what this purchase, or its letter, says.
@@ -367,12 +371,32 @@ public class TransactionService {
                 && t.getPlanId() != null).map(Transaction::getId).toList();
         Map<UUID, List<TransactionInstalment>> instalments = instalmentsFor(ids);
         Map<UUID, List<LatePaymentTerms.Step>> steps = stepsFor(ids);
+        Map<UUID, List<PlanSchedule.Pause>> holds = resaleHoldsOf(ids);
         Map<UUID, PlanSchedule> out = new HashMap<>();
         // Phase 5c: only the version in force; earlier ones are history.
         transactions.forEach(t -> schedule(t, instalments.getOrDefault(t.getId(), List.of()).stream()
                         .filter(i -> i.getScheduleVersion() == t.currentScheduleVersion()).toList(),
-                steps.getOrDefault(t.getId(), List.of())).ifPresent(s -> out.put(t.getId(), s)));
+                steps.getOrDefault(t.getId(), List.of()))
+                .map(s -> holds.containsKey(t.getId()) ? new PlanSchedule(s.planId(), s.planName(), s.frequency(),
+                        s.planTotal(), s.premium(), s.deposit(), s.instalments(), s.lateTerms(), s.version(),
+                        holds.get(t.getId())) : s)
+                .ifPresent(s -> out.put(t.getId(), s)));
         return out;
+    }
+
+    /**
+     * Sell my plot (D25): every hold a new buyer has had on these purchases'
+     * plots, as Lagos days — from the day it was taken up to (not including)
+     * the day it ended, or still running.
+     */
+    private Map<UUID, List<PlanSchedule.Pause>> resaleHoldsOf(List<UUID> transactionIds) {
+        return transactionIds.isEmpty() ? Map.of()
+                : reservationRepository.findByResaleOfTransactionIdIn(transactionIds).stream()
+                .sorted(Comparator.comparing(Reservation::getCreatedAt))
+                .collect(Collectors.groupingBy(Reservation::getResaleOfTransactionId, Collectors.mapping(
+                        r -> new PlanSchedule.Pause(LocalDate.ofInstant(r.getCreatedAt(), LAGOS),
+                                r.getEndedAt() == null ? null : LocalDate.ofInstant(r.getEndedAt(), LAGOS)),
+                        Collectors.toList())));
     }
 
     private Map<UUID, List<TransactionInstalment>> instalmentsFor(List<UUID> transactionIds) {

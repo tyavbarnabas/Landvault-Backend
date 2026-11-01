@@ -75,6 +75,9 @@ public class WithdrawalService {
     @Transactional
     public WithdrawalDto withdraw(UUID transactionId, BigDecimal quotedRefund, String reason) {
         PayableTransaction purchase = ownPurchase(transactionId);
+        if (checkoutApi.isHeldForResale(transactionId)) {
+            throw new PaymentException.PlotHeldForResale();
+        }
         CheckoutApi.PlanEscrow escrow = escrowOf(purchase);
         // The payments locked first — the same order finance verifying one takes —
         // so a payment can't be verified or rejected while the figures are fixed.
