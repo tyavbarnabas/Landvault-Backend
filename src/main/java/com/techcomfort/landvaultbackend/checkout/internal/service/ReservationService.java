@@ -2,6 +2,8 @@ package com.techcomfort.landvaultbackend.checkout.internal.service;
 
 import com.techcomfort.landvaultbackend.audit.AuditApi;
 import com.techcomfort.landvaultbackend.audit.AuditEntryRequest;
+import com.techcomfort.landvaultbackend.checkout.ResaleHoldEnded;
+import com.techcomfort.landvaultbackend.checkout.ResaleHoldRequest;
 import com.techcomfort.landvaultbackend.checkout.dto.ReservationDto;
 import com.techcomfort.landvaultbackend.checkout.internal.domain.Reservation;
 import com.techcomfort.landvaultbackend.checkout.internal.enums.ReservationStatus;
@@ -16,6 +18,7 @@ import com.techcomfort.landvaultbackend.marketplace.MarketplaceApi;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -53,6 +56,7 @@ public class ReservationService {
     private final KycApi kycApi;
     private final AuditApi auditApi;
     private final CheckoutProperties properties;
+    private final ApplicationEventPublisher events;
 
     /**
      * Verification, then eligibility, then the atomic acquire — in that
@@ -120,6 +124,41 @@ public class ReservationService {
                 buyerUserId, "reservation.created", "reservation", reservation.getId(),
                 acquired.sellerTenantId(), "Plot held for " + holdDuration().toMinutes() + " minutes"));
 
+        return toDto(reservation, now);
+    }
+
+    /**
+     * Sell my plot, phase 5a: holds a resale listing for a new buyer. The
+     * listing, not the plot, is held — the plot stays SOLD or ON_PLAN — so no
+     * plot lock is taken here: the resale module has already locked the
+     * listing, and a partial unique index allows one active hold per listing.
+     * The same window, KYC gate and estate check as any hold.
+     */
+    @Transactional
+    public ReservationDto holdForResale(ResaleHoldRequest request) {
+        if (!kycApi.isVerified(request.buyerUserId())) {
+            throw new CheckoutException.KycRequired();
+        }
+        requireEligible(request.estateId());
+        Instant now = Instant.now();
+        Reservation reservation = reservationRepository.saveAndFlush(Reservation.builder()
+                .buyerUserId(request.buyerUserId())
+                .plotId(request.plotId())
+                .estateId(request.estateId())
+                .sellerTenantId(request.sellerTenantId())
+                .resaleListingId(request.listingId())
+                .resaleOfTransactionId(request.sellerTransactionId())
+                .basePrice(request.price())
+                .totalPrice(request.price())
+                .currency(request.currency())
+                .status(ReservationStatus.ACTIVE)
+                .expiresAt(now.plus(holdDuration()))
+                .build());
+        log.info("Resale listing {} held by buyer {} until {}", request.listingId(), request.buyerUserId(),
+                reservation.getExpiresAt());
+        auditApi.record(AuditEntryRequest.of(request.buyerUserId(), "reservation.created", "reservation",
+                reservation.getId(), request.sellerTenantId(), "Resale listing " + request.listingId()
+                        + " held for " + holdDuration().toMinutes() + " minutes"));
         return toDto(reservation, now);
     }
 
@@ -213,16 +252,23 @@ public class ReservationService {
     void endHold(Reservation reservation, ReservationStatus endStatus, UUID actorUserId,
                  String auditAction, String auditDetail) {
 
-        boolean releasedNow = plotLockGateway.release(
-                reservation.getPlotId(), reservation.getPreviousPlotStatus(), ACTOR);
-        if (!releasedNow) {
-            log.warn("Plot {} was not held when reservation {} ended as {} — closing the reservation anyway",
-                    reservation.getPlotId(), reservation.getId(), endStatus.getValue());
+        // A resale hold held the listing, not the plot: there is nothing to give back to the pool.
+        if (!reservation.isResale()) {
+            boolean releasedNow = plotLockGateway.release(
+                    reservation.getPlotId(), reservation.getPreviousPlotStatus(), ACTOR);
+            if (!releasedNow) {
+                log.warn("Plot {} was not held when reservation {} ended as {} — closing the reservation anyway",
+                        reservation.getPlotId(), reservation.getId(), endStatus.getValue());
+            }
         }
 
         reservation.setStatus(endStatus);
         reservation.setEndedAt(Instant.now());
         reservationRepository.save(reservation);
+        if (reservation.isResale()) {
+            events.publishEvent(new ResaleHoldEnded(reservation.getId(), reservation.getResaleListingId(),
+                    endStatus.getValue(), reservation.getEndedAt()));
+        }
 
         auditApi.record(new AuditEntryRequest(
                 actorUserId, auditAction, "reservation", reservation.getId(),
@@ -264,6 +310,7 @@ public class ReservationService {
                 reservation.getPriceTierId(),
                 reservation.getStatus().getValue(),
                 reservation.getExpiresAt(),
-                secondsRemaining);
+                secondsRemaining,
+                reservation.getResaleListingId());
     }
 }

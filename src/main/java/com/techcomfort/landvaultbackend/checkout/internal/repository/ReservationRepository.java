@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -41,4 +42,9 @@ public interface ReservationRepository extends JpaRepository<Reservation, UUID> 
     /** The sweeper's lock — the same row lock opening a transaction and a buyer's cancel take. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     Optional<Reservation> findLockedById(UUID id);
+
+    /** Sell my plot: every hold there has been on resale listings of these purchases, for the paused due dates. */
+    List<Reservation> findByResaleOfTransactionIdIn(Collection<UUID> sellerTransactionIds);
+
+    boolean existsByResaleOfTransactionIdAndStatus(UUID sellerTransactionId, ReservationStatus status);
 }

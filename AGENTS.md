@@ -6988,6 +6988,49 @@ exists**, so a buyer only ever sees a plot that can be sold and nothing is ever 
 Proven red: the company filter (another company's director consented, 200), listing without waiting for consent,
 and the lapse.
 
+### Phase 5a: a new buyer holds the plot (changeset 119)
+
+Decided with the user 2026-10-31 (D14, D15, D25). Phase 5 is split: 5a the hold, 5b the offer letter and paying.
+
+- **The hold is on the listing, never the plot.** `POST /api/resale/holds { listingId }` (`client.checkout.reserve`,
+  `ResaleHoldService`) locks the listing, then asks checkout for an ordinary **reservation** with
+  `resale_listing_id` and `resale_of_transaction_id` (the seller's purchase) and no price tier or plot status — the
+  plot stays SOLD or ON_PLAN, so `endHold` gives nothing back to the pool. Same 45 minutes, no extension; one active
+  hold per listing (partial unique index, behind the listing's row lock). Released with `DELETE
+  /api/reservations/{id}`, expired by the ordinary sweep.
+- **The listing goes `HELD`**: off the marketplace (the views read `LISTED`), and neither the seller (`LISTING_HELD`
+  on a price change or withdrawal) nor the resale sweep touches it — no take-down rule, no 90-day expiry.
+- **Every listing condition is checked again at hold time** (`eligibility(...).canList()`), and any failure is one
+  `LISTING_NOT_AVAILABLE`, the same as "held by someone else" or "taken down": the buyer learns nothing about the
+  seller. Consequence worth knowing: a seller's payment waiting for finance blocks a hold (the split must not miss a
+  payment verified afterwards), though the listing stays up.
+- **The price and split are fixed at the hold** (`resale_holds`: price, balance, penalties, gain, gain share, fee,
+  developer's and seller's parts; a CHECK keeps the two parts summing to the price). The seller's listings show the
+  held split while held.
+- **Not the seller (D15)**: the seller's own account, or one whose approved KYC carries the same NIN
+  (`KycApi.sameVerifiedPerson` — only a yes or no leaves the kyc module), is `CANNOT_BUY_OWN_PLOT`. **Passports
+  carry no number on record**, so two diaspora accounts of one person aren't caught; the audit trail is the answer,
+  as with staff buying their own plots. The IT fixture now gives every buyer a different NIN.
+- **The seller is locked while held (D25)**: paying (`PLOT_HELD_FOR_RESALE`), withdrawing, asking for or accepting
+  a restructure; the developer can't give notice or confirm a revocation. `CheckoutApi.isHeldForResale`. Reminders
+  are skipped.
+- **Due dates pause (D25, D26)**: checkout puts every resale hold on the seller's purchase into `PlanSchedule
+  .resaleHolds` (Lagos days, from the day taken up to the day it ended, or running), and `PlanProgress.of` — where
+  every reading of a plan starts — moves each **unpaid** instalment's due date on by the held days on or after it (a
+  running hold counts through today). Standings, penalties, reminders and revocation therefore all agree; paid
+  instalments keep their dates. An instalment due during a hold is due again on the day the hold ended. The schedule
+  on `TransactionDto` keeps the dates as scheduled; `standing.instalments` shows the moved ones.
+- **The flexible clock pauses too**: `ResaleInactivityPauses` adds every hold to the listing's own pause, merging
+  overlaps so a day counts once.
+- **When the hold ends** checkout publishes `ResaleHoldEnded` (from `endHold`, inside that transaction); the resale
+  listener (plain synchronous `@EventListener`, `MANDATORY`) closes the hold row and puts the listing back to
+  `LISTED` with its `expires_at` moved on by the time held. A converted hold (phase 6) doesn't relist.
+- **5a stops before buying**: Proceed to buy on a resale reservation is `RESALE_PURCHASE_NOT_YET`, and finance
+  verify/reject on a resale purchase `RESALE_VERIFICATION_NOT_YET` (`FinanceDecision.RESALE_NOT_YET`).
+
+Proven red: the due-date pause (the instalment read `in_arrears`), the seller's payment lock, the NIN check, and
+relisting when a hold ends.
+
 ## A buyer's address (changeset 097)
 
 Built 2026-10-21, decided with the user, so the allocation letter can name

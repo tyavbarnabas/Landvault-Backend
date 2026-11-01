@@ -78,6 +78,7 @@ public class RevocationService {
     @Transactional
     public RevocationDto start(UUID transactionId, String reason) {
         TenantScope scope = companyWide();
+        requireNotHeldForResale(transactionId);
         if (flexibleNotices.handles(transactionId, scope)) {
             return flexibleNotices.start(transactionId, scope, reason);
         }
@@ -145,6 +146,7 @@ public class RevocationService {
     @Transactional
     public RevocationDto confirm(UUID transactionId) {
         TenantScope scope = companyWide();
+        requireNotHeldForResale(transactionId);
         if (flexibleNotices.handles(transactionId, scope)) {
             return flexibleNotices.confirm(transactionId, scope);
         }
@@ -263,6 +265,13 @@ public class RevocationService {
                         + s.instalment().dueDate() + ") reaches that on " + terms.revocableFrom(s.instalment().dueDate())
                         + " if it is still unpaid.")
                 .orElse(rule + " Nothing is overdue now (a payment waiting for your finance to verify counts as paid).");
+    }
+
+    /** Sell my plot (D25): no notice, and no revocation, while a new buyer holds the plot. */
+    private void requireNotHeldForResale(UUID transactionId) {
+        if (checkoutApi.isHeldForResale(transactionId)) {
+            throw new PaymentException.PlotHeldForResale();
+        }
     }
 
     /** Revocation is a company decision: never from a branch-narrowed view. */

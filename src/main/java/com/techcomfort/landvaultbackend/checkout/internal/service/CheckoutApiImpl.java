@@ -16,6 +16,9 @@ import com.techcomfort.landvaultbackend.checkout.PendingPurchase;
 import com.techcomfort.landvaultbackend.checkout.PlanRevoked;
 import com.techcomfort.landvaultbackend.checkout.PlanWithdrawn;
 import com.techcomfort.landvaultbackend.checkout.PlotAllocated;
+import com.techcomfort.landvaultbackend.checkout.ResaleHoldOpened;
+import com.techcomfort.landvaultbackend.checkout.ResaleHoldRequest;
+import com.techcomfort.landvaultbackend.checkout.dto.ReservationDto;
 import com.techcomfort.landvaultbackend.checkout.RunningPlan;
 import com.techcomfort.landvaultbackend.checkout.VerifiedSale;
 import com.techcomfort.landvaultbackend.checkout.internal.domain.Reservation;
@@ -343,6 +346,9 @@ public class CheckoutApiImpl implements CheckoutApi {
         if (locked.isEmpty()) {
             return FinanceDecision.NOT_FOUND;
         }
+        if (locked.get().isResale()) {
+            return FinanceDecision.RESALE_NOT_YET;
+        }
         Transaction transaction = transactions.findById(transactionId).orElseThrow();
         if (transaction.getStatus() != TransactionStatus.AWAITING_FINANCE) {
             return FinanceDecision.NOT_AWAITING_FINANCE;
@@ -392,6 +398,9 @@ public class CheckoutApiImpl implements CheckoutApi {
         Optional<Reservation> locked = lockForFinance(transactionId, tenantId);
         if (locked.isEmpty()) {
             return FinanceDecision.NOT_FOUND;
+        }
+        if (locked.get().isResale()) {
+            return FinanceDecision.RESALE_NOT_YET;
         }
         Transaction transaction = transactions.findById(transactionId).orElseThrow();
         if (transactions.moveFromAwaitingFinance(transactionId, TransactionStatus.REJECTED.name()) != 1) {
@@ -519,5 +528,18 @@ public class CheckoutApiImpl implements CheckoutApi {
                 t.getPlan() == PaymentPlan.INSTALLMENT ? t.getDepositAmount()
                         : t.getPlan() == PaymentPlan.FLEXIBLE ? t.getFlexibleMinimumToStart() : t.getTotalPrice(),
                 t.flexiblePlan().orElse(null));
+    }
+
+    @Override
+    @Transactional
+    public ResaleHoldOpened holdForResale(ResaleHoldRequest request) {
+        ReservationDto held = reservationService.holdForResale(request);
+        return new ResaleHoldOpened(held.id(), held.expiresAt());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public boolean isHeldForResale(UUID transactionId) {
+        return reservations.existsByResaleOfTransactionIdAndStatus(transactionId, ReservationStatus.ACTIVE);
     }
 }

@@ -3990,6 +3990,134 @@ class ReservationCheckoutUnderRlsIT {
                 HttpMethod.POST, entity(buyer.token(), null), String.class);
     }
 
+    /**
+     * Sell my plot, phase 5a: a new buyer holds a listed plot. It leaves the
+     * marketplace, the price is fixed, the seller can't change or take it
+     * down, nobody else can hold it, and buying waits for 5b. Letting it go
+     * puts it back up, its 90 days moved on by the time it was held; so does
+     * the hold running out.
+     */
+    @Test
+    void aBuyerHoldsAResalePlotAndTheSellerIsLockedUntilTheHoldEnds() {
+        TransactionDto sale = verifiedSale();
+        String id = objectMapper.readTree(listResale(sale.id(), "18000000").getBody()).path("id").asString();
+        Buyer newBuyer = verifiedBuyer();
+
+        JsonNode held = objectMapper.readTree(holdResale(newBuyer, id).getBody());
+        assertThat(held.path("price").decimalValue()).as(held.toString()).isEqualByComparingTo("18000000");
+        String reservationId = held.path("reservationId").asString();
+        assertThat(queryString("SELECT status FROM plots WHERE id = '" + plotId + "'")).as("the plot isn't touched")
+                .isEqualTo("SOLD");
+        assertThat(restTemplate.getForEntity("/api/marketplace/resales/" + id, String.class).getStatusCode())
+                .as("off the marketplace while held").isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(holdResale(verifiedBuyer(), id).getBody()).as("one hold at a time").contains("LISTING_NOT_AVAILABLE");
+
+        assertThat(changeResalePrice(id, "19000000").getBody()).contains("LISTING_HELD");
+        assertThat(restTemplate.exchange("/api/resale/listings/" + id + "/withdraw", HttpMethod.POST,
+                entity(buyer.token(), null), String.class).getBody()).contains("LISTING_HELD");
+        JsonNode mine = objectMapper.readTree(get("/api/resale/listings/mine", buyer.token(), String.class).getBody());
+        assertThat(mine.get(0).path("status").asString()).isEqualTo("held");
+        assertThat(mine.get(0).path("quote").path("sellerReceives").decimalValue()).isEqualByComparingTo("18000000");
+        execute("UPDATE resale_listings SET expires_at = now() - interval '1 minute' WHERE id = '" + id + "'");
+        resaleSweeper.sweep(Instant.now());
+        assertThat(queryString("SELECT status FROM resale_listings WHERE id = '" + id + "'"))
+                .as("a held listing doesn't expire").isEqualTo("HELD");
+        execute("UPDATE resale_listings SET expires_at = now() + interval '80 days' WHERE id = '" + id + "'");
+        Instant expiresBefore = Instant.parse(queryString("SELECT to_char(expires_at AT TIME ZONE 'UTC', "
+                + "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') FROM resale_listings WHERE id = '" + id + "'"));
+
+        assertThat(restTemplate.exchange("/api/checkout/transactions", HttpMethod.POST, entity(newBuyer.token(),
+                "{\"reservationId\":\"" + reservationId + "\",\"intent\":\"development\",\"plan\":\"outright\"}"),
+                String.class).getBody()).as("buying comes in 5b").contains("RESALE_PURCHASE_NOT_YET");
+
+        execute("UPDATE resale_holds SET held_at = held_at - interval '2 days' WHERE reservation_id = '"
+                + reservationId + "'");
+        assertThat(restTemplate.exchange("/api/reservations/" + reservationId, HttpMethod.DELETE,
+                entity(newBuyer.token(), null), String.class).getStatusCode().is2xxSuccessful()).isTrue();
+        assertThat(queryString("SELECT status FROM resale_listings WHERE id = '" + id + "'")).isEqualTo("LISTED");
+        assertThat(queryString("SELECT end_reason FROM resale_holds WHERE reservation_id = '" + reservationId + "'"))
+                .isEqualTo("RELEASED");
+        Instant expiresAfter = Instant.parse(queryString("SELECT to_char(expires_at AT TIME ZONE 'UTC', "
+                + "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') FROM resale_listings WHERE id = '" + id + "'"));
+        assertThat(Duration.between(expiresBefore, expiresAfter)).as("the 90 days moved on by the time held")
+                .isGreaterThanOrEqualTo(Duration.ofDays(2));
+        assertThat(publicJson("/api/marketplace/resales/" + id).path("price").decimalValue())
+                .isEqualByComparingTo("18000000");
+
+        String again = objectMapper.readTree(holdResale(newBuyer, id).getBody()).path("reservationId").asString();
+        execute("UPDATE reservations SET expires_at = now() - interval '1 minute' WHERE id = '" + again + "'");
+        sweeper.sweep();
+        assertThat(queryString("SELECT status FROM resale_listings WHERE id = '" + id + "'")).as("expired hold")
+                .isEqualTo("LISTED");
+        assertThat(queryString("SELECT end_reason FROM resale_holds WHERE reservation_id = '" + again + "'"))
+                .isEqualTo("EXPIRED");
+
+        restTemplate.exchange("/api/resale/listings/" + id + "/withdraw", HttpMethod.POST,
+                entity(buyer.token(), null), String.class);
+    }
+
+    /** Sell my plot, phase 5a (D15): the seller can't hold their own plot, nor can another account of theirs. */
+    @Test
+    void aSellerCantBuyTheirOwnPlotUnderAnyAccount() {
+        TransactionDto sale = verifiedSale();
+        String id = objectMapper.readTree(listResale(sale.id(), "18000000").getBody()).path("id").asString();
+        assertThat(holdResale(buyer, id).getBody()).contains("CANNOT_BUY_OWN_PLOT");
+        String sellersNin = queryString("SELECT nin_number FROM kyc_records WHERE user_id = '" + buyer.id() + "'");
+        assertThat(sellersNin).as("stored encrypted").doesNotMatch("\\d{11}");
+        Buyer secondAccount = verifiedBuyer();
+        execute("UPDATE kyc_records SET nin_number = (SELECT nin_number FROM kyc_records WHERE user_id = '"
+                + buyer.id() + "') WHERE user_id = '" + secondAccount.id() + "'");
+        assertThat(holdResale(secondAccount, id).getBody()).as("the same person, by NIN").contains("CANNOT_BUY_OWN_PLOT");
+        assertThat(holdResale(registerBuyer(), id).getBody()).as("unverified").contains("KYC_REQUIRED");
+        restTemplate.exchange("/api/resale/listings/" + id + "/withdraw", HttpMethod.POST,
+                entity(buyer.token(), null), String.class);
+    }
+
+    /**
+     * Sell my plot, phase 5a (D25): while a new buyer holds an instalment
+     * plan's plot, the seller can't pay, the developer can't give notice, and
+     * the due dates move on — an instalment that fell due during the hold is
+     * not late, and after the hold it is due again from the day it ended.
+     */
+    @Test
+    void whileABuyerHoldsThePlotTheSellersPlanIsLockedAndItsDueDatesPause() {
+        TransactionDto purchase = onPlanPurchase(TWELVE_MONTH_PLAN);
+        String id = objectMapper.readTree(listResale(purchase.id(), null).getBody()).path("id").asString();
+        String reservationId = objectMapper.readTree(holdResale(verifiedBuyer(), id).getBody())
+                .path("reservationId").asString();
+
+        // Held for the last 20 days; instalment 1 fell due 10 days ago, during the hold.
+        execute("UPDATE reservations SET created_at = now() - interval '20 days' WHERE id = '" + reservationId + "'");
+        execute("UPDATE transaction_instalments SET due_date = current_date - 10 WHERE transaction_id = '"
+                + purchase.id() + "' AND sequence = 1");
+        JsonNode first = objectMapper.readTree(get("/api/checkout/transactions/" + purchase.id(), buyer.token(),
+                String.class).getBody()).path("standing").path("instalments").get(0);
+        assertThat(first.path("status").asString()).as(first.toString()).isEqualTo("upcoming");
+        assertThat(LocalDate.parse(first.path("dueDate").asString()))
+                .isEqualTo(LocalDate.now(ZoneId.of("Africa/Lagos")).plusDays(1));
+
+        assertThat(pay(buyer, purchase.id()).getBody()).contains("PLOT_HELD_FOR_RESALE");
+        execute("UPDATE transaction_instalments SET due_date = current_date - 200 WHERE transaction_id = '"
+                + purchase.id() + "' AND sequence = 1");
+        assertThat(revocation(seller.token(), purchase, "", "{\"reason\":\"Behind\"}").getBody())
+                .as("no notice while held").contains("PLOT_HELD_FOR_RESALE");
+        execute("UPDATE transaction_instalments SET due_date = current_date - 10 WHERE transaction_id = '"
+                + purchase.id() + "' AND sequence = 1");
+
+        execute("UPDATE reservations SET status = 'RELEASED', ended_at = now() - interval '3 days' WHERE id = '"
+                + reservationId + "'");
+        JsonNode after = objectMapper.readTree(get("/api/checkout/transactions/" + purchase.id(), buyer.token(),
+                String.class).getBody()).path("standing").path("instalments").get(0);
+        assertThat(LocalDate.parse(after.path("dueDate").asString())).as("due from the day the hold ended")
+                .isEqualTo(LocalDate.now(ZoneId.of("Africa/Lagos")).minusDays(3));
+        assertThat(after.path("status").asString()).isEqualTo("overdue");
+    }
+
+    private ResponseEntity<String> holdResale(Buyer who, String listingId) {
+        return restTemplate.exchange("/api/resale/holds", HttpMethod.POST, entity(who.token(),
+                "{\"listingId\":\"" + listingId + "\"}"), String.class);
+    }
+
     private ResponseEntity<String> consentAction(String token, String listingId, String action, String body) {
         return restTemplate.exchange("/api/portal/resale/listings/" + listingId + "/" + action, HttpMethod.POST,
                 entity(token, body), String.class);
@@ -5035,9 +5163,15 @@ class ReservationCheckoutUnderRlsIT {
     }
 
     private Buyer verifiedBuyer() {
+        // Each buyer is a different person: resale refuses a buyer verified with the seller's NIN (D15).
+        return verifiedBuyerWithNin(String.valueOf(10_000_000_000L
+                + Math.floorMod(UUID.randomUUID().getLeastSignificantBits(), 89_999_999_999L)));
+    }
+
+    private Buyer verifiedBuyerWithNin(String nin) {
         Buyer newBuyer = registerBuyer();
         postJson(newBuyer, "/api/kyc",
-                "{\"ninNumber\":\"12345678901\",\"ninFile\":{\"fileName\":\"nin.pdf\"}}", String.class);
+                "{\"ninNumber\":\"" + nin + "\",\"ninFile\":{\"fileName\":\"nin.pdf\"}}", String.class);
         postJson(adminToken(), "/api/admin/kyc/" + newBuyer.id() + "/decision",
                 "{\"decision\":\"approved\"}", String.class);
         assertThat(putAddress(newBuyer, LAGOS_ADDRESS).getStatusCode()).isEqualTo(HttpStatus.OK);

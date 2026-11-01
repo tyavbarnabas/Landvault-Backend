@@ -53,6 +53,8 @@ public class PaymentExceptionHandler {
             case PaymentException.CompanyScopeRequired e -> body(HttpStatus.FORBIDDEN, e, "COMPANY_SCOPE_REQUIRED");
             case PaymentException.NotAwaitingFinance e -> body(HttpStatus.CONFLICT, e, "TRANSACTION_NOT_AWAITING_FINANCE");
             case PaymentException.PlotNotReserved e -> body(HttpStatus.CONFLICT, e, "PLOT_NOT_RESERVED");
+            case PaymentException.ResaleVerificationNotYet e -> body(HttpStatus.CONFLICT, e, "RESALE_VERIFICATION_NOT_YET");
+            case PaymentException.PlotHeldForResale e -> body(HttpStatus.CONFLICT, e, "PLOT_HELD_FOR_RESALE");
             case PaymentException.PaymentNotConfirmed e -> body(HttpStatus.CONFLICT, e, "PAYMENT_NOT_CONFIRMED");
             case PaymentException.TransactionNotPayable e -> body(HttpStatus.CONFLICT, e, "TRANSACTION_NOT_PAYABLE");
             case PaymentException.OfferNotAccepted e -> body(HttpStatus.CONFLICT, e, "OFFER_NOT_ACCEPTED");

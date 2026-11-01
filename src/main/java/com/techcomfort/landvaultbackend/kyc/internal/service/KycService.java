@@ -63,6 +63,20 @@ public class KycService implements KycApi, BuyerKycStatusProvider {
                 .orElse(false);
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public boolean sameVerifiedPerson(UUID userId, UUID otherUserId) {
+        Optional<String> nin = approvedNin(userId);
+        return nin.isPresent() && nin.equals(approvedNin(otherUserId));
+    }
+
+    private Optional<String> approvedNin(UUID userId) {
+        return recordRepository.findByUserId(userId)
+                .filter(record -> record.getStatus() == KycStatus.APPROVED)
+                .map(KycRecord::getNinNumber)
+                .filter(nin -> !nin.isBlank());
+    }
+
     /**
      * Empty when the buyer has never submitted. The caller renders that as
      * {@code unsubmitted} rather than this method inventing a row — an

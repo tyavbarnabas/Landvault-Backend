@@ -928,6 +928,19 @@ marketplace feed" above.
 - The Executive Directors are emailed when consent is asked, and told (no decision) when a plot on an estate
   needing no consent is listed.
 
+**Phase 5a, a new buyer holds it** (changeset 119):
+- `POST /api/resale/holds` `{ listingId }` (`client.checkout.reserve`) → 201 `ResaleHold { reservationId, listingId,
+  estateId, plotId, price, currency, expiresAt, secondsRemaining }`. 45 minutes, like any reservation; the price is
+  fixed for the hold. Release with `DELETE /api/reservations/{reservationId}`. `ReservationDto` gains
+  `resaleListingId` (and `priceTierId` is null on a resale hold).
+- Errors: 409 `LISTING_NOT_AVAILABLE` (held by someone else, taken down, or no longer for sale — one answer), 409
+  `CANNOT_BUY_OWN_PLOT` (the seller, or an account verified with the seller's NIN), 403 `KYC_REQUIRED`.
+- While held: the plot is off the marketplace; the seller's listing reads `status: held` (price and split fixed) and
+  can't be changed or withdrawn (409 `LISTING_HELD`); on a plan the seller can't pay, withdraw or restructure and the
+  developer can't give notice (409 `PLOT_HELD_FOR_RESALE`), and due dates pause — `standing.instalments[].dueDate`
+  shows them moved on.
+- Not yet (5b): Proceed to buy on a resale reservation answers 409 `RESALE_PURCHASE_NOT_YET`.
+
 The frontend mock's earlier shape, kept for reference until the later phases replace it:
 
 | Method | Path | Request | Response |

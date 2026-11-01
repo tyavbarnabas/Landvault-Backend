@@ -10,6 +10,8 @@ public enum ListingStatus {
     AWAITING_CONSENT,
     /** Up, and no buyer holds it. */
     LISTED,
+    /** A new buyer holds it (phase 5): off the marketplace, and neither the seller nor the sweep may touch it. */
+    HELD,
     /** The seller took it down. */
     WITHDRAWN,
     /** 90 days passed with no buyer. */
@@ -22,7 +24,7 @@ public enum ListingStatus {
     /** The developer refused consent, with a reason the seller reads. */
     REFUSED;
 
-    public static final Set<ListingStatus> OPEN = EnumSet.of(AWAITING_CONSENT, LISTED);
+    public static final Set<ListingStatus> OPEN = EnumSet.of(AWAITING_CONSENT, LISTED, HELD);
 
     public boolean isOpen() {
         return OPEN.contains(this);

@@ -169,4 +169,19 @@ public interface CheckoutApi {
      * owned plots only when finance verifies ({@link PlotAllocated}).
      */
     List<PendingPurchase> purchasesAwaitingFinance(UUID buyerUserId);
+
+    /**
+     * Sell my plot, phase 5a: holds a resale listing for a new buyer, as a
+     * reservation that holds the listing rather than the plot. Run inside the
+     * caller's transaction, after it has locked the listing. Refuses like a
+     * hold: {@code KYC_REQUIRED}, or the estate not available.
+     */
+    ResaleHoldOpened holdForResale(ResaleHoldRequest request);
+
+    /**
+     * Sell my plot (D25): a new buyer holds this purchase's plot now, so the
+     * seller can't pay, withdraw or restructure and the developer can't give
+     * notice.
+     */
+    boolean isHeldForResale(UUID transactionId);
 }

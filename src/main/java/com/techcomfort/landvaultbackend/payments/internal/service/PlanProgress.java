@@ -85,14 +85,49 @@ public record PlanProgress(PlanSchedule schedule, Set<Integer> verified, boolean
         penalties.stream().filter(line -> counted.contains(line.getPaymentId()))
                 .forEach(line -> charged.put(line.getInstalmentSequence(), new LatePaymentTerms.Penalty(
                         line.getMonthsLate(), line.getPenaltyPct(), line.getAmount())));
-        return new PlanProgress(schedule,
-                paid.stream().filter(p -> p.getPurpose() == PaymentPurpose.INSTALMENT && p.getFinanceVerifiedAt() != null)
-                        .map(Payment::getInstalmentSequence).collect(Collectors.toSet()),
-                paid.stream().anyMatch(p -> p.getPurpose() == PaymentPurpose.BALANCE && p.getFinanceVerifiedAt() != null),
+        Set<Integer> verified = paid.stream()
+                .filter(p -> p.getPurpose() == PaymentPurpose.INSTALMENT && p.getFinanceVerifiedAt() != null)
+                .map(Payment::getInstalmentSequence).collect(Collectors.toSet());
+        boolean balanceVerified = paid.stream()
+                .anyMatch(p -> p.getPurpose() == PaymentPurpose.BALANCE && p.getFinanceVerifiedAt() != null);
+        return new PlanProgress(withResaleHolds(schedule, verified, balanceVerified, PlanStandings.today()),
+                verified,
+                balanceVerified,
                 paid.stream().filter(p -> p.getFinanceVerifiedAt() == null).findFirst(), Map.copyOf(charged),
                 waivers.stream().filter(w -> w.getScheduleVersion() == schedule.version())
                         .collect(Collectors.toMap(PenaltyWaiver::getInstalmentSequence, PenaltyWaiver::getAmount,
                                 BigDecimal::add)));
+    }
+
+    /**
+     * Sell my plot (D25): while a new buyer holds the plot the seller can't pay,
+     * so an unpaid instalment's due date moves on by every day it was held on or
+     * after that date — up to today for a hold still running. Paid instalments
+     * keep theirs. Done here, where every reading of a plan starts, so standings,
+     * penalties, reminders and revocation all see the same dates.
+     */
+    static PlanSchedule withResaleHolds(PlanSchedule schedule, Set<Integer> verified, boolean balanceVerified,
+                                        LocalDate today) {
+        if (schedule.resaleHolds().isEmpty() || balanceVerified) {
+            return schedule;
+        }
+        return schedule.withInstalments(schedule.instalments().stream().map(i -> verified.contains(i.sequence()) ? i
+                : new PlanSchedule.Instalment(i.sequence(),
+                i.dueDate().plusDays(heldDaysFrom(schedule.resaleHolds(), i.dueDate(), today)), i.amount(),
+                i.carriedPenalty())).toList());
+    }
+
+    /** Days of the holds on or after {@code due}; a hold still running counts through today. */
+    static long heldDaysFrom(List<PlanSchedule.Pause> holds, LocalDate due, LocalDate today) {
+        long days = 0;
+        for (PlanSchedule.Pause hold : holds) {
+            LocalDate end = hold.until() == null ? today.plusDays(1) : hold.until();
+            LocalDate start = hold.from().isBefore(due) ? due : hold.from();
+            if (start.isBefore(end)) {
+                days += ChronoUnit.DAYS.between(start, end);
+            }
+        }
+        return days;
     }
 
     /** The instalments not yet verified, in order; none once the balance is paid off. */

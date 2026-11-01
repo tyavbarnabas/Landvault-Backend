@@ -90,6 +90,9 @@ public class RestructureService {
     @Transactional
     public RestructureDto request(UUID transactionId, String reason, Integer preferredInstalments) {
         PayableTransaction purchase = ownPurchase(transactionId);
+        if (checkoutApi.isHeldForResale(transactionId)) {
+            throw new PaymentException.PlotHeldForResale();
+        }
         PlanSchedule schedule = requireRunning(purchase);
         restructures.findOpenLocked(transactionId).ifPresent(r -> {
             throw new PaymentException.RestructureAlreadyOpen(r.getStatus().name());
@@ -148,6 +151,9 @@ public class RestructureService {
     @Transactional
     public RestructureDto accept(UUID transactionId, UUID restructureId, String userAgent) {
         PayableTransaction purchase = ownPurchase(transactionId);
+        if (checkoutApi.isHeldForResale(transactionId)) {
+            throw new PaymentException.PlotHeldForResale();
+        }
         PlanSchedule schedule = requireRunning(purchase);
         // The payments locked first — the order finance verifying one takes.
         payments.findLockedByTransactionIdAndStatus(transactionId, PaymentStatus.SUCCEEDED);

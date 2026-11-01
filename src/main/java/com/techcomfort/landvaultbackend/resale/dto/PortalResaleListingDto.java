@@ -14,7 +14,8 @@ import java.util.UUID;
 @Schema(name = "PortalResaleListing")
 public record PortalResaleListingDto(
         UUID id,
-        @Schema(description = "`awaiting_consent` (yours to answer), `listed` (on the marketplace), `withdrawn` (the "
+        @Schema(description = "`awaiting_consent` (yours to answer), `listed` (on the marketplace), `held` (a buyer is "
+                + "holding it to buy it), `withdrawn` (the "
                 + "seller took it down), `expired` (90 days with no buyer), `refused` (you refused) or `ended` (a rule "
                 + "took it down — `closeReason`).") String status,
         UUID estateId,

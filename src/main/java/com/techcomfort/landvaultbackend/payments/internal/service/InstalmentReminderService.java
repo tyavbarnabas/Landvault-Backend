@@ -55,6 +55,10 @@ public class InstalmentReminderService {
         for (Map.Entry<UUID, PlanProgress> entry : planStandings.progressOf(schedules).entrySet()) {
             RunningPlan plan = plans.get(entry.getKey());
             PlanProgress progress = entry.getValue();
+            // Sell my plot (D25): nothing to remind while a new buyer holds the plot — the seller can't pay.
+            if (progress.schedule().heldForResale()) {
+                continue;
+            }
             for (PlanProgress.InstalmentStanding standing : progress.standings(today)) {
                 Optional<ReminderStage> stage = stageFor(standing, today);
                 // Phase 5c: claimed per schedule version, so a restructure's new dates remind afresh.
