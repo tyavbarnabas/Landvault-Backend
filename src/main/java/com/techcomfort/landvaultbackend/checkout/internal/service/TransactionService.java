@@ -118,10 +118,6 @@ public class TransactionService {
         transactionRepository.findByReservationId(reservation.getId()).ifPresent(existing -> {
             throw new CheckoutException.TransactionAlreadyExists();
         });
-        // Sell my plot, phase 5a: a resale hold can be taken and released; buying it arrives in phase 5b.
-        if (reservation.isResale()) {
-            throw new CheckoutException.ResalePurchaseNotYet();
-        }
 
         // Copied now and never again: changing the account's address later
         // doesn't rewrite what this purchase, or its letter, says.
@@ -130,6 +126,11 @@ public class TransactionService {
 
         PaymentPlan plan = PaymentPlan.fromValue(request.plan());
         PlotIntent intent = PlotIntent.fromValue(request.intent());
+        // Sell my plot (D14): a resale is always paid in full — nobody's ownership hangs on a second plan.
+        if (reservation.isResale() && plan != PaymentPlan.OUTRIGHT) {
+            throw new CheckoutException.PlanNotOffered("A resale plot is paid in full; no instalment or flexible plan "
+                    + "is offered on it.");
+        }
         // IC-1: an instalment purchase names one of the estate's declared plans,
         // worked out now from the agreed price, with due dates counted from the
         // offer date (today, in Lagos) — fixed here and never recomputed.
@@ -197,6 +198,10 @@ public class TransactionService {
                 .buyerAddressState(address.state())
                 .buyerAddressPostalCode(address.postalCode())
                 .buyerAddressCountry(address.country())
+                .resaleListingId(reservation.getResaleListingId())
+                .resaleOfTransactionId(reservation.getResaleOfTransactionId())
+                .resaleDeveloperReceives(reservation.getResaleDeveloperReceives())
+                .resaleSellerReceives(reservation.getResaleSellerReceives())
                 // The only status this module writes. Reservation does not
                 // allocate, and no payment signal is treated as confirmation
                 // — a finance-role human does that, and finance is not built.
@@ -212,7 +217,7 @@ public class TransactionService {
                         transaction.getPlotId(), transaction.getEstateId(), transaction.getSellerTenantId(),
                         transaction.getBasePrice(), transaction.getCornerPremiumPct(), transaction.getTotalPrice(),
                         transaction.getCurrency(), reservation.getCreatedAt(), address, schedule.orElse(null),
-                        transaction.flexiblePlan().orElse(null)))
+                        transaction.flexiblePlan().orElse(null), resaleOf(reservation)))
                 .orElseThrow(CheckoutException.LetterNotApproved::new);
 
         log.info("Transaction {} opened by buyer {} against reservation {}",
@@ -224,6 +229,16 @@ public class TransactionService {
 
         // Nothing paid yet on a purchase opened this instant.
         return toDto(transaction, null, offer, schedule, null, null);
+    }
+
+    /** Sell my plot: who a resale hold buys the plot from, for its offer letter; null on any other hold. */
+    private NewPurchase.Resale resaleOf(Reservation reservation) {
+        if (!reservation.isResale()) {
+            return null;
+        }
+        Transaction from = transactionRepository.findById(reservation.getResaleOfTransactionId()).orElseThrow();
+        return new NewPurchase.Resale(from.getId(), from.getBuyerUserId(),
+                Boolean.TRUE.equals(reservation.getResaleConsented()));
     }
 
     /** A buyer's own transaction. Another buyer's is not found, not forbidden. */
@@ -460,6 +475,7 @@ public class TransactionService {
                 flexibleStanding,
                 standing,
                 transaction.getWithdrawnAt(),
-                transaction.getRevokedAt());
+                transaction.getRevokedAt(),
+                transaction.getResaleListingId());
     }
 }

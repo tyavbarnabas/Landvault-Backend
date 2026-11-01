@@ -7025,11 +7025,41 @@ Decided with the user 2026-10-31 (D14, D15, D25). Phase 5 is split: 5a the hold,
 - **When the hold ends** checkout publishes `ResaleHoldEnded` (from `endHold`, inside that transaction); the resale
   listener (plain synchronous `@EventListener`, `MANDATORY`) closes the hold row and puts the listing back to
   `LISTED` with its `expires_at` moved on by the time held. A converted hold (phase 6) doesn't relist.
-- **5a stops before buying**: Proceed to buy on a resale reservation is `RESALE_PURCHASE_NOT_YET`, and finance
-  verify/reject on a resale purchase `RESALE_VERIFICATION_NOT_YET` (`FinanceDecision.RESALE_NOT_YET`).
+- Finance verify/reject on a resale purchase is `RESALE_VERIFICATION_NOT_YET` (`FinanceDecision.RESALE_NOT_YET`)
+  until phase 6.
 
 Proven red: the due-date pause (the instalment read `in_arrears`), the seller's payment lock, the NIN check, and
 relisting when a hold ends.
+
+### Phase 5b: the offer letter and paying in full (changesets 120, 121)
+
+- **Proceed to buy on a resale hold** is the ordinary `POST /api/checkout/transactions`, **outright only** (D14:
+  `PLAN_NOT_OFFERED`, "A resale plot is paid in full"). The purchase carries `resale_listing_id`,
+  `resale_of_transaction_id` and **the split fixed at the hold** (`resale_developer_receives`/`_seller_receives`,
+  copied from the reservation, which got it from `ResaleHoldRequest`) — copied like the price, because checkout and
+  payments can't read the resale module; a CHECK keeps a resale purchase outright and its parts summing to the price.
+  `TransactionDto.resaleListingId`. Address, offer acceptance and Paystack are the ordinary ones.
+- **The offer letter names the transfer (D20, D21, D29, D30)**: the developer's letterhead, HomeTrue's fixed
+  wording (`OfferClauses.resaleOpening`/`resale`) — the present holder by **initials only**, the price paid in full,
+  the developer's consent where the estate needed it (`reservations.resale_consented`), that HomeTrue collects only
+  the price (yearly charges and anything the holder owes the developer are between them; Governor's Consent and
+  registration fees aren't HomeTrue's). **The conditions are the seller's own**: their offer letter's clauses, else
+  their allocation letter's, and only failing both the estate's current ones. **The letter always says any time
+  limit in them counts from the plot's first allocation (the seller's first letter, dated), not from the letter, and
+  that a charge the holder already paid is not due again** — found in the Swagger walk: a developer's own clause
+  ("commence work within three months from the date of this allocation", "an application fee… payable on
+  application") can't be rewritten and read as starting again for the new buyer. Titled **"Resale offer letter
+  for …"** (`offer_letters.resale`, changeset 121; offers already issued for resales marked from their purchase,
+  their wording kept as issued).
+- **Finance's queue shows it as a resale** (`FinanceQueueItemDto.resale { developerReceives, sellerReceives }`, D17);
+  verifying and rejecting still answer `RESALE_VERIFICATION_NOT_YET`. A paid resale keeps its hold (the reservation
+  stays active while a purchase waits for finance), so the plot stays off the marketplace and the seller locked.
+- **Unpaid**: the payment sweep abandons it like any purchase; `endHold` → `ResaleHoldEnded` → the listing back up.
+  Late money on an abandoned resale can only be refunded (the plot isn't available to allocate).
+- **Known gap**: the receipt names the developer as seller, as for every purchase. For a resale the money is the
+  holder's; settle the wording with phase 6's documents.
+
+Proven red: the paid-in-full rule and the seller's conditions (a marker condition planted in the seller's offer).
 
 ## A buyer's address (changeset 097)
 

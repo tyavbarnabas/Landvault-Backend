@@ -327,7 +327,8 @@ public class CheckoutApiImpl implements CheckoutApi {
                 (UUID) r[7], (BigDecimal) r[8], Currency.valueOf((String) r[9]), (Instant) r[10],
                 letters.computeIfAbsent((UUID) r[2], letterGate::letterReady),
                 r[11] == null ? (BigDecimal) r[8] : (BigDecimal) r[11], (String) r[12], false, false,
-                (BigDecimal) r[13])).toList();
+                (BigDecimal) r[13], r[14] == null ? null
+                : new FinanceQueueRow.ResaleSplit((BigDecimal) r[14], (BigDecimal) r[15]))).toList();
     }
 
     @Override

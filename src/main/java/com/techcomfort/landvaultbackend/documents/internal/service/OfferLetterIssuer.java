@@ -8,6 +8,9 @@ import com.techcomfort.landvaultbackend.checkout.OfferSummary;
 import com.techcomfort.landvaultbackend.documents.dto.LetterVersionsDto;
 import com.techcomfort.landvaultbackend.documents.dto.LetterheadImageDto;
 import com.techcomfort.landvaultbackend.documents.dto.PrintedLetterheadDto;
+import com.techcomfort.landvaultbackend.documents.internal.domain.AllocationLetter;
+import com.techcomfort.landvaultbackend.documents.internal.enums.LetterKind;
+import com.techcomfort.landvaultbackend.documents.internal.repository.AllocationLetterRepository;
 import com.techcomfort.landvaultbackend.documents.internal.domain.OfferLetter;
 import com.techcomfort.landvaultbackend.documents.internal.domain.OfferLetterAcceptance;
 import com.techcomfort.landvaultbackend.documents.internal.render.DocumentFormats;
@@ -24,6 +27,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -48,6 +52,7 @@ public class OfferLetterIssuer implements OfferLetters {
 
     private final OfferLetterRepository offers;
     private final OfferLetterAcceptanceRepository acceptances;
+    private final AllocationLetterRepository allocationLetters;
     private final SellerLetterSetup sellerSetup;
     private final IdentityApi identityApi;
     private final AuditApi auditApi;
@@ -77,6 +82,13 @@ public class OfferLetterIssuer implements OfferLetters {
 
         Instant issuedAt = Instant.now();
         String location = LetterApprovalService.location(setup.facts());
+        // The same conditions, in the same order, as the allocation letter would print today — which copies
+        // these when the sale is allocated. A resale carries the conditions the plot was first sold on (D29).
+        List<String> conditions = purchase.resale() != null ? sellersConditions(purchase.resale(), setup)
+                : LetterClauses.of(setup.template().standardClauses(), List.of(setup.terms().getClauses()),
+                setup.facts());
+        String sellerInitials = purchase.resale() == null ? null : DocumentService.initials(
+                identityApi.fullNameOf(purchase.resale().sellerUserId()).orElse("the present holder"));
         PrintedLetterheadDto p = setup.letterhead();
         LetterVersionsDto v = setup.versions();
         OfferLetter offer = offers.saveAndFlush(OfferLetter.builder()
@@ -106,13 +118,18 @@ public class OfferLetterIssuer implements OfferLetters {
                 .estateName(setup.facts().name())
                 .estateLocation(location)
                 .plotLabel(plot.label())
-                .opening(OfferClauses.opening(DocumentFormats.date(purchase.reservedAt()),
+                .opening(purchase.resale() != null
+                        ? OfferClauses.resaleOpening(DocumentFormats.date(purchase.reservedAt()),
+                        AllocationLetterIssuer.plotPhrase(plot), setup.facts().name(), location, p.companyName(),
+                        sellerInitials)
+                        : OfferClauses.opening(DocumentFormats.date(purchase.reservedAt()),
                         AllocationLetterIssuer.plotPhrase(plot), setup.facts().name(), location, p.companyName()))
-                .priceClauses(priceClauses(purchase, setup, p.companyName()).toArray(String[]::new))
-                // The same conditions, in the same order, as the allocation letter
-                // would print today — which copies these when the sale is allocated.
-                .clauses(LetterClauses.of(setup.template().standardClauses(),
-                        List.of(setup.terms().getClauses()), setup.facts()).toArray(String[]::new))
+                .priceClauses((purchase.resale() != null
+                        ? OfferClauses.resale(purchase.totalPrice(), purchase.currency(), sellerInitials,
+                        purchase.resale().consented(), firstAllocated(purchase.resale()))
+                        : priceClauses(purchase, setup, p.companyName())).toArray(String[]::new))
+                .clauses(conditions.toArray(String[]::new))
+                .resale(purchase.resale() != null)
                 .closing(OfferClauses.CLOSING)
                 .signOff(OfferClauses.SIGN_OFF)
                 .basePrice(purchase.basePrice())
@@ -136,6 +153,28 @@ public class OfferLetterIssuer implements OfferLetters {
                         + (v.fees() == null ? "none" : "v" + v.fees()) + ")."));
         log.info("Offer letter {} issued for transaction {}", offer.getNumber(), purchase.transactionId());
         return Optional.of(summary(offer, null));
+    }
+
+    /**
+     * Sell my plot (D29): the conditions the present holder's own purchase was
+     * offered on, unchanged — their offer letter's, or for a purchase from
+     * before offer letters, their allocation letter's; only if neither exists,
+     * the estate's current ones.
+     */
+    private List<String> sellersConditions(NewPurchase.Resale resale, LetterApprovalService.IssuableLetter setup) {
+        return offers.findByTransactionId(resale.sellerTransactionId()).map(o -> List.of(o.getClauses()))
+                .or(() -> allocationLetters.findByTransactionIdOrderByIssuedAtDesc(resale.sellerTransactionId())
+                        .stream().filter(l -> l.getKind() == LetterKind.ALLOCATION).findFirst()
+                        .map(l -> List.of(l.getClauses())))
+                .orElseGet(() -> LetterClauses.of(setup.template().standardClauses(),
+                        List.of(setup.terms().getClauses()), setup.facts()));
+    }
+
+    /** When the plot was first allocated to the present holder (their first letter, provisional or final). */
+    private LocalDate firstAllocated(NewPurchase.Resale resale) {
+        return allocationLetters.findByTransactionIdOrderByIssuedAtDesc(resale.sellerTransactionId()).stream()
+                .map(AllocationLetter::getIssuedAt).min(Instant::compareTo)
+                .map(at -> LocalDate.ofInstant(at, DocumentFormats.NIGERIA)).orElse(null);
     }
 
     /** Outright, instalment or flexible: HomeTrue's fixed wording for the plan the purchase was opened on. */

@@ -939,7 +939,17 @@ marketplace feed" above.
   can't be changed or withdrawn (409 `LISTING_HELD`); on a plan the seller can't pay, withdraw or restructure and the
   developer can't give notice (409 `PLOT_HELD_FOR_RESALE`), and due dates pause — `standing.instalments[].dueDate`
   shows them moved on.
-- Not yet (5b): Proceed to buy on a resale reservation answers 409 `RESALE_PURCHASE_NOT_YET`.
+
+**Phase 5b, buying it** (changeset 120):
+- `POST /api/checkout/transactions` `{ reservationId, intent, plan: "outright" }` with the resale hold's
+  reservation → the usual `TransactionDto`, now with `resaleListingId`. Any other plan is 409 `PLAN_NOT_OFFERED`. The
+  buyer needs an address, as for any purchase.
+- `offer`: HomeTrue's "Resale offer letter" — the plot from its present holder (initials only), paid in full, the
+  developer's consent where needed, the conditions the plot was first sold on (any time limit in them counts from
+  the first allocation; charges the holder already paid aren't due again), and what HomeTrue doesn't collect. Accept it, then pay as usual
+  (`POST /api/transactions/{id}/payments`); once Paystack confirms, the purchase is `awaiting_finance`.
+- Finance's queue item gains `resale { developerReceives, sellerReceives }` (null when bought from the developer).
+  Verifying or rejecting a resale purchase: 409 `RESALE_VERIFICATION_NOT_YET` (phase 6). The hold stands meanwhile.
 
 The frontend mock's earlier shape, kept for reference until the later phases replace it:
 

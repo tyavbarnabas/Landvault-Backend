@@ -50,6 +50,7 @@ public record AllocationLetterContent(
 
     public static final String ALLOCATION_TITLE = "Letter of allocation for";
     public static final String OFFER_TITLE = "Offer letter for";
+    public static final String RESALE_OFFER_TITLE = "Resale offer letter for";
     public static final String PROVISIONAL_TITLE = "Provisional letter of allocation for";
     public static final String RESTRUCTURE_TITLE = "Restructure of instalment plan for";
 

@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Sell my plot, phase 5b (decided with the user 2026-10-31): the new
+        buyer opens a purchase on their hold, accepts the offer and pays in
+        full. See AGENTS.md, "Sell my plot".
+
+        The split fixed at the hold (resale_holds) is copied onto the
+        reservation and then the purchase, like the price: checkout and
+        payments can't read the resale module (it depends on them), and finance
+        must see the split it is verifying (D17), as payouts will (phase 7).
+        resale_consented says whether the developer consented to this transfer,
+        for the offer letter. A resale purchase is always paid in full (D14).
+    -->
+    <changeSet id="120-resale-purchases" author="landvault">
+        <sql><![CDATA[
+            -- No resale hold has a split yet only in a database 5a ran against; ending them keeps the CHECK below true.
+            UPDATE reservations SET status = 'RELEASED', ended_at = now()
+                WHERE resale_listing_id IS NOT NULL AND status = 'ACTIVE';
+            UPDATE resale_holds SET ended_at = now(), end_reason = 'RELEASED' WHERE ended_at IS NULL;
+            UPDATE resale_listings SET status = 'LISTED' WHERE status = 'HELD';
+
+            ALTER TABLE reservations
+                ADD COLUMN resale_consented          boolean,
+                ADD COLUMN resale_developer_receives numeric(19, 2),
+                ADD COLUMN resale_seller_receives    numeric(19, 2),
+                ADD CONSTRAINT chk_reservations_resale_split CHECK (status <> 'ACTIVE' OR resale_listing_id IS NULL
+                    OR (resale_consented IS NOT NULL AND resale_developer_receives IS NOT NULL
+                        AND resale_seller_receives IS NOT NULL));
+
+            ALTER TABLE transactions
+                ADD COLUMN resale_listing_id         uuid REFERENCES resale_listings (id),
+                ADD COLUMN resale_of_transaction_id  uuid REFERENCES transactions (id),
+                ADD COLUMN resale_developer_receives numeric(19, 2),
+                ADD COLUMN resale_seller_receives    numeric(19, 2),
+                ADD CONSTRAINT chk_transactions_resale CHECK (
+                    (resale_listing_id IS NULL) = (resale_of_transaction_id IS NULL)
+                    AND (resale_listing_id IS NULL) = (resale_developer_receives IS NULL)
+                    AND (resale_listing_id IS NULL) = (resale_seller_receives IS NULL)
+                    AND (resale_listing_id IS NULL OR plan = 'OUTRIGHT')
+                    AND (resale_listing_id IS NULL
+                         OR resale_developer_receives + resale_seller_receives = total_price));
+            CREATE INDEX idx_transactions_resale_of ON transactions (resale_of_transaction_id)
+                WHERE resale_of_transaction_id IS NOT NULL;
+        ]]></sql>
+        <rollback><![CDATA[
+            DROP INDEX idx_transactions_resale_of;
+            ALTER TABLE transactions
+                DROP CONSTRAINT chk_transactions_resale,
+                DROP COLUMN resale_seller_receives,
+                DROP COLUMN resale_developer_receives,
+                DROP COLUMN resale_of_transaction_id,
+                DROP COLUMN resale_listing_id;
+            ALTER TABLE reservations
+                DROP CONSTRAINT chk_reservations_resale_split,
+                DROP COLUMN resale_seller_receives,
+                DROP COLUMN resale_developer_receives,
+                DROP COLUMN resale_consented;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

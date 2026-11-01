@@ -13,6 +13,7 @@ import com.techcomfort.landvaultbackend.common.RefundAppliesTo;
 import com.techcomfort.landvaultbackend.inventory.EstateDocumentFacts;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -41,6 +42,59 @@ public final class OfferClauses {
         return "Following your application of " + applicationDate + " for " + plot + " at " + estate
                 + (location == null || location.isBlank() ? "" : ", " + location) + ", " + company
                 + " is pleased to offer you the plot on the terms below.";
+    }
+
+    /**
+     * Sell my plot (D20): the opening of an offer for a plot bought from its
+     * present holder, named by initials only (D21).
+     */
+    public static String resaleOpening(String applicationDate, String plot, String estate, String location,
+                                       String company, String sellerInitials) {
+        return "Following your application of " + applicationDate + " for " + plot + " at " + estate
+                + (location == null || location.isBlank() ? "" : ", " + location) + ", " + company
+                + " is pleased to offer you the plot, which its present holder (" + sellerInitials
+                + ") is selling through HomeTrue, on the terms below.";
+    }
+
+    /**
+     * Sell my plot (D14, D20, D29, D30): a resale's offer, in place of
+     * {@link #price}. HomeTrue's fixed wording: the price, paid in full; that
+     * the plot passes from its present holder; the developer's consent where
+     * the estate needs it; that the conditions below are the ones the plot was
+     * first allocated on and its development deadline runs from then; and
+     * what HomeTrue neither charges nor collects.
+     * <p>
+     * The conditions sentence always says that time limits count from the
+     * first allocation, and that charges already paid aren't due again: a
+     * developer's own wording ("within three months from the date of this
+     * allocation", "payable on application") can't be rewritten, and would
+     * otherwise read as starting again for the new buyer (found in the walk).
+     *
+     * @param firstAllocated when the plot was first allocated to the present holder; null if not on record
+     */
+    public static List<String> resale(BigDecimal price, Currency currency, String sellerInitials, boolean consented,
+                                      LocalDate firstAllocated) {
+        List<String> clauses = new ArrayList<>();
+        clauses.add("That the price of the plot is " + DocumentFormats.money(price, currency) + " ("
+                + AmountInWords.of(price, currency) + "), payable in full through HomeTrue. No instalment or "
+                + "flexible plan is offered on a resale.");
+        clauses.add("That this is a resale: the plot passes to you from its present holder (" + sellerInitials
+                + "), who bought it from the developer. Its title is the estate's, as shown on HomeTrue.");
+        if (consented) {
+            clauses.add("That the developer has consented to this transfer, as the estate's terms require.");
+        }
+        String first = firstAllocated == null ? "the plot's first allocation"
+                : "the plot's first allocation on " + DocumentFormats.date(firstAllocated);
+        clauses.add("That the conditions below are those the plot was first allocated on, and pass to you "
+                + "unchanged. Any time limit in them, such as for starting work, counts from " + first
+                + ", not from the date of this letter; and a charge the present holder paid when they bought the "
+                + "plot, such as an application fee, is not due again.");
+        clauses.add("That HomeTrue collects only the price above. Yearly charges such as a facility fee, and any "
+                + "other charge the present holder may owe the developer, are between you, the present holder and "
+                + "the developer: ask the developer before you pay.");
+        clauses.add("That fees for Governor's Consent or for registering the transfer, where they apply, are not "
+                + "charged or paid by HomeTrue.");
+        return clauses;
     }
 
     /**

@@ -15,6 +15,7 @@ import java.util.UUID;
  * @param buyerAddress null only for accounts from before addresses were collected
  * @param schedule     the chosen instalment plan and its schedule; null otherwise
  * @param flexible     the chosen flexible plan's terms; null otherwise
+ * @param resale       sell my plot: the plot is bought from its present holder; null otherwise
  */
 public record NewPurchase(
         UUID transactionId,
@@ -29,6 +30,19 @@ public record NewPurchase(
         Instant reservedAt,
         PostalAddress buyerAddress,
         PlanSchedule schedule,
-        FlexiblePurchase flexible
+        FlexiblePurchase flexible,
+        Resale resale
 ) {
+
+    /**
+     * Sell my plot, phase 5b: who the plot is bought from. The offer names them
+     * by initials only, and carries the conditions their own purchase was made
+     * on (D29).
+     *
+     * @param sellerTransactionId the present holder's purchase
+     * @param sellerUserId        the present holder
+     * @param consented           the estate needed the developer's consent to the transfer, and it was given
+     */
+    public record Resale(UUID sellerTransactionId, UUID sellerUserId, boolean consented) {
+    }
 }

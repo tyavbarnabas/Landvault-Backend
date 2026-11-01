@@ -77,7 +77,8 @@ public class ResaleHoldService {
 
         ResaleHoldOpened opened = checkoutApi.holdForResale(new ResaleHoldRequest(buyerUserId, listing.getId(),
                 listing.getTransactionId(), listing.getPlotId(), listing.getEstateId(), listing.getSellerTenantId(),
-                price, listing.getCurrency()));
+                price, listing.getCurrency(), listing.isRequiresConsent() && listing.getConsentDecidedAt() != null,
+                quote.developerReceives(), quote.sellerReceives()));
         // D25: the split is fixed now; nothing the seller or the developer does afterwards moves it.
         holds.saveAndFlush(ResaleHold.builder()
                 .listingId(listing.getId())

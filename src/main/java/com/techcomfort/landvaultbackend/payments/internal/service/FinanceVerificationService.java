@@ -220,7 +220,8 @@ public class FinanceVerificationService {
                 row.isFlexible() ? "contribution" : row.isDeposit() ? "deposit" : "full_price", row.planName(),
                 null, null, null, null, BigDecimal.ZERO, List.of(), false, false,
                 row.isFlexible() && matches ? row.flexiblePlanTotal().subtract(payment.get().getAmount()) : null,
-                row.isFlexible() ? 1 : null);
+                row.isFlexible() ? 1 : null, row.resale() == null ? null
+                : new FinanceQueueItemDto.Resale(row.resale().developerReceives(), row.resale().sellerReceives()));
     }
 
     // ------------------------------------------------------------------ 3b: instalments
@@ -425,7 +426,7 @@ public class FinanceVerificationService {
                 matches ? p.getAmount() : null, row.currency().name(), p.getPaidAt(), gateway(p), matches,
                 row.letterApproved(), "contribution", row.planName(), null, null, null, null, BigDecimal.ZERO,
                 List.of(), row.planWithdrawn(), row.planRevoked(),
-                matches ? progress.remaining().subtract(p.getAmount()) : null, progress.verifiedCount() + 1);
+                matches ? progress.remaining().subtract(p.getAmount()) : null, progress.verifiedCount() + 1, null);
     }
 
     private static BigDecimal expectedAmount(Payment payment, PlanSchedule schedule, PlanProgress progress) {
@@ -458,7 +459,7 @@ public class FinanceVerificationService {
                         .sorted(Comparator.comparing(PaymentPenalty::getInstalmentSequence))
                         .map(l -> new FinanceQueueItemDto.PenaltyLine(l.getInstalmentSequence(), l.getMonthsLate(),
                                 l.getPenaltyPct(), l.getAmount()))
-                        .toList(), row.planWithdrawn(), row.planRevoked(), null, null);
+                        .toList(), row.planWithdrawn(), row.planRevoked(), null, null, null);
     }
 
     private void markVerified(Payment payment, UUID actor) {

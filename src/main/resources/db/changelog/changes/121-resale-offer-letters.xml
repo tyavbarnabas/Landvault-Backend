@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Sell my plot, phase 5b (found in the Swagger walk, 2026-11-01): a resale's
+        offer letter is titled "Resale offer letter for …", so the buyer sees
+        at once what kind of offer it is. The letter is drawn from its stored
+        row, so the row says so. Offers already issued for resale purchases are
+        marked from their purchase; their wording stays as issued.
+    -->
+    <changeSet id="121-resale-offer-letters" author="landvault">
+        <sql><![CDATA[
+            ALTER TABLE offer_letters ADD COLUMN resale boolean NOT NULL DEFAULT false;
+            UPDATE offer_letters o SET resale = true FROM transactions t
+                WHERE t.id = o.transaction_id AND t.resale_listing_id IS NOT NULL;
+        ]]></sql>
+        <rollback><![CDATA[
+            ALTER TABLE offer_letters DROP COLUMN resale;
+        ]]></rollback>
+    </changeSet>
+</databaseChangeLog>

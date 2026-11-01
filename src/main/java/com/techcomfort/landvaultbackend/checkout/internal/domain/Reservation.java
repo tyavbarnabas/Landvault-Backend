@@ -95,6 +95,17 @@ public class Reservation extends AbstractEntity {
     @Column(name = "resale_of_transaction_id", updatable = false)
     private UUID resaleOfTransactionId;
 
+    /** Phase 5b: the developer consented to this transfer (the estate needed it). For the offer letter. */
+    @Column(name = "resale_consented", updatable = false)
+    private Boolean resaleConsented;
+
+    /** Phase 5b: the split fixed when the buyer held it (D25), copied onto the purchase like the price. */
+    @Column(name = "resale_developer_receives", precision = 19, scale = 2, updatable = false)
+    private BigDecimal resaleDeveloperReceives;
+
+    @Column(name = "resale_seller_receives", precision = 19, scale = 2, updatable = false)
+    private BigDecimal resaleSellerReceives;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 16)
     private ReservationStatus status;

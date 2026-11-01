@@ -84,11 +84,6 @@ public class CheckoutExceptionHandler {
                 .body(ErrorResponse.of(ex.getMessage(), "PURCHASE_IN_PROGRESS"));
     }
 
-    @ExceptionHandler(CheckoutException.ResalePurchaseNotYet.class)
-    public ResponseEntity<ErrorResponse> handleResaleNotYet(CheckoutException.ResalePurchaseNotYet ex) {
-        return ResponseEntity.status(HttpStatus.CONFLICT).body(ErrorResponse.of(ex.getMessage(), "RESALE_PURCHASE_NOT_YET"));
-    }
-
     @ExceptionHandler(CheckoutException.TransactionAlreadyExists.class)
     public ResponseEntity<ErrorResponse> handleDuplicate(CheckoutException.TransactionAlreadyExists ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)

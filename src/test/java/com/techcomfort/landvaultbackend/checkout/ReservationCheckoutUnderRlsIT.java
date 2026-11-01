@@ -14,6 +14,7 @@ import com.techcomfort.landvaultbackend.payments.dto.PortalPlanDto;
 import com.techcomfort.landvaultbackend.portfolio.dto.OwnedPlotDto;
 import com.techcomfort.landvaultbackend.portfolio.dto.PortfolioPaymentDto;
 import com.techcomfort.landvaultbackend.checkout.PlanStanding;
+import com.techcomfort.landvaultbackend.checkout.CheckoutApi;
 import com.techcomfort.landvaultbackend.checkout.dto.CreateReservationRequest;
 import com.techcomfort.landvaultbackend.checkout.dto.ReservationDto;
 import com.techcomfort.landvaultbackend.checkout.OfferSummary;
@@ -225,6 +226,9 @@ class ReservationCheckoutUnderRlsIT {
 
     @Autowired
     private ResaleListingSweeper resaleSweeper;
+
+    @Autowired
+    private CheckoutApi checkoutApi;
 
     /** Real (the logging one), watched: the developer is told about every resale listing. */
     @MockitoSpyBean
@@ -4026,10 +4030,6 @@ class ReservationCheckoutUnderRlsIT {
         Instant expiresBefore = Instant.parse(queryString("SELECT to_char(expires_at AT TIME ZONE 'UTC', "
                 + "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') FROM resale_listings WHERE id = '" + id + "'"));
 
-        assertThat(restTemplate.exchange("/api/checkout/transactions", HttpMethod.POST, entity(newBuyer.token(),
-                "{\"reservationId\":\"" + reservationId + "\",\"intent\":\"development\",\"plan\":\"outright\"}"),
-                String.class).getBody()).as("buying comes in 5b").contains("RESALE_PURCHASE_NOT_YET");
-
         execute("UPDATE resale_holds SET held_at = held_at - interval '2 days' WHERE reservation_id = '"
                 + reservationId + "'");
         assertThat(restTemplate.exchange("/api/reservations/" + reservationId, HttpMethod.DELETE,
@@ -4111,6 +4111,111 @@ class ReservationCheckoutUnderRlsIT {
         assertThat(LocalDate.parse(after.path("dueDate").asString())).as("due from the day the hold ended")
                 .isEqualTo(LocalDate.now(ZoneId.of("Africa/Lagos")).minusDays(3));
         assertThat(after.path("status").asString()).isEqualTo("overdue");
+    }
+
+    /**
+     * Sell my plot, phase 5b: the new buyer opens a purchase on their hold —
+     * paid in full only — gets an offer letter that names the transfer, the
+     * seller by initials and the seller's own conditions, accepts it and pays.
+     * The purchase waits for finance with the split shown; verifying it comes
+     * in phase 6, and meanwhile the hold stands.
+     */
+    @Test
+    void aNewBuyerOpensAResalePurchaseAcceptsTheOfferAndPaysInFull() {
+        TransactionDto sale = verifiedSale();
+        String id = objectMapper.readTree(listResale(sale.id(), "18000000").getBody()).path("id").asString();
+        Buyer newBuyer = verifiedBuyer();
+        String reservationId = objectMapper.readTree(holdResale(newBuyer, id).getBody()).path("reservationId")
+                .asString();
+
+        assertThat(openResale(newBuyer, reservationId, "installment").getBody()).as("paid in full only")
+                .contains("PLAN_NOT_OFFERED", "A resale plot is paid in full");
+        // The seller bought on conditions the estate no longer has: those, not today's, pass on (D29).
+        execute("UPDATE offer_letters SET clauses = array_prepend('That the marker condition applies.', clauses) "
+                + "WHERE transaction_id = '" + sale.id() + "'");
+        ResponseEntity<String> opened = openResale(newBuyer, reservationId, "outright");
+        assertThat(opened.getStatusCode()).as(opened.getBody()).isEqualTo(HttpStatus.CREATED);
+        TransactionDto purchase = objectMapper.readValue(opened.getBody(), TransactionDto.class);
+        assertThat(purchase.resaleListingId().toString()).isEqualTo(id);
+        assertThat(purchase.totalPrice()).isEqualByComparingTo("18000000");
+        assertThat(purchase.plotId()).isEqualTo(plotId);
+
+        String opening = queryString("SELECT opening FROM offer_letters WHERE transaction_id = '" + purchase.id() + "'");
+        String price = queryString("SELECT array_to_string(price_clauses, '|') FROM offer_letters WHERE transaction_id = '"
+                + purchase.id() + "'");
+        String initials = queryString("SELECT upper(left(first_name, 1)) || '. ' || upper(left(last_name, 1)) || '.' "
+                + "FROM users WHERE id = '" + buyer.id() + "'");
+        assertThat(opening).contains("present holder (" + initials + ")");
+        assertThat(price).contains("₦18,000,000.00", "this is a resale", "Governor's Consent",
+                        "Any time limit in them, such as for starting work, counts from the plot's first allocation on ",
+                        "is not due again")
+                .doesNotContain("Corner");
+        assertThat(queryString("SELECT resale FROM offer_letters WHERE transaction_id = '" + purchase.id() + "'"))
+                .as("titled as a resale").isEqualTo("t");
+        assertThat(queryString("SELECT array_to_string(clauses, '|') FROM offer_letters WHERE transaction_id = '"
+                + purchase.id() + "'")).as("the seller's own conditions (D29)").startsWith("That the marker condition")
+                .isEqualTo(queryString(
+                "SELECT array_to_string(clauses, '|') FROM offer_letters WHERE transaction_id = '" + sale.id() + "'"));
+        assertThat(opening + price).as("never the seller's name").doesNotContain(queryString(
+                "SELECT last_name FROM users WHERE id = '" + buyer.id() + "'"));
+
+        assertThat(acceptOffer(newBuyer, purchase.offer().id()).getStatusCode()).isEqualTo(HttpStatus.OK);
+        paystackReturnsALink();
+        assertThat(pay(newBuyer, purchase.id()).getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        String reference = queryString("SELECT reference FROM payments WHERE transaction_id = '" + purchase.id() + "'");
+        assertThat(queryString("SELECT amount FROM payments WHERE reference = '" + reference + "'"))
+                .isEqualTo("18000000.00");
+        paystackSays(reference, "success", 1_800_000_000L, "NGN", "Approved");
+        assertThat(confirm(newBuyer, reference).getBody()).contains("\"status\":\"succeeded\"");
+        assertThat(queryString("SELECT status FROM transactions WHERE id = '" + purchase.id() + "'"))
+                .isEqualTo("AWAITING_FINANCE");
+
+        JsonNode queue = objectMapper.readTree(get("/api/portal/finance/transactions", seller.token(), String.class)
+                .getBody());
+        JsonNode item = null;
+        for (JsonNode row : queue.isArray() ? queue : queue.path("items")) {
+            if (purchase.id().toString().equals(row.path("transactionId").asString())) {
+                item = row;
+            }
+        }
+        assertThat(item).as(queue.toString()).isNotNull();
+        assertThat(item.path("resale").path("developerReceives").decimalValue()).isEqualByComparingTo("0");
+        assertThat(item.path("resale").path("sellerReceives").decimalValue()).isEqualByComparingTo("18000000");
+        assertThat(item.path("amountsMatch").asBoolean()).isTrue();
+        assertThat(financeAction(seller.token(), purchase.id(), "verify", null).getBody())
+                .contains("RESALE_VERIFICATION_NOT_YET");
+        assertThat(queryString("SELECT status FROM resale_listings WHERE id = '" + id + "'")).as("still held")
+                .isEqualTo("HELD");
+        assertThat(queryString("SELECT status FROM plots WHERE id = '" + plotId + "'")).isEqualTo("SOLD");
+    }
+
+    /** Sell my plot, phase 5b: an opened resale purchase left unpaid is abandoned and the plot goes back up. */
+    @Test
+    void anUnpaidResalePurchaseIsAbandonedAndThePlotGoesBackUp() {
+        TransactionDto sale = verifiedSale();
+        String id = objectMapper.readTree(listResale(sale.id(), "18000000").getBody()).path("id").asString();
+        Buyer newBuyer = verifiedBuyer();
+        String reservationId = objectMapper.readTree(holdResale(newBuyer, id).getBody()).path("reservationId")
+                .asString();
+        TransactionDto purchase = objectMapper.readValue(openResale(newBuyer, reservationId, "outright").getBody(),
+                TransactionDto.class);
+
+        execute("UPDATE reservations SET expires_at = now() - interval '30 minutes' WHERE id = '" + reservationId + "'");
+        assertThat(checkoutApi.abandonTransaction(purchase.id())).isTrue();
+        assertThat(queryString("SELECT status FROM resale_listings WHERE id = '" + id + "'")).isEqualTo("LISTED");
+        assertThat(queryString("SELECT end_reason FROM resale_holds WHERE reservation_id = '" + reservationId + "'"))
+                .isEqualTo("EXPIRED");
+        assertThat(queryString("SELECT status FROM plots WHERE id = '" + plotId + "'")).as("never released to the pool")
+                .isEqualTo("SOLD");
+        restTemplate.exchange("/api/resale/listings/" + id + "/withdraw", HttpMethod.POST,
+                entity(buyer.token(), null), String.class);
+    }
+
+    private ResponseEntity<String> openResale(Buyer who, String reservationId, String plan) {
+        return restTemplate.exchange("/api/checkout/transactions", HttpMethod.POST, entity(who.token(),
+                "{\"reservationId\":\"" + reservationId + "\",\"intent\":\"development\",\"plan\":\"" + plan
+                        + "\"" + ("installment".equals(plan) ? ",\"planId\":\"" + UUID.randomUUID() + "\"" : "")
+                        + "}"), String.class);
     }
 
     private ResponseEntity<String> holdResale(Buyer who, String listingId) {

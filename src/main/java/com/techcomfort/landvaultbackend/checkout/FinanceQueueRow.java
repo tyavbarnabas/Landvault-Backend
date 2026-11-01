@@ -33,8 +33,23 @@ public record FinanceQueueRow(
          * {@code amountDue} is then the least (the minimum to start). Null on
          * every other plan.
          */
-        BigDecimal flexiblePlanTotal
+        BigDecimal flexiblePlanTotal,
+        /** Sell my plot: the split fixed when the new buyer held it; null unless this purchase is a resale. */
+        ResaleSplit resale
 ) {
+
+    /** What the developer and the seller receive from a resale's price (D17); they add up to it. */
+    public record ResaleSplit(BigDecimal developerReceives, BigDecimal sellerReceives) {
+    }
+
+    public FinanceQueueRow(UUID transactionId, String transactionReference, UUID estateId, String estateName,
+                           UUID plotId, String plotLabel, UUID buyerUserId, BigDecimal totalPrice, Currency currency,
+                           Instant awaitingSince, boolean letterApproved, BigDecimal amountDue, String planName,
+                           boolean planWithdrawn, boolean planRevoked, BigDecimal flexiblePlanTotal) {
+        this(transactionId, transactionReference, estateId, estateName, plotId, plotLabel, buyerUserId, totalPrice,
+                currency, awaitingSince, letterApproved, amountDue, planName, planWithdrawn, planRevoked,
+                flexiblePlanTotal, null);
+    }
 
     public FinanceQueueRow(UUID transactionId, String transactionReference, UUID estateId, String estateName,
                            UUID plotId, String plotLabel, UUID buyerUserId, BigDecimal totalPrice, Currency currency,
